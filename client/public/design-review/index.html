@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UNO — Duyệt thiết kế sáng</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800;900&family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="review.css"><link rel="stylesheet" href="lobby-v2.css">
+</head>
+<body>
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="cards" viewBox="0 0 24 24"><rect x="8" y="3" width="12" height="17" rx="3"/><path d="m5 6-3 1 3 15 11-2M12 8h4m-2 4v4"/></symbol>
+  <symbol id="trophy" viewBox="0 0 24 24"><path d="M7 3h10v6a5 5 0 0 1-10 0ZM7 5H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 14v6m-5 1h10"/></symbol>
+  <symbol id="friends" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M3 21v-4a6 6 0 0 1 12 0v4m2-17a3 3 0 0 1 0 6m2 4a5 5 0 0 1 2 4v3"/></symbol>
+  <symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><path d="m9 3-1 3-3 1-2 4 2 2v4l4 3 3-1 3 1 4-3v-4l2-2-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="sound" viewBox="0 0 24 24"><path d="M4 9h4l5-5v16l-5-5H4Zm13-1a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+  <symbol id="book" viewBox="0 0 24 24"><path d="M12 5C8 2 3 4 3 4v15s5-2 9 1c4-3 9-1 9-1V4s-5-2-9 1Zm0 0v15"/></symbol>
+</defs></svg>
+<div class="app">
+  <div class="corner-bar">
+    <button class="player-summary" id="profile-preview" aria-label="Hồ sơ Bách"><span class="avatar">BC</span><span class="player-info"><b>Bách</b><span class="player-xp"><i></i></span><small>Cấp 12</small></span><span class="player-rank"><img src="ranks/gold.svg" alt="Vàng"><b>1.491</b></span></button>
+    <a href="#lobby" class="floating-logo" data-go="lobby" aria-label="Về sảnh chơi">UNO<span>ONLINE</span></a>
+    <div class="corner-actions"><button id="sound-preview" aria-pressed="true" aria-label="Âm thanh"><svg><use href="#sound"/></svg></button><button id="settings-preview" aria-label="Cài đặt"><svg><use href="#gear"/></svg></button></div>
+  </div>
+
+  <main id="lobby" class="view simple-lobby">
+    <div class="lobby-content">
+    <div class="card-gallery" aria-label="Chọn chế độ chơi" aria-roledescription="băng chuyền">
+      <button class="gallery-arrow previous" aria-label="Chế độ trước">‹</button>
+      <div class="card-track">
+        <button class="gallery-card" data-mode="2v2" aria-pressed="false"><img src="../images/modes/2v2.png" alt="2 vs 2" draggable="false"></button>
+        <button class="gallery-card" data-mode="classic" aria-pressed="true"><img src="../images/modes/classic.png" alt="Classic" draggable="false"></button>
+        <button class="gallery-card" data-mode="side" aria-pressed="false"><img src="../images/modes/side.png" alt="Side to Side" draggable="false"></button>
+        <button class="gallery-card" data-mode="custom" aria-pressed="false"><img src="../images/modes/custom.png" alt="Phòng riêng" draggable="false"></button>
+        <button class="gallery-card" data-mode="draft" aria-pressed="false"><img src="draft-mode.svg" alt="UNO Draft" draggable="false"></button>
+      </div>
+      <button class="gallery-arrow next" aria-label="Chế độ tiếp theo">›</button>
+    </div>
+    <section class="selection-details" aria-live="polite" aria-atomic="true"><div class="selection-title"><h2 id="featured-title">Classic</h2><span id="selection-type">XẾP HẠNG</span></div><p id="featured-description">4 người, mỗi người một mình. Ai hết bài trước sẽ thắng.</p></section>
+    <button class="primary play-button" id="play">CHƠI NGAY <svg><use href="#arrow"/></svg></button>
+    <div class="gallery-dots" aria-label="Chọn nhanh chế độ"></div>
+    <nav class="lobby-dock" aria-label="Tiện ích"><button id="friends-preview"><svg><use href="#friends"/></svg>Bạn bè <span class="friend-count">3</span></button><button data-view="rank" aria-pressed="false"><svg><use href="#trophy"/></svg>Bảng xếp hạng</button><button id="rules-preview"><svg><use href="#book"/></svg>Luật chơi</button></nav>
+    </div>
+    <aside class="lobby-friends" aria-label="Danh sách bạn bè">
+      <div class="friends-heading"><h2><svg><use href="#friends"/></svg>Bạn bè</h2><span>3 online</span></div>
+      <div class="friend-group-label">ĐANG ONLINE</div>
+      <div class="friend"><span class="friend-avatar is-online"><span class="avatar mint">TN</span></span><div><b>Thảo Nguyên</b><small>Sẵn sàng chơi</small></div><button data-invite aria-label="Mời Thảo Nguyên">+</button></div>
+      <div class="friend"><span class="friend-avatar is-online"><span class="avatar coral">MA</span></span><div><b>Minh Anh</b><small>Đang ở sảnh</small></div><button data-invite aria-label="Mời Minh Anh">+</button></div>
+      <div class="friend"><span class="friend-avatar is-busy"><span class="avatar sky">HK</span></span><div><b>Hoàng Khang</b><small>Đang trong trận</small></div><span class="playing-indicator" aria-label="Đang chơi"><svg><use href="#cards"/></svg></span></div>
+      <div class="friend-group-label offline-label">OFFLINE</div>
+      <div class="friend offline-friend"><span class="friend-avatar"><span class="avatar">QL</span></span><div><b>Quốc Long</b><small>Vắng 2 giờ trước</small></div></div>
+      <div class="friend offline-friend"><span class="friend-avatar"><span class="avatar coral">NM</span></span><div><b>Ngọc Mai</b><small>Vắng 1 ngày trước</small></div></div>
+      <p class="friends-footnote">Rủ thêm bạn, vui thêm một ván.</p>
+    </aside>
+  </main>
+
+  <main id="rank" class="view" hidden>
+    <div class="page-heading"><div><p class="eyebrow">BẢNG XẾP HẠNG</p><h1>Mỗi ván, tiến một bậc.</h1></div><p>Sáu bậc xếp hạng · Một hành trình của riêng bạn</p></div>
+    <section class="leaderboard surface">
+      <div class="tier-tabs" aria-label="Lọc theo bậc xếp hạng"></div>
+      <div class="rank-body">
+        <aside class="rank-identity"><span class="tiny-label">BẬC ĐANG XEM</span><img id="rank-large" src="ranks/gold.svg" alt="Huy hiệu Vàng"><h2 id="rank-title">Vàng</h2><p id="rank-range">1.400 – 1.599 ELO</p><div class="rank-divider"></div><span class="tiny-label">VỊ TRÍ CỦA BẠN</span><div class="your-position"><span class="avatar">BC</span><div><b>Bách</b><span>Vàng · 1.491 ELO</span></div><img src="ranks/gold.svg" alt="Vàng"></div><p class="rank-hint">Thắng trận để tích lũy ELO.<br>Còn 109 điểm để chạm Bạch kim.</p><button class="primary" data-go="lobby">Về sảnh chơi <svg><use href="#arrow"/></svg></button></aside>
+        <div class="rank-list"><div class="rank-list-head"><div><h2 id="rank-list-title">Những người chơi hạng Vàng</h2><p>Thứ tự trong bậc · Sắp xếp theo ELO</p></div><span class="sample">Dữ liệu minh họa</span></div><table><thead><tr><th scope="col">VỊ TRÍ</th><th scope="col">NGƯỜI CHƠI</th><th scope="col">BẬC HẠNG</th><th scope="col">ELO</th></tr></thead><tbody id="rank-rows"></tbody></table><div class="rank-note"><svg><use href="#trophy"/></svg>Classic, 2 vs 2 và Side to Side đều tính ELO. Phòng riêng không tính điểm.</div></div>
+      </div>
+    </section>
+  </main>
+
+  <main id="badges" class="view" hidden>
+    <div class="page-heading"><div><p class="eyebrow">BỘ HUY HIỆU SVG</p><h1>Sáu bậc. Sáu dấu ấn.</h1></div><p>Phân biệt bằng hình khối, biểu tượng và màu sắc.</p></div>
+    <section class="badge-gallery surface"><div class="gallery-intro"><span class="tiny-label">TỪ TÂN BINH ĐẾN CAO THỦ</span><h2>Huy hiệu càng cao, hình khối càng mạnh.</h2><p>Từng SVG có thể dùng riêng ở BXH, hồ sơ và cạnh tên người chơi.</p></div><div class="badge-grid"></div><div class="badge-examples"><span class="tiny-label">HIỂN THỊ Ở KÍCH THƯỚC THỰC</span><div><img src="ranks/gold.svg" alt="Vàng" width="28"><b>Bách</b><span>1.491 ELO</span></div><div><img src="ranks/diamond.svg" alt="Kim cương" width="40"><b>Phương Vy</b><span>1.987 ELO</span></div><div><img src="ranks/master.svg" alt="Cao thủ" width="56"><b>Khánh Linh</b><span>2.140 ELO</span></div></div></section>
+  </main>
+  <nav class="review-subnav" aria-label="Điều hướng bản duyệt"><button data-go="lobby">← Về sảnh</button><button data-view="rank" aria-pressed="false">Bảng xếp hạng</button><button data-view="badges" aria-pressed="false">Bộ huy hiệu SVG</button></nav>
+</div>
+<div class="review-label">BẢN DUYỆT DESKTOP <span>05</span> · Sảnh carousel / UNO Draft / BXH theo rank · Chưa áp dụng vào game</div>
+<div id="notice" role="status" hidden></div>
+<script src="review.js"></script>
+</body></html>

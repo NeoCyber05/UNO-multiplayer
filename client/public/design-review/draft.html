@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UNO Draft — Chọn bài đầu ván</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="draft.css"></head>
+<body data-phase="table">
+<main class="draft-table">
+  <div class="table-felt" aria-hidden="true"><span>UNO</span></div>
+  <a href="index.html#lobby" class="back table-back">← Về sảnh</a>
+  <div class="table-mode"><b>UNO DRAFT</b><span id="table-phase">Đang chuẩn bị chọn bài…</span></div>
+  <button id="restart" class="back table-restart">Chọn lại từ đầu ↻</button>
+  <div id="players" aria-label="Bốn người quanh bàn"></div>
+  <div class="center-deck" aria-hidden="true"><img src="../images/cards/back.png" alt=""><img src="../images/cards/back.png" alt=""><span>Chọn bài trước khi bắt đầu</span></div>
+  <div id="complete" class="table-complete" hidden><span class="complete-check">✓</span><h2>Sẵn sàng vào trận!</h2><p>Mỗi người đã có 8 lá. Từ đây chơi theo luật Classic.</p><button id="try-again" class="primary">Thử chọn bộ bài khác ↻</button><a href="index.html#lobby">Về sảnh</a></div>
+  <button id="resume" class="primary resume" hidden>Tiếp tục chọn bài →</button>
+  <section class="hand-area" aria-label="Bài trên tay của bạn"><div class="hand-heading"><h2>Bài của bạn <span id="hand-count">4 / 8</span></h2><p id="last-pick" role="status">Đã chia 4 lá khởi đầu.</p></div><div id="my-hand" class="my-hand"></div></section>
+  <span class="preview-note">BẢN DUYỆT · 3 người chơi mô phỏng · Chưa nối vào trận thật</span>
+</main>
+<dialog id="draft-dialog" class="pick-dialog" aria-labelledby="pick-title" aria-describedby="pick-hint">
+  <div class="pick-top"><span class="label">UNO DRAFT</span><span id="round-label" class="round-counter">Vòng 1 / 4</span><span id="clock" class="clock" aria-label="Thời gian còn lại">10s</span></div>
+  <div id="offers" class="offers" aria-label="Bốn lá bài để chọn"></div>
+  <h2 id="pick-title">Đến lượt bạn chọn bài</h2>
+  <p id="pick-hint">Mỗi vòng chỉ có 4 lá. Người cuối tự nhận lá còn lại.</p>
+  <div id="turn-order" class="turn-order" aria-label="Thứ tự chọn trong vòng"></div>
+  <div class="pick-bottom"><span id="draft-progress">0 / 16 lượt chọn</span><span>Mỗi vòng đổi người pick đầu</span><a href="index.html#lobby">Rời bản thử ↗</a></div>
+</dialog>
+<script type="module" src="draft.js"></script>
+</body></html>

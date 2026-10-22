@@ -1,0 +1,68 @@
+/* Preview 04: game selection with a compact friends list. */
+body { min-width:1100px; }
+.app { max-width:none; padding:24px clamp(32px, 4vw, 80px) 12px; min-height:calc(100vh - 25px); }
+.corner-bar { display:grid; grid-template-columns:1fr auto 1fr; align-items:start; gap:20px; min-height:78px; }
+.player-summary { justify-self:start; display:flex; align-items:center; gap:12px; padding:9px 14px 9px 9px; background:#fffdf5f5; border:1px solid #fff; border-radius:18px; box-shadow:0 5px 0 #d3e4ef55,0 8px 20px #123d6b12; }
+.player-summary .avatar { width:48px; height:48px; border:2px solid #fff; border-radius:13px; }
+.player-info { display:flex; flex-direction:column; align-items:flex-start; gap:5px; width:108px; }
+.player-info>b { font-size:14px; }
+.player-info>small { font-size:10px; color:#7c8a96; }
+.player-xp { height:4px; width:100%; background:#e3eaf0; border-radius:4px; overflow:hidden; }
+.player-xp i { display:block; width:68%; height:100%; background:#64bda1; }
+.player-rank { display:flex; align-items:center; gap:2px; padding-left:7px; border-left:1px solid #e4e8e9; }
+.player-rank img { width:37px; height:37px; }.player-rank b { font-size:13px; color:#9c741e; }
+.floating-logo { font-family:'Fredoka',sans-serif; font-size:67px; font-weight:700; font-style:italic; letter-spacing:-4px; line-height:.95; color:#ffda4d; -webkit-text-stroke:2px #a9511c; text-shadow:0 4px 0 #99431d; transform:rotate(-7deg); text-align:center; }
+.floating-logo>span { display:block; font-family:'Be Vietnam Pro',sans-serif; font-size:9px; font-weight:800; letter-spacing:5px; margin:11px 0 0 9px; color:#fff7d7; -webkit-text-stroke:0; text-shadow:0 1px 4px #3761a4; font-style:normal; }
+.corner-actions { justify-self:end; display:flex; gap:10px; padding-top:7px; }
+.corner-actions button { width:43px; height:43px; display:grid; place-items:center; background:#fffffff0; border:1px solid white; border-radius:13px; color:#557493; box-shadow:0 4px 0 #d5e4ed55; }
+.corner-actions button:hover { background:#fff5d5; }
+.simple-lobby { display:grid; grid-template-columns:minmax(0,1fr) clamp(244px,16vw,284px); gap:28px; align-items:start; min-height:0; }
+.lobby-content { display:flex; flex-direction:column; align-items:center; min-width:0; }
+.card-gallery { position:relative; --card-width:clamp(225px,calc((100vh - 450px) * .6667),400px); --card-step:calc(var(--card-width) * .95); width:min(1320px,100%,calc(var(--card-width) * 3 + 200px)); height:clamp(345px,calc(100vh - 430px),650px); margin-top:8px; }
+.card-track { position:absolute; inset:0; }
+.gallery-card { position:absolute; left:50%; top:50%; width:var(--card-width); aspect-ratio:2/3; padding:0; border:0; border-radius:21px; background:transparent; transform:translate(-50%,-50%) translateX(calc(var(--offset)*var(--card-step))) rotate(calc(var(--offset)*8deg)) scale(calc(1 - var(--distance)*.16)); filter:brightness(calc(1 - var(--distance)*.08)); opacity:calc(1 - var(--distance)*.08); box-shadow:0 18px 24px #1b467338; transition:transform 360ms cubic-bezier(.2,.8,.2,1),filter 200ms ease,opacity 200ms ease,box-shadow 200ms ease; }
+.gallery-card img { display:block; width:100%; height:100%; border-radius:inherit; }
+.gallery-card.selected { box-shadow:0 0 0 3px #ffe6a0,0 0 0 8px #fff5cc30,0 22px 32px #123c7438; }
+.gallery-card:not(.selected):hover { filter:brightness(1); opacity:1; }
+.gallery-card:active { transform:translate(-50%,-50%) translateX(calc(var(--offset)*var(--card-step))) rotate(calc(var(--offset)*8deg)) scale(calc(.985 - var(--distance)*.16)); }
+.gallery-arrow { position:absolute; top:50%; transform:translateY(-50%); z-index:15; width:45px; height:45px; display:grid; place-items:center; background:#fffdf5e8; border:1px solid white; color:#547397; border-radius:50%; font-family:Arial,sans-serif; font-size:33px; font-weight:400; line-height:1; padding-bottom:3px; box-shadow:0 5px 15px #2c68a722; }
+.gallery-arrow:active { transform:translateY(-50%); }.gallery-arrow:hover { background:#fff2c3; }
+.previous { left:20px; }.next { right:20px; }
+.selection-details { text-align:center; margin:4px 0 12px; color:white; text-shadow:0 1px 6px #1d55942b; }
+.selection-title { display:flex; align-items:center; justify-content:center; gap:11px; min-height:36px; }
+.selection-title h2 { font-family:'Fredoka',sans-serif; font-size:32px; font-weight:600; }
+#selection-type { color:#775b1e; background:#fff0bc; border:1px solid #fff5d4; font-weight:800; font-size:8px; letter-spacing:.8px; border-radius:6px; padding:5px 8px; text-shadow:none; }
+.selection-details p { font-size:12px; color:#f0f7ff; margin-top:4px; min-height:20px; }
+.play-button { min-width:210px; height:52px; font-size:14px; border-radius:14px; justify-content:space-between; gap:28px; box-shadow:0 4px 0 #c99836,0 8px 20px #336db42b; }
+.gallery-dots { display:flex; gap:3px; margin:8px 0; }
+.gallery-dots button { width:26px; height:20px; background:transparent; border:0; position:relative; padding:0; }
+.gallery-dots button::after { content:''; position:absolute; top:8px; left:8px; width:9px; height:4px; border-radius:5px; background:#ffffff69; }
+.gallery-dots button[aria-pressed=true]::after { left:3px; width:20px; background:#ffe393; }
+.lobby-dock { display:flex; justify-content:center; gap:16px; margin-top:12px; padding-top:0; }
+.lobby-dock button { display:flex; align-items:center; justify-content:center; gap:12px; height:66px; min-width:174px; padding:0 24px; border-radius:17px; background:#fffdf5f5; color:#526f8a; border:1px solid white; box-shadow:0 5px 0 #d6e6ed66,0 8px 20px #255ca51a; font-size:14px; font-weight:700; }
+.lobby-dock svg { color:#b38628; width:25px; height:25px; }.lobby-dock button:hover { background:#fff2c7; }
+.friend-count { background:#dff0e4; color:#468b69; padding:3px 7px; border-radius:6px; font-size:11px; margin-left:1px; }
+.lobby-friends { margin-top:clamp(70px,10vh,110px); background:#fffdf7f5; border:1px solid white; border-radius:23px; padding:22px 20px 18px; box-shadow:0 5px 0 #d5e4ed55,0 12px 30px #255ca51a; }
+.friends-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:18px; border-bottom:1px solid #e5e9e9; }
+.friends-heading h2 { display:flex; align-items:center; gap:9px; font-size:17px; }.friends-heading svg { color:#b38628; width:21px; height:21px; }
+.friends-heading>span { font-size:10px; font-weight:700; color:#43886c; padding:5px 8px; border-radius:7px; background:#e8f4eb; }
+.friend-group-label { font-size:9px; letter-spacing:1px; font-weight:800; color:#839288; margin-top:20px; }
+.lobby-friends .friend { gap:10px; margin-top:18px; }.lobby-friends .friend b { font-size:12px; }.lobby-friends .friend small { font-size:10px; margin-top:5px; }
+.friend-avatar { position:relative; display:inline-flex; }.lobby-friends .friend .avatar { width:36px; height:36px; border-radius:12px; }
+.friend-avatar::after { content:''; position:absolute; right:-2px; bottom:-1px; width:10px; height:10px; border:2px solid #fffdf7; border-radius:50%; background:#aab4bd; }
+.friend-avatar.is-online::after { background:#49b18a; }.friend-avatar.is-busy::after { background:#e6ad45; }
+.lobby-friends .friend>button { width:30px; height:30px; border-radius:10px; font-size:20px; background:#eaf4fb; border-color:#cfdfeb; }
+.lobby-friends .friend>button:disabled { font-size:14px; color:#4b9071; background:#e5f3e8; }
+.playing-indicator { color:#c29443; width:30px; display:grid; place-items:center; }.playing-indicator svg { width:18px; height:18px; }
+.offline-label { padding-top:18px; border-top:1px solid #e5e9e9; margin-top:20px; color:#939ca6; }
+.offline-friend .avatar { filter:grayscale(.75); opacity:.7; }.offline-friend b { color:#7c8996; }
+.friends-footnote { margin-top:23px; padding-top:15px; border-top:1px solid #e5e9e9; font-size:10px; color:#8b94a0; line-height:1.6; }
+.review-subnav { display:flex; justify-content:center; gap:20px; padding:20px; }
+.review-subnav button { background:#fffdf5ed; padding:10px 15px; border-radius:10px; font-size:11px; }
+body[data-view=lobby] .review-subnav { display:none; }
+.review-label { background:transparent; font-size:8px; color:#e6f2ff; min-height:25px; }
+.review-label span { padding:2px 5px; }
+.page-heading { padding-top:13px; }
+@media (min-width:1600px) { .selection-title h2 { font-size:36px; }.selection-details p { font-size:14px; }.play-button { min-width:240px; height:54px; }.gallery-arrow { width:50px; height:50px; } }
+@media (max-height:800px) { .floating-logo { font-size:58px; }.selection-title h2 { font-size:28px; } }
+@media (prefers-reduced-motion:reduce) { .gallery-card { transition:opacity 120ms ease,filter 120ms ease; } }
