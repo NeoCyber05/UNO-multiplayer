@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900" role="img" aria-labelledby="title">
+<title id="title">UNO Draft</title>
+<defs><linearGradient id="bg" x2=".7" y2="1"><stop stop-color="#ffb968"/><stop offset="1" stop-color="#e46d47"/></linearGradient><linearGradient id="gold" x2="0" y2="1"><stop stop-color="#fff6b1"/><stop offset="1" stop-color="#ffc93f"/></linearGradient><radialGradient id="glow"><stop stop-color="#fff2bf" stop-opacity=".65"/><stop offset="1" stop-color="#fff2bf" stop-opacity="0"/></radialGradient><filter id="shadow" x="-40%" y="-40%" width="180%" height="190%"><feDropShadow dx="0" dy="10" stdDeviation="7" flood-color="#7d332e" flood-opacity=".3"/></filter></defs>
+<rect x="4" y="4" width="592" height="892" rx="38" fill="#fffcf1" stroke="#c8d4df" stroke-width="8"/>
+<rect x="27" y="27" width="546" height="846" rx="25" fill="url(#bg)"/>
+<ellipse cx="300" cy="350" rx="280" ry="310" fill="url(#glow)"/>
+<g fill="#fff6d0" opacity=".12"><path d="m300 340-273-190v130Z"/><path d="m300 340-150-313h90Z"/><path d="m300 340 90-313h90Z"/><path d="m300 340 273-190v130Z"/><path d="m300 340 273 100v110Z"/><path d="m300 340-273 100v110Z"/></g>
+<g filter="url(#shadow)" stroke="#263448" stroke-width="6">
+<g transform="translate(87 227) rotate(-16 75 110)"><rect width="150" height="225" rx="15" fill="#fffdf7"/><rect x="10" y="10" width="130" height="205" rx="9" fill="#3cae77" stroke="none"/><ellipse cx="75" cy="111" rx="49" ry="83" fill="#e8ffe3" stroke="none" transform="rotate(22 75 111)"/><text x="75" y="147" text-anchor="middle" font-family="Arial,sans-serif" font-style="italic" font-weight="900" font-size="105" fill="#3cae77" paint-order="stroke">4</text></g>
+<g transform="translate(225 184)"><rect width="150" height="225" rx="15" fill="#fffdf7"/><rect x="10" y="10" width="130" height="205" rx="9" fill="#418bd8" stroke="none"/><ellipse cx="75" cy="111" rx="49" ry="83" fill="#e8f4ff" stroke="none" transform="rotate(22 75 111)"/><text x="75" y="147" text-anchor="middle" font-family="Arial,sans-serif" font-style="italic" font-weight="900" font-size="105" fill="#418bd8" paint-order="stroke">7</text></g>
+<g transform="translate(363 227) rotate(16 75 110)"><rect width="150" height="225" rx="15" fill="#fffdf7"/><rect x="10" y="10" width="130" height="205" rx="9" fill="#f3bd35" stroke="none"/><ellipse cx="75" cy="111" rx="49" ry="83" fill="#fffcda" stroke="none" transform="rotate(22 75 111)"/><text x="75" y="147" text-anchor="middle" font-family="Arial,sans-serif" font-style="italic" font-weight="900" font-size="105" fill="#f3bd35" paint-order="stroke">2</text></g>
+</g>
+<g fill="#fff0ad"><path d="m72 150 8 19 20 8-20 8-8 20-8-20-20-8 20-8Z"/><path d="m521 467 6 15 15 6-15 6-6 15-6-15-15-6 15-6Z"/></g>
+<path d="m261 426 22-40c9-16 31-5 23 10l-8 18 17-6c17-6 29 7 23 22l-17 42c-6 16-20 23-36 17l-47-19c-13-5-13-21 0-24l23-4" fill="#fff1cc" stroke="#74453b" stroke-width="6" stroke-linejoin="round"/>
+<g transform="rotate(-5 300 704)" font-family="Arial,sans-serif" font-weight="900" font-style="italic" text-anchor="middle" paint-order="stroke" stroke="#2e211a" stroke-width="17" stroke-linejoin="round"><text x="300" y="687" fill="url(#gold)" font-size="108">UNO</text><text x="300" y="797" fill="url(#gold)" font-size="119">DRAFT</text></g>
+</svg>

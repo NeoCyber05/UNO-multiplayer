@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App.jsx';
 import { SocialProvider } from './context/SocialContext.jsx';
 import './styles/theme.css';
+import './styles/polish.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
