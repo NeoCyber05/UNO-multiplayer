@@ -18,23 +18,23 @@ export function useUnoGame(modeKey, lineup = null) {
 
   // Lượt của bot
   useEffect(() => {
-    if (state.winner || state.pendingWild || current.isHuman) return undefined;
+    if (state.draft || state.winner || state.pendingWild || current.isHuman) return undefined;
     const delay = state.hasDrawn ? 650 : 900 + Math.random() * 700;
     const t = setTimeout(() => dispatch(chooseBotMove(stateRef.current, state.turn)), delay);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnKey, state.winner, state.pendingWild]);
+  }, [turnKey, state.winner, state.pendingWild, !!state.draft]);
 
   // Hết giờ lượt của người chơi
   useEffect(() => {
-    if (state.winner || !current.isHuman) return undefined;
+    if (state.draft || state.winner || !current.isHuman) return undefined;
     const t = setTimeout(
       () => dispatch({ type: 'TIMEOUT', player: state.turn, turnNo: state.turnNo }),
       TURN_SECONDS * 1000,
     );
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnKey, state.winner]);
+  }, [turnKey, state.winner, !!state.draft]);
 
   // Còn 1 lá mà chưa hô UNO → bot tự hô (thường là vậy), quá hạn thì phạt
   const watchId = state.unoWatch?.id;
@@ -51,7 +51,7 @@ export function useUnoGame(modeKey, lineup = null) {
 
   const me = state.players[0];
   const top = topCard(state);
-  const isMyTurn = state.turn === 0 && !state.winner;
+  const isMyTurn = state.turn === 0 && !state.winner && !state.draft;
   const playableIds = useMemo(() => new Set(playableCards(state, 0).map((c) => c.id)), [state]);
 
   const canSayUno =
@@ -60,6 +60,7 @@ export function useUnoGame(modeKey, lineup = null) {
 
   const actions = useMemo(
     () => ({
+      draftPick: (index, draftTurn, player) => dispatch({ type: 'DRAFT_PICK', index, draftTurn, player }),
       play: (cardId) => dispatch({ type: 'PLAY', player: 0, cardId }),
       chooseColor: (color) => dispatch({ type: 'CHOOSE_COLOR', color }),
       cancelWild: () => dispatch({ type: 'CANCEL_WILD' }),

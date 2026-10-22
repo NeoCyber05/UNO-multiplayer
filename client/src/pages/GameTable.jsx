@@ -11,9 +11,14 @@ import ColorPicker from '../components/game/ColorPicker.jsx';
 import QuickChat from '../components/game/QuickChat.jsx';
 import MatchClock from '../components/game/MatchClock.jsx';
 import SettingsModal from '../components/game/SettingsModal.jsx';
+import DraftSelection, { DraftTray } from '../components/game/DraftSelection.jsx';
+import { draftSeat } from '../game/draft';
 import { MODES, SEATS } from '../game/constants';
 import { useUnoGame } from '../game/useUnoGame';
 import { buildMatchSummary } from '../game/summary';
+import useSettings from '../hooks/useSettings';
+import playTurnChime from '../hooks/playTurnChime';
+import playUno from '../hooks/playUno';
 import { useSocial } from '../context/SocialContext.jsx';
 import '../components/game/game.css';
 
@@ -28,7 +33,14 @@ function GameScreen({ modeKey, lineup, ranked }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
+  const { settings, set: setSetting } = useSettings();
+
   const current = state.players[state.turn];
+
+  useEffect(() => {
+    if (isMyTurn && !state.winner && settings.turnSound && !settings.muted) playTurnChime(settings.sfxVolume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnKey]);
 
   useEffect(() => {
     if (!state.winner) return undefined;
@@ -52,17 +64,11 @@ function GameScreen({ modeKey, lineup, ranked }) {
   };
 
   return (
-    <div className="table">
+    <div className={`table ${state.draft ? 'is-drafting' : ''}`}>
       <TableBackground />
 
       {/* HUD */}
       <MatchClock startedAt={state.startedAt} stopped={!!state.winner} />
-      <div className="hud-mode">
-        <span className="dot" style={{ background: cfg.accent }} />
-        {cfg.label}
-        <span className="hud-mode__sep" />
-        Chồng bài: {state.drawPile.length}
-      </div>
       <div className="hud-actions">
         <button type="button" className="hud-btn" onClick={() => setSettingsOpen(true)} aria-label="Cài đặt">
           <IconGear size={28} />
@@ -78,7 +84,8 @@ function GameScreen({ modeKey, lineup, ranked }) {
           <div key={p.id} className={`seat seat--${pos}`}>
             <PlayerBadge
               player={p}
-              isTurn={state.turn === idx && !state.winner}
+              isTurn={state.draft ? draftSeat(state.draft) === idx : state.turn === idx && !state.winner}
+              drafting={!!state.draft}
               turnKey={turnKey}
               tone={toneOf(p, pos)}
               relation={relationOf(p)}
@@ -87,7 +94,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
               size={pos === 'top' ? 88 : 92}
               arrowSide={pos === 'top' ? 'left' : 'top'}
             />
-            <div className={`seat__hand seat__hand--${pos}`}>
+            {state.draft ? <DraftTray player={p} seat={idx} active={draftSeat(state.draft) === idx} /> : <div className={`seat__hand seat__hand--${pos}`}>
               <div className="fan-wrap">
                 <Fan
                   cards={p.hand}
@@ -97,13 +104,13 @@ function GameScreen({ modeKey, lineup, ranked }) {
                   maxLength={pos === 'top' ? 340 : 270}
                 />
               </div>
-            </div>
+            </div>}
           </div>
         );
       })}
 
       {/* Giữa bàn */}
-      <CenterTable
+      {!state.draft && <CenterTable
         discard={state.discard}
         currentColor={state.currentColor}
         direction={state.direction}
@@ -111,16 +118,16 @@ function GameScreen({ modeKey, lineup, ranked }) {
         canDraw={isMyTurn && !state.hasDrawn && !state.pendingWild}
         onDraw={actions.draw}
         turnSeat={state.winner ? null : SEATS[state.turn]}
-      />
+      />}
 
-      {state.message && (
+      {!state.draft && state.message && (
         <div key={state.message.id} className="toast" role="status">
           {state.message.text}
         </div>
       )}
 
       <div className="hand-bar">
-        {!state.winner && (
+        {!state.draft && !state.winner && (
           <div className={`turn-pill ${isMyTurn ? 'is-mine' : ''}`}>
             <span className="turn-pill__dot" />
             {isMyTurn
@@ -151,7 +158,8 @@ function GameScreen({ modeKey, lineup, ranked }) {
           </div>
           <PlayerBadge
             player={me}
-            isTurn={isMyTurn}
+            isTurn={state.draft ? draftSeat(state.draft) === 0 : isMyTurn}
+            drafting={!!state.draft}
             turnKey={turnKey}
             tone="gold"
             bubble={state.bubbles[me.id]}
@@ -168,7 +176,14 @@ function GameScreen({ modeKey, lineup, ranked }) {
         />
       </div>
 
-      <UnoButton active={canSayUno} onClick={actions.sayUno} />
+      {!state.draft && <UnoButton
+          active={canSayUno}
+          onClick={() => {
+            if (!settings.muted) playUno(settings.sfxVolume);
+            actions.sayUno();
+          }}
+        />}
+      {state.draft && <DraftSelection key={state.discard[0].id} state={state} onPick={actions.draftPick} paused={settingsOpen} />}
 
       {/* Hộp thoại */}
       <ColorPicker
@@ -179,11 +194,9 @@ function GameScreen({ modeKey, lineup, ranked }) {
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onRestart={() => {
-          actions.restart();
-          setSettingsOpen(false);
-        }}
         onLeave={() => navigate('/lobby')}
+        turnSound={settings.turnSound}
+        onTurnSound={(v) => setSetting('turnSound', v)}
       />
     </div>
   );

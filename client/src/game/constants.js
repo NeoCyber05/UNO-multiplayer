@@ -9,6 +9,7 @@ export const COLOR_HEX = { red: '#E8212E', yellow: '#FFC700', green: '#1FA64A', 
 export const SEATS = ['bottom', 'left', 'top', 'right'];
 
 export const MODES = {
+  draft: { key: 'draft', label: 'UNO Draft', accent: '#f4a744', teams: false, teammateSeat: null, teammateOpen: false, draft: true },
   classic: { key: 'classic', label: 'Classic', accent: '#E8212E', teams: false, teammateSeat: null, teammateOpen: false },
   '2v2': { key: '2v2', label: '2 vs 2', accent: '#35D399', teams: true, teammateSeat: 2, teammateOpen: true },
   side: { key: 'side', label: 'Side to Side', accent: '#22C3D6', teams: true, teammateSeat: 1, teammateOpen: true },

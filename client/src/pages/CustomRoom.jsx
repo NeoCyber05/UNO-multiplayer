@@ -3,18 +3,20 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import Avatar from '../components/Avatar.jsx';
 import Modal from '../components/Modal.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
-import { IconBack, IconBot, IconClose, IconCopy } from '../components/Icons.jsx';
+import { IconBack, IconBot, IconCheck, IconClose, IconCopy } from '../components/Icons.jsx';
 import { useSocial } from '../context/SocialContext.jsx';
 import { BOT_LEVELS } from '../data/mockData';
 import './pages.css';
 
-const ROOM_CODE = 'B7K2';
+// shortcut: mã phòng minh họa cố định, thay bằng mã do server cấp khi có multiplayer.
+const ROOM_CODE = 'B7K2X9';
 
 // teams[i] = đội của ghế i ('A' = đội bạn). Khớp teammateSeat trong game/constants.js.
 const RULES = [
   { key: 'classic', label: 'Classic', sub: 'Mỗi người một mình', teams: null },
   { key: '2v2', label: '2 vs 2', sub: 'Đồng đội ngồi đối diện', teams: ['A', 'B', 'A', 'B'] },
   { key: 'side', label: 'Side to Side', sub: 'Đồng đội ngồi cạnh (bên trái)', teams: ['A', 'A', 'B', 'B'] },
+  { key: 'draft', label: 'UNO Draft', sub: 'Lần lượt chọn bài trước trận', teams: null },
 ];
 const SEAT_POS = ['bottom', 'left', 'top', 'right'];
 
@@ -92,14 +94,14 @@ export default function CustomRoom() {
 
   const submitJoin = (e) => {
     e.preventDefault();
-    if (joinCode.trim().length < 4) return notify('Mã phòng gồm 4 ký tự');
+    if (joinCode.trim().length < 6) return notify('Mã phòng cần ít nhất 6 ký tự');
     setJoinOpen(false);
     notify(`Không tìm thấy phòng ${joinCode}`);
     setJoinCode('');
   };
 
   return (
-    <div className="screen">
+    <div className="screen custom-room">
       <MenuBackground />
 
       <header className="page-head">
@@ -112,7 +114,7 @@ export default function CustomRoom() {
         </div>
         <button type="button" className="btn btn--ghost" onClick={() => setJoinOpen(true)}>Nhập mã phòng</button>
         <button type="button" className="room-code" onClick={copyCode} aria-label="Sao chép mã phòng">
-          <span className="muted" style={{ fontSize: 11 }}>MÃ PHÒNG</span>
+          <span className="room-code__label">MÃ PHÒNG</span>
           <b className="display">{ROOM_CODE}</b>
           <IconCopy />
         </button>
@@ -120,17 +122,16 @@ export default function CustomRoom() {
 
       <div className="room">
         <div className="room__table-wrap">
-          <div className="rule-tabs" role="tablist" aria-label="Luật chơi">
+          <div className="rule-tabs" role="group" aria-label="Luật chơi">
             {RULES.map((r) => (
               <button
                 key={r.key}
                 type="button"
-                role="tab"
-                aria-selected={r.key === ruleKey}
+                aria-pressed={r.key === ruleKey}
                 className={`rule-tab ${r.key === ruleKey ? 'is-on' : ''}`}
                 onClick={() => setRuleKey(r.key)}
               >
-                <b>{r.label}</b>
+                <b>{r.label}<span className="rule-tab__check" aria-hidden="true"><IconCheck /></span></b>
                 <span>{r.sub}</span>
               </button>
             ))}
@@ -249,8 +250,8 @@ export default function CustomRoom() {
           <div className="display" style={{ fontSize: 22, fontWeight: 600 }}>Nhập mã phòng</div>
           <input
             className="input join-form__input"
-            placeholder="VD: B7K2"
-            maxLength={4}
+            placeholder={`VD: ${ROOM_CODE}`}
+            minLength={6}
             autoFocus
             value={joinCode}
             onChange={(e) => setJoinCode(e.target.value.toUpperCase())}

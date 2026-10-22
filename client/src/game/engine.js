@@ -1,6 +1,7 @@
 import { BOTS, ME } from '../data/mockData';
 import { COLOR_LABEL, HAND_SIZE, MODES } from './constants';
 import { createDeck, shuffle } from './deck';
+import { createDraft, draftSeat, pickDraftCard } from './draft';
 import { canPlay, isWild, nextIndex, topCard } from './rules';
 
 const OUCH = ['Ối trời!', 'Không thể nào 😭', 'Nhớ đấy nhé!', 'Ác quá vậy 😤'];
@@ -31,9 +32,17 @@ function buildPlayers(modeKey, lineup) {
 
 export function initGame(modeKey, lineup = null) {
   const cfg = MODES[modeKey] ?? MODES.classic;
-  const deck = shuffle(createDeck());
+  let deck = shuffle(createDeck());
   const players = buildPlayers(cfg.key, lineup);
-  for (let r = 0; r < HAND_SIZE; r++) players.forEach((p) => p.hand.push(deck.pop()));
+  let draft = null;
+  if (cfg.draft) {
+    const opening = createDraft(deck);
+    players.forEach((p, i) => { p.hand = opening.hands[i]; });
+    deck = opening.deck;
+    draft = { offers: opening.offers, turn: 0 };
+  } else {
+    for (let r = 0; r < HAND_SIZE; r++) players.forEach((p) => p.hand.push(deck.pop()));
+  }
   const firstIdx = deck.findIndex((c) => /^\d$/.test(c.value));
   const [first] = deck.splice(firstIdx, 1);
 
@@ -55,7 +64,8 @@ export function initGame(modeKey, lineup = null) {
     bubbles: {},
     message: { id: 1, text: 'Ván đấu bắt đầu! Bạn đi trước.' },
     seq: 1,
-    startedAt: Date.now(),
+    draft,
+    startedAt: draft ? null : Date.now(),
   };
 }
 
@@ -183,7 +193,23 @@ function applyPlay(s, idx, card, chosenColor) {
 /* ---------- reducer ---------- */
 
 export function gameReducer(s, a) {
+  if (s.draft && !['RESET', 'DRAFT_PICK', 'CHAT'].includes(a.type)) return s;
   switch (a.type) {
+    case 'DRAFT_PICK': {
+      if (!s.draft || a.draftTurn !== s.draft.turn || a.player !== draftSeat(s.draft)) return s;
+      const before = { ...s.draft, hands: s.players.map(p => p.hand), deck: s.drawPile };
+      const picked = pickDraftCard(before, a.index);
+      if (picked === before) return s;
+      const finished = picked.turn === 16;
+      const next = {
+        ...s,
+        players: s.players.map((p, i) => ({ ...p, hand: picked.hands[i] })),
+        drawPile: picked.deck,
+        draft: finished ? null : { turn: picked.turn, offers: picked.offers },
+        startedAt: finished ? Date.now() : null,
+      };
+      return finished ? withMessage(next, 'Chọn bài hoàn tất! Bạn đi trước.') : next;
+    }
     case 'RESET':
       return a.state;
 

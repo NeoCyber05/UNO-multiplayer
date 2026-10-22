@@ -1,0 +1,27 @@
+.draft-heading { position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:6; display:flex; flex-direction:column; align-items:center; gap:6px; color:#fff3cf; }
+.draft-heading b { font-size:30px; font-style:italic; }.draft-heading span { font-size:11px; }
+.draft-scrim { position:absolute; inset:0; z-index:3; background:#22050d; opacity:0; pointer-events:none; transition:opacity 240ms ease-out; }.draft-scrim.is-open { opacity:.48; }
+.is-drafting .seat--top { top:88px; flex-direction:row; align-items:center; gap:22px; }
+.is-drafting .seat--left,.is-drafting .seat--right { top:38%; flex-direction:column; gap:18px; }
+.is-drafting .seat--left { left:22px; }.is-drafting .seat--right { right:22px; }
+.is-drafting .seat .pbadge { width:145px; }.is-drafting .seat--top .turn-arrow { left:-55px; }
+.is-drafting .hand-area { bottom:24px; }.is-drafting .me__tools { display:none; }
+.draft-tray { display:flex; gap:7px; padding:10px; border:2px solid #edd9b3; border-radius:18px; background:#fffaec; box-shadow:0 5px 0 #bb773f55; color:#ba9c70; }
+.draft-tray.is-active { border-color:#ffd25a; box-shadow:0 0 0 3px #ffda6566,0 8px 20px #59181d33; }
+.draft-slot { width:56px; height:84px; border:1px solid #d9b98d; background:#eadac1; border-radius:9px; display:grid; place-items:center; overflow:hidden; }
+.draft-slot .uno-card { box-shadow:none; }.draft-slot>span { font-size:22px; }
+.draft-overlay { position:absolute; inset:0; z-index:30; pointer-events:none; }
+.draft-overlay .modal { pointer-events:none; background:transparent; backdrop-filter:none; padding-bottom:25px; }
+.draft-overlay .modal__box { pointer-events:auto; width:680px; min-width:0; padding:24px; background:#fff9e9; border:2px solid #e9d1a6; color:#966133; border-radius:24px; box-shadow:0 8px 0 #a65d293b,0 22px 50px #64161a33; }
+.draft-overlay--left .draft-box { border-left:7px solid #ffd264; }.draft-overlay--right .draft-box { border-right:7px solid #ffd264; }.draft-overlay--top .draft-box { border-top:7px solid #ffd264; }.draft-overlay--bottom .draft-box { border-bottom:7px solid #ffd264; }
+.draft-box__head { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }.draft-box__head small { font-size:9px; letter-spacing:1.5px; font-weight:800; color:#a48c67; }.draft-box__head h2 { margin:0; font-size:29px; color:#b2852f; }.draft-box__head>span { padding:7px 9px; border-radius:9px; background:#f5e7c6; font-weight:800; min-width:38px; text-align:center; }
+.draft-offers { display:flex; justify-content:center; gap:14px; animation:fade-in 220ms ease-out; }
+.draft-offer { width:134px; height:194px; display:grid; place-items:center; padding:5px; background:#fffdf5; border:3px solid #e7c063; border-radius:15px; box-shadow:0 4px 10px #aa7b2920; transition:transform 160ms ease-out,box-shadow 160ms ease-out; }
+.draft-offer .uno-card { box-shadow:none; }.draft-offer:disabled { cursor:default; }.draft-offer.is-empty { background:#f0e4cf; border:2px dashed #d9c4a2; box-shadow:none; color:#b59c76; font-size:11px; }.draft-offer.is-departing .uno-card { opacity:0; }
+.draft-box h3 { margin:20px 0 6px; text-align:center; font-size:22px; }.draft-box p { margin:0; text-align:center; color:#a78b65; font-size:11px; }
+.draft-order { list-style:none; display:flex; justify-content:center; gap:9px; margin:18px 0 12px; padding:0; font-size:10px; color:#899069; }.draft-order li { padding:5px; border-radius:7px; }.draft-order li[aria-current] { background:#fae7af; color:#9c7130; }.draft-order b { margin-right:4px; }.draft-order span { margin-left:12px; color:#bda681; }
+.draft-box footer { display:flex; align-items:center; justify-content:space-between; padding-top:12px; border-top:1px solid #e9dabd; font-size:9px; color:#b49b75; }.draft-box footer button { background:none; border:0; color:#aa804b; font-size:10px; text-decoration:underline; }
+.draft-resume { position:absolute; z-index:30; left:50%; top:47%; transform:translate(-50%,-50%); }
+.draft-flight { position:fixed; z-index:10000; pointer-events:none; border-radius:9px; transform-origin:0 0; box-shadow:0 14px 30px #38101744; }
+@media (hover:hover) and (pointer:fine) { .draft-offer:hover:not(:disabled) { transform:translateY(-7px) rotate(-1deg); box-shadow:0 10px 24px #aa7b2940; } }
+@media (prefers-reduced-motion:reduce) { .draft-offer:hover:not(:disabled) { transform:none; } }

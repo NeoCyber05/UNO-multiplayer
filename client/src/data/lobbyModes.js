@@ -37,6 +37,12 @@ export const LOBBY_MODES = [
     image: '/images/modes/custom.png',
     to: '/custom',
   },
+  {
+    key: 'draft', title: 'UNO Draft',
+    desc: '4 lá khởi đầu. 4 vòng chọn bài. Tự tạo lợi thế trước khi vào trận!',
+    chip: 'XẾP HẠNG · ELO', ranked: true,
+    image: '/images/modes/draft.svg', to: '/matchmaking/draft',
+  },
 ];
 
 // Thẻ nằm giữa khi mở Sảnh

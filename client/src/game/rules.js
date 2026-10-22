@@ -14,7 +14,7 @@ export function nextIndex(state, from, steps = 1) {
 
 /** Danh sách lá người chơi có thể đánh ở trạng thái hiện tại. */
 export function playableCards(state, playerIdx) {
-  if (state.turn !== playerIdx || state.winner) return [];
+  if (state.draft || state.turn !== playerIdx || state.winner) return [];
   const top = topCard(state);
   return state.players[playerIdx].hand.filter(
     (c) => canPlay(c, top, state.currentColor) && (!state.hasDrawn || c.id === state.drawnCardId),
