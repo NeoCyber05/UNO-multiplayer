@@ -9,7 +9,13 @@ import { FRIENDS, ME } from '../data/mockData';
 const SocialContext = createContext(null);
 
 export function SocialProvider({ children }) {
-  const [me, setMe] = useState(ME);
+  const [me, setMe] = useState(() => {
+    try {
+      return { ...ME, ...JSON.parse(localStorage.getItem('uno.profile') || '{}') };
+    } catch {
+      return ME;
+    }
+  });
   const [friends, setFriends] = useState(FRIENDS);
   const [party, setParty] = useState({ mode: null, teammate: null });
   const [lastMatch, setLastMatch] = useState(null);
@@ -46,9 +52,21 @@ export function SocialProvider({ children }) {
 
   const applyElo = useCallback((delta) => setMe((m) => ({ ...m, elo: m.elo + delta })), []);
 
+  /** Đổi tên / avatar của mình; lưu localStorage (sau này gửi server). */
+  const updateProfile = useCallback(({ name, avatar }) => {
+    setMe((m) => {
+      const n = (name ?? m.name).trim().slice(0, 16) || m.name;
+      const next = { ...m, name: n, avatar: avatar ?? m.avatar, initials: n.slice(0, 2).toUpperCase() };
+      try {
+        localStorage.setItem('uno.profile', JSON.stringify({ name: next.name, avatar: next.avatar, initials: next.initials }));
+      } catch { /* bỏ qua: không lưu được */ }
+      return next;
+    });
+  }, []);
+
   const value = useMemo(
-    () => ({ me, applyElo, friends, friendState, sendFriendRequest, party, setParty, lastMatch, setLastMatch }),
-    [me, applyElo, friends, friendState, sendFriendRequest, party, lastMatch],
+    () => ({ me, applyElo, updateProfile, friends, friendState, sendFriendRequest, party, setParty, lastMatch, setLastMatch }),
+    [me, applyElo, updateProfile, friends, friendState, sendFriendRequest, party, lastMatch],
   );
 
   return <SocialContext.Provider value={value}>{children}</SocialContext.Provider>;

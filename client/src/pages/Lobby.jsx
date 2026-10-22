@@ -31,9 +31,7 @@ export default function Lobby() {
   const mode = LOBBY_MODES[active];
 
   return (
-    // Không dùng class `lobby`: `.screen.lobby { flex-direction: row }` cũ trong pages.css
-    // còn tồn tại tới Task 8.
-    <div className="screen">
+    <div className="screen lobby-screen">
       <MenuBackground />
 
       <TopBar
@@ -44,19 +42,21 @@ export default function Lobby() {
         onSettings={() => setModal('settings')}
       />
 
-      <main className="lobby__stage">
+      <div className="lobby__heading"><h1>Chọn chế độ chơi</h1><p>Một bộ bài, nhiều cách vui.</p></div>
+
+      <main className="lobby__stage" aria-label="Bộ bài chế độ chơi">
         <ModeCarousel modes={LOBBY_MODES} active={active} onChange={setActive} onSelect={enter} keyboard={!modal} />
       </main>
 
       <section key={mode.key} className="lobby__info">
+        <div className="lobby__selection">
         <h2 className="display lobby__mode-title">{mode.title}</h2>
+        <span className={`chip lobby__chip ${mode.ranked ? 'is-ranked' : ''}`}>{mode.ranked ? 'XẾP HẠNG' : 'PHÒNG RIÊNG'}</span>
+        </div>
         <p className="lobby__mode-desc">{mode.desc}</p>
         <div className="lobby__cta">
-          <span className={`chip lobby__chip ${mode.ranked ? 'is-ranked' : ''}`}>
-            {mode.ranked && <IconTrophy size={13} />} {mode.chip}
-          </span>
           <button type="button" className="btn btn--primary lobby__play" onClick={() => enter(mode)}>
-            <IconPlay /> CHƠI NGAY
+            <IconPlay /> {mode.key === 'custom' ? 'TẠO PHÒNG RIÊNG' : 'CHƠI NGAY'}
           </button>
         </div>
       </section>
@@ -69,6 +69,7 @@ export default function Lobby() {
             className={`lobby__dot ${i === active ? 'is-on' : ''}`}
             onClick={() => setActive(i)}
             aria-label={m.title}
+            aria-pressed={i === active}
           />
         ))}
       </div>
@@ -76,18 +77,18 @@ export default function Lobby() {
       <Dock
         items={[
           { key: 'friends', label: 'Bạn bè', icon: IconUsers, onClick: () => setModal('friends') },
-          { key: 'rank', label: 'BXH', icon: IconTrophy, onClick: () => setModal('rank') },
+          { key: 'rank', label: 'Bảng xếp hạng', icon: IconTrophy, onClick: () => setModal('rank') },
           { key: 'rules', label: 'Luật chơi', icon: IconBook, onClick: () => setModal('rules') },
         ]}
       />
       <div className="lobby__hint">← → chọn chế độ · Enter để chơi</div>
 
-      <FriendsModal
+      <div className="lobby-friends-drawer"><FriendsModal
         open={modal === 'friends'}
         onClose={closeModal}
         notify={notify}
         onInvite={(f) => navigate('/custom', { state: { inviteFriendId: f.id } })}
-      />
+      /></div>
       <LeaderboardModal open={modal === 'rank'} onClose={closeModal} />
       <RulesModal open={modal === 'rules'} onClose={closeModal} />
       <ProfileModal open={modal === 'profile'} onClose={closeModal} me={me} />

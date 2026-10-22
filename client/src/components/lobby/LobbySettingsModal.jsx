@@ -97,7 +97,7 @@ export default function LobbySettingsModal({ open, onClose, settings, onChange, 
                 <Slider icon={IconMusic} label="Nhạc nền" value={s.musicVolume} disabled={s.muted} onChange={(v) => onChange('musicVolume', v)} />
               </div>
               <div className="set-group">
-                <Toggle label="Rung khi tới lượt" hint="Chỉ trên thiết bị hỗ trợ" value={s.vibrate} onChange={(v) => onChange('vibrate', v)} />
+                <Toggle label="Âm báo tới lượt" hint="Phát tiếng “ting” khi đến lượt bạn" value={s.turnSound} onChange={(v) => onChange('turnSound', v)} />
               </div>
             </>
           )}

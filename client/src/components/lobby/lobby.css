@@ -356,32 +356,31 @@
 .pf-match__delta.is-up { color: var(--green); }
 .pf-match__delta.is-down { color: var(--red); }
 
-.pf-badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.pf-ach-sum { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.pf-ach-sum__text { font-size: 13px; color: var(--text-muted); }
+.pf-ach-sum__text b { font-size: 20px; color: var(--text); margin-right: 4px; }
+.pf-badges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .pf-badge {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 18px 12px;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: 16px;
-  text-align: center;
   background: rgba(255, 201, 74, 0.1);
   border: 1px solid rgba(255, 201, 74, 0.35);
 }
-.pf-badge__icon {
-  display: grid;
-  place-items: center;
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  color: var(--c);
-  background: color-mix(in srgb, var(--c) 18%, transparent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 45%, transparent);
-}
-.pf-badge__name { font-size: 13px; font-weight: 700; }
+.pf-medal { position: relative; flex: none; width: 72px; height: 79px; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.18)); }
+.pf-medal__icon { position: absolute; inset: 0 0 9px; display: grid; place-items: center; color: #fff; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35)); }
+.pf-badge__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pf-badge__name { font-size: 13px; font-weight: 800; }
+.pf-badge__desc { font-size: 11px; color: var(--text-muted); }
+.pf-badge__bar { display: block; height: 6px; margin-top: 4px; border-radius: 99px; overflow: hidden; }
+.pf-badge__bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ffc94a, #ff8a3d); }
+.pf-badge__meta { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; color: var(--text-muted); }
+.pf-badge__tier { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; }
 .pf-badge.is-locked { background: rgba(255, 255, 255, 0.04); border-color: var(--line); }
-.pf-badge.is-locked .pf-badge__icon { filter: grayscale(1); opacity: 0.35; }
-.pf-badge.is-locked .pf-badge__name { color: var(--text-faint); }
+.pf-badge.is-locked .pf-medal { filter: grayscale(1) opacity(0.45); }
+.pf-badge.is-locked .pf-badge__bar i { background: #9fb3c2; }
 
 /* ---------- Cài đặt Sảnh ---------- */
 .lobby-settings { width: 760px; }
@@ -454,3 +453,37 @@
   background: #fff;
   border: 4px solid var(--yellow);
 }
+
+/* Đổi tên / avatar trong thẻ hồ sơ */
+button.pf-card__name { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: none; border-radius: 10px; background: none; color: inherit; cursor: pointer; }
+button.pf-card__name svg { opacity: 0.35; transition: opacity 0.15s; }
+button.pf-card__name:hover { background: rgba(255, 255, 255, 0.08); }
+button.pf-card__name:hover svg { opacity: 1; }
+.pf-edit__name { width: 100%; margin-top: 6px; padding: 2px 10px; border-radius: 10px; border: 1.5px solid var(--rank, var(--line)); background: rgba(0, 0, 0, 0.18); color: var(--text); font-size: 26px; font-weight: 600; line-height: 1.1; text-align: center; outline: none; }
+.pf-av { position: relative; }
+.pf-av__btn { position: relative; display: block; padding: 0; border: none; background: none; cursor: pointer; border-radius: 16px; }
+.pf-av__btn .pf-card__avatar { transition: filter 0.15s; }
+.pf-av__btn:hover .pf-card__avatar { filter: brightness(0.85); }
+.pf-av__hint { position: absolute; right: -8px; bottom: -8px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--rank, #4c86ff); color: #fff; border: 3px solid #fff; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35); }
+.pf-picker {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 14px);
+  left: 50%;
+  translate: -50% 0;
+  display: grid;
+  grid-template-columns: repeat(5, auto);
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 12px;
+  border-radius: 16px;
+  background: #16233d;
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  animation: panel-in 0.18s ease both;
+}
+.pf-edit__av { padding: 2px; border-radius: 12px; border: 2px solid transparent; background: none; cursor: pointer; }
+.pf-edit__av:hover { border-color: rgba(255, 255, 255, 0.35); }
+.pf-edit__av.is-on { border-color: var(--rank, #4c86ff); }
+.avatar svg { display: block; border-radius: inherit; }

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UnoCard from '../components/card/UnoCard.jsx';
+import { IconArrowRight, IconCards, IconTrophy, IconUsers } from '../components/Icons.jsx';
+import { LOBBY_MODES } from '../data/lobbyModes';
 import { ASSETS } from '../config/assets';
 import './pages.css';
 
@@ -31,6 +33,7 @@ export default function Login() {
         className="login__hero"
         style={ASSETS.backgrounds.login ? { backgroundImage: `url(${ASSETS.backgrounds.login})` } : undefined}
       >
+        <span className="login__edition eyebrow">UNO ONLINE · CÙNG NHAU CHƠI</span>
         <div className="login__hero-glow" />
         <div className="login__cards">
           {HERO_CARDS.map((h, i) => (
@@ -52,16 +55,17 @@ export default function Login() {
         <div className="login__tagline">Bộ bài bạn bè, mọi lúc mọi nơi</div>
 
         <div className="login__stats">
-          <div><b className="display" style={{ color: 'var(--yellow)' }}>120K+</b><span>Người chơi</span></div>
-          <div><b className="display" style={{ color: 'var(--green)' }}>3</b><span>Chế độ chơi</span></div>
-          <div><b className="display" style={{ color: 'var(--blue)' }}>24/7</b><span>Luôn có trận</span></div>
+          <div><IconUsers /><b className="display">4</b><span>Người mỗi bàn</span></div>
+          <div><IconCards /><b className="display">{LOBBY_MODES.length}</b><span>Chế độ chơi</span></div>
+          <div><IconTrophy /><b className="display">ELO</b><span>Thử sức xếp hạng</span></div>
         </div>
       </aside>
 
       <main className="login__main">
         <form className="login__form" onSubmit={submit} noValidate>
           <div>
-            <div className="display login__title">Đăng nhập</div>
+            <span className="eyebrow">SẴN SÀNG CHO VÁN TIẾP THEO?</span>
+            <h1 className="display login__title">Chào mừng trở lại.</h1>
             <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>Vào sảnh chờ và tìm bạn chơi cùng</div>
           </div>
 
@@ -95,7 +99,7 @@ export default function Login() {
             <button type="button" className="link-btn">Quên mật khẩu?</button>
           </div>
 
-          <button type="submit" className="btn btn--primary btn--block">Đăng nhập</button>
+          <button type="submit" className="btn btn--primary btn--block">Vào sảnh chơi <IconArrowRight /></button>
 
           <div className="divider">hoặc</div>
 

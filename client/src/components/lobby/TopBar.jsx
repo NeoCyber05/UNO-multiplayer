@@ -1,5 +1,6 @@
 import Avatar from '../Avatar.jsx';
-import { IconGear, IconMute, IconSound, IconTrophy } from '../Icons.jsx';
+import RankBadge from '../RankBadge.jsx';
+import { IconGear, IconMute, IconSound } from '../Icons.jsx';
 import { ASSETS } from '../../config/assets';
 
 /** Thanh trên Sảnh: thẻ hồ sơ (bấm mở hồ sơ), logo, nút âm thanh + cài đặt. */
@@ -12,7 +13,7 @@ export default function TopBar({ me, muted, onToggleMute, onProfile, onSettings 
           <span className="topbar__row">
             <span className="topbar__name">{me.name}</span>
             <span className="topbar__elo">
-              <IconTrophy size={15} /> {me.elo.toLocaleString('vi-VN')}
+              <RankBadge elo={me.elo} size={32} /> {me.elo.toLocaleString('vi-VN')}
             </span>
           </span>
           <span className="topbar__xp"><i style={{ width: `${me.xp}%` }} /></span>
@@ -22,6 +23,7 @@ export default function TopBar({ me, muted, onToggleMute, onProfile, onSettings 
 
       <div className="topbar__logo">
         {ASSETS.logo ? <img src={ASSETS.logo} alt="UNO" /> : <span className="display">UNO</span>}
+        <small>ONLINE</small>
       </div>
 
       <div className="topbar__actions">

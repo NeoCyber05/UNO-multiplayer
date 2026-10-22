@@ -6,7 +6,7 @@ export const DEFAULT_SETTINGS = {
   muted: false,
   sfxVolume: 80,
   musicVolume: 40,
-  vibrate: true,
+  turnSound: true,
   autoSort: true,
   highlightPlayable: true,
   confirmWild: false,

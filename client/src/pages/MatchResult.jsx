@@ -4,12 +4,11 @@ import Avatar from '../components/Avatar.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
 import { IconCards, IconCheck, IconCrown, IconMegaphone, IconPlay, IconPlus, IconSwords, IconTrophy } from '../components/Icons.jsx';
 import { useSocial } from '../context/SocialContext.jsx';
-import { RANKS } from '../data/mockData';
+import RankBadge from '../components/RankBadge.jsx';
 import { MODES } from '../game/constants';
 import './pages.css';
 
 const fmtTime = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
-const rankOf = (elo) => RANKS[Math.max(0, RANKS.findLastIndex((r) => elo >= r.min))];
 
 /** Trang tổng kết sau mỗi ván (mọi chế độ). Dữ liệu lấy từ lastMatch trong SocialContext. */
 export default function MatchResult() {
@@ -31,7 +30,6 @@ export default function MatchResult() {
   );
 
   const eloAfter = m.eloBefore + (m.eloDelta ?? 0);
-  const tier = rankOf(eloAfter);
 
   return (
     <div className="screen">
@@ -60,7 +58,7 @@ export default function MatchResult() {
             <span className={`display mr__delta ${m.eloDelta >= 0 ? 'is-up' : 'is-down'}`}>
               {m.eloDelta >= 0 ? `+${m.eloDelta}` : m.eloDelta}
             </span>
-            <span className="chip" style={{ color: tier.color }}>{tier.name}</span>
+            <RankBadge elo={eloAfter} size={40} label />
           </div>
         ) : (
           <div className="chip mr__unranked">Không tính ELO</div>

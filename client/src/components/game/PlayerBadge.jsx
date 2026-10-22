@@ -20,15 +20,16 @@ export default function PlayerBadge({
   bubbleSide = 'right',
   size = 96,
   arrowSide = 'top',
+  drafting = false,
 }) {
   const count = player.hand.length;
   return (
     <div className={`pbadge ${isTurn ? 'is-turn' : ''}`}>
       <div className="pbadge__avatar" style={{ width: size, height: size }}>
-        {isTurn && <span key={turnKey} className="pbadge__timer" style={{ '--turn-dur': `${TURN_SECONDS}s` }} />}
+        {isTurn && !drafting && <span key={turnKey} className="pbadge__timer" style={{ '--turn-dur': `${TURN_SECONDS}s` }} />}
         {isTurn && (
           <span className={`turn-arrow turn-arrow--${arrowSide}`} aria-hidden="true">
-            <span className="turn-arrow__tag">LƯỢT</span>
+            <span className="turn-arrow__tag">{drafting ? 'CHỌN' : 'LƯỢT'}</span>
             <span className="turn-arrow__tri" />
           </span>
         )}

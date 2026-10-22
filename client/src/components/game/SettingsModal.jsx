@@ -3,10 +3,9 @@ import Modal from '../Modal.jsx';
 import Toggle from '../Toggle.jsx';
 import { IconClose } from '../Icons.jsx';
 
-export default function SettingsModal({ open, onClose, onRestart, onLeave }) {
+export default function SettingsModal({ open, onClose, onLeave, turnSound, onTurnSound }) {
   const [sound, setSound] = useState(true);
   const [music, setMusic] = useState(false);
-  const [vibrate, setVibrate] = useState(true);
 
   return (
     <Modal open={open} onClose={onClose} className="settings" label="Cài đặt">
@@ -17,7 +16,7 @@ export default function SettingsModal({ open, onClose, onRestart, onLeave }) {
       <div className="settings__group">
         <Toggle label="Hiệu ứng âm thanh" value={sound} onChange={setSound} />
         <Toggle label="Nhạc nền" value={music} onChange={setMusic} />
-        <Toggle label="Rung khi tới lượt" value={vibrate} onChange={setVibrate} />
+        <Toggle label="Âm báo tới lượt" value={turnSound} onChange={onTurnSound} />
       </div>
       <div className="settings__rules">
         <b>Luật nhanh:</b> đánh lá cùng màu hoặc cùng số/ký hiệu. Không có lá phù hợp thì rút 1 lá.
@@ -25,7 +24,6 @@ export default function SettingsModal({ open, onClose, onRestart, onLeave }) {
       </div>
       <div className="settings__actions">
         <button type="button" className="btn btn--danger" onClick={onLeave}>Rời trận</button>
-        <button type="button" className="btn btn--ghost" onClick={onRestart}>Chơi lại</button>
         <button type="button" className="btn btn--primary" onClick={onClose}>Tiếp tục</button>
       </div>
     </Modal>

@@ -207,6 +207,48 @@
 .rule-tab.is-on { border-color: var(--yellow); background: rgba(255, 201, 74, 0.12); }
 .rule-tab.is-on b { color: var(--yellow); }
 
+.custom-room .room-code { color: var(--text); background: var(--bg-elevated); }
+.custom-room .room-code__label { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; }
+.custom-room .room-code b { color: var(--text); font-size: 22px; }
+.custom-room .room-code svg { color: var(--text); }
+.custom-room .rule-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+.custom-room .rule-tab {
+  min-width: 0;
+  gap: 6px;
+  padding: 12px;
+  border: 2px solid transparent;
+  border-radius: 13px;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.custom-room .rule-tab b { display: flex; align-items: center; justify-content: space-between; gap: 4px; width: 100%; color: var(--text); }
+.custom-room .rule-tab > span { font-size: 12px; line-height: 1.5; color: var(--text); }
+.custom-room .rule-tab .rule-tab__check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+.custom-room .rule-tab__check svg { visibility: hidden; }
+.custom-room .rule-tab:hover { border-color: var(--blue); }
+.custom-room .rule-tab.is-on { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 18%, var(--bg-elevated)); }
+.custom-room .rule-tab.is-on .rule-tab__check { background: var(--text); border-color: var(--text); color: var(--bg-elevated); }
+.custom-room .rule-tab.is-on .rule-tab__check svg { visibility: visible; }
+
 .room-seat.is-picking { border-color: var(--yellow); border-style: solid; box-shadow: 0 0 0 4px rgba(255, 201, 74, 0.2), 0 14px 30px rgba(0, 0, 0, 0.35); }
 .seat-chip { background: rgba(255, 255, 255, 0.08); }
 .seat-chip--host { color: var(--yellow); background: rgba(255, 201, 74, 0.12); }

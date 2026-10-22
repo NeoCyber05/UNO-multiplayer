@@ -7,15 +7,16 @@ const fmt = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(
 export default function MatchClock({ startedAt, stopped }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (stopped) return undefined;
+    if (stopped || startedAt == null) return undefined;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [stopped]);
+  }, [stopped, startedAt]);
 
   return (
     <div className="hud-clock">
       <span className="hud-clock__icon"><IconClock size={22} /></span>
-      {fmt(Math.max(0, Math.floor((now - startedAt) / 1000)))}
+      {fmt(Math.max(0, Math.floor((startedAt == null ? 0 : now - startedAt) / 1000)))}
     </div>
   );
 }

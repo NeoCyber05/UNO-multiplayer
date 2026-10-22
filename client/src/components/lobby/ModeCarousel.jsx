@@ -4,24 +4,17 @@ import ModeCard from './ModeCard.jsx';
 
 const WHEEL_GAP_MS = 250;
 
-// Khoảng cách vòng ngắn nhất từ `active` tới `i` (vd n=4, active=0, i=3 -> -1).
-function offsetOf(i, active, n) {
-  let d = (i - active) % n;
-  if (d < 0) d += n;
-  if (d > n / 2) d -= n;
-  return d;
-}
-
 /**
  * Carousel xoay vòng các thẻ chế độ.
- * - Bấm thẻ bên -> xoay tới; bấm thẻ giữa -> onSelect.
+ * - Bấm thẻ chưa chọn để chọn; bấm thẻ đang chọn để chơi.
  * - Phím ← → đổi thẻ, Enter chọn (tắt khi keyboard=false, vd đang mở modal).
  * - Cuộn chuột đổi 1 thẻ mỗi lần.
- * Hiện thẻ giữa ± 1; từ 5 thẻ trở lên hiện thêm ± 2.
+ * Hiện bốn thẻ trên một hàng; cuộn cửa sổ khi chọn thẻ ngoài hàng.
  */
 export default function ModeCarousel({ modes, active, onChange, onSelect, keyboard = true }) {
   const n = modes.length;
-  const reach = n >= 5 ? 2 : 1;
+  const visible = Math.min(4, n);
+  const start = Math.max(0, Math.min(active - 1, n - visible));
   const lastWheel = useRef(0);
 
   const go = (step) => onChange((active + step + n) % n);
@@ -55,25 +48,27 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
     // preventDefault ở mousedown: bấm chuột không giữ focus trên thẻ/mũi tên,
     // nên phím ← → Enter luôn áp dụng cho thẻ đang ở giữa.
     <div className="carousel" onWheel={onWheel} onMouseDown={(e) => e.preventDefault()}>
-      <button type="button" className="carousel__arrow carousel__arrow--left" tabIndex={-1} onClick={() => go(-1)} aria-label="Chế độ trước">
+      <button type="button" className="carousel__arrow carousel__arrow--left" onClick={() => go(-1)} aria-label="Chế độ trước">
         <IconBack size={28} />
       </button>
 
       <div className="carousel__track">
         {modes.map((m, i) => {
-          const off = offsetOf(i, active, n);
+          const off = i - start - (visible - 1) / 2;
           const abs = Math.abs(off);
-          const hidden = abs > reach;
+          const hidden = i < start || i >= start + visible;
+          const selected = i === active;
           return (
             <button
               key={m.key}
               type="button"
-              className={`carousel__item ${off === 0 ? 'is-active' : ''} ${hidden ? 'is-hidden' : ''}`}
-              style={{ '--off': off, '--abs': abs, zIndex: 10 - abs }}
+              className={`carousel__item ${selected ? 'is-active' : ''} ${hidden ? 'is-hidden' : ''}`}
+              style={{ '--off': off, '--abs': abs, zIndex: selected ? 10 : 1 }}
               tabIndex={hidden ? -1 : 0}
               aria-hidden={hidden}
-              aria-label={off === 0 ? `Chơi ${m.title}` : m.title}
-              onClick={() => (off === 0 ? onSelect(m) : onChange(i))}
+              aria-pressed={selected}
+              aria-label={selected ? `Chơi ${m.title}` : m.title}
+              onClick={() => (selected ? onSelect(m) : onChange(i))}
             >
               <ModeCard mode={m} />
             </button>
@@ -81,7 +76,7 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
         })}
       </div>
 
-      <button type="button" className="carousel__arrow carousel__arrow--right" tabIndex={-1} onClick={() => go(1)} aria-label="Chế độ tiếp">
+      <button type="button" className="carousel__arrow carousel__arrow--right" onClick={() => go(1)} aria-label="Chế độ tiếp">
         <IconArrowRight size={28} />
       </button>
     </div>

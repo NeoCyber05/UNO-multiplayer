@@ -55,18 +55,23 @@ export const PROFILE = {
   title: 'Vua đổi màu',
   stats: { matches: 248, wins: 131, streak: 4, bestStreak: 11, unoCalls: 312, plus4: 97 },
   modes: [
-    { key: 'classic', title: 'Classic', matches: 142, wins: 71 },
+    { key: 'classic', title: 'Classic', matches: 112, wins: 57 },
     { key: '2v2', title: '2 vs 2', matches: 64, wins: 38 },
     { key: 'side', title: 'Side to Side', matches: 42, wins: 22 },
+    { key: 'draft', title: 'UNO Draft', matches: 30, wins: 14 },
   ],
+  // tier: bronze | silver | gold | diamond. Hoàn thành khi progress >= goal.
   badges: [
-    { key: 'first-win', icon: 'trophy', name: 'Chiến thắng đầu tiên', got: true },
-    { key: 'streak-10', icon: 'flame', name: 'Chuỗi 10 trận thắng', got: true },
-    { key: 'plus4', icon: 'cards', name: 'Ném 50 lá +4', got: true },
-    { key: 'uno-master', icon: 'megaphone', name: 'Hô UNO 300 lần', got: true },
-    { key: 'team', icon: 'handshake', name: 'Thắng 50 trận đồng đội', got: false },
-    { key: 'diamond', icon: 'diamond', name: 'Đạt hạng Kim cương', got: false },
+    { key: 'first-win', icon: 'trophy', tier: 'bronze', name: 'Chiến thắng đầu tiên', desc: 'Thắng 1 ván bất kỳ', progress: 1, goal: 1 },
+    { key: 'win-100', icon: 'crown', tier: 'gold', name: 'Bách chiến bách thắng', desc: 'Thắng 100 trận', progress: 131, goal: 100 },
+    { key: 'streak-10', icon: 'flame', tier: 'silver', name: 'Chuỗi 10 trận thắng', desc: 'Thắng liên tiếp 10 trận', progress: 11, goal: 10 },
+    { key: 'plus4', icon: 'cards', tier: 'bronze', name: 'Ném 50 lá +4', desc: 'Đánh 50 lá Wild +4', progress: 97, goal: 50 },
+    { key: 'uno-master', icon: 'megaphone', tier: 'silver', name: 'Hô UNO 300 lần', desc: 'Hô UNO đúng lúc 300 lần', progress: 312, goal: 300 },
+    { key: 'team', icon: 'handshake', tier: 'gold', name: 'Đồng đội ăn ý', desc: 'Thắng 50 trận đồng đội', progress: 38, goal: 50 },
+    { key: 'matches-500', icon: 'shield', tier: 'silver', name: 'Cựu binh bàn bài', desc: 'Chơi 500 trận', progress: 248, goal: 500 },
+    { key: 'diamond', icon: 'diamond', tier: 'diamond', name: 'Đạt hạng Kim cương', desc: 'Đạt 2.200 ELO', progress: 1840, goal: 2200 },
   ],
+
 };
 
 // Lịch sử trận gần đây. delta: thay đổi ELO (null = không xếp hạng).
@@ -79,11 +84,4 @@ export const MATCH_HISTORY = [
 ];
 
 // Bậc hạng theo ELO (min tăng dần).
-export const RANKS = [
-  { name: 'Đồng', min: 0, color: '#d08a52' },
-  { name: 'Bạc', min: 1200, color: '#c9d1e8' },
-  { name: 'Vàng', min: 1400, color: '#ffc94a' },
-  { name: 'Bạch kim', min: 1600, color: '#5fe0d0' },
-  { name: 'Kim cương', min: 1800, color: '#7fb0ff' },
-  { name: 'Cao thủ', min: 2000, color: '#ff6fae' },
-];
+export { RANKS } from './ranks';
