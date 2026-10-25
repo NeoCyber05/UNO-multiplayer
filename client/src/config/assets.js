@@ -44,4 +44,16 @@ export const ASSETS = {
 
   // Nút CALL UNO (PNG tròn nền trong suốt, ~300x300)
   unoButton: null, // ví dụ: '/images/ui/uno-button.png'
+
+  // Âm thanh (đặt trong client/public/sounds)
+  sounds: {
+    menuMusic: '/sounds/background_music.mp3', // nhạc nền sảnh / menu
+    gameMusic: '/sounds/playing_sound.mp3', // nhạc nền trong trận
+    skip: '/sounds/skip_card_sound.mp3',
+    uno: '/sounds/uno_button_sound.mp3',
+    playCard: '/sounds/play_card.mp3',
+    drawCard: '/sounds/draw_card.mp3',
+    win: '/sounds/win.mp3',
+    lose: '/sounds/game_over.mp3',
+  },
 };

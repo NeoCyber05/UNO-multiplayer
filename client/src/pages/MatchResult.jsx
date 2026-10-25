@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import Avatar from '../components/Avatar.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
@@ -6,6 +6,9 @@ import { IconCards, IconCheck, IconCrown, IconMegaphone, IconPlay, IconPlus, Ico
 import { useSocial } from '../context/SocialContext.jsx';
 import RankBadge from '../components/RankBadge.jsx';
 import { MODES } from '../game/constants';
+import useSettings from '../hooks/useSettings';
+import playSfx from '../hooks/playSfx';
+import { ASSETS } from '../config/assets';
 import './pages.css';
 
 const fmtTime = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
@@ -16,6 +19,12 @@ export default function MatchResult() {
   const { lastMatch: m, friendState, sendFriendRequest } = useSocial();
   const [toast, setToast] = useState(null);
   const notify = (text) => setToast({ id: Date.now(), text });
+  const { settings } = useSettings();
+
+  useEffect(() => {
+    if (m && !settings.muted && settings.sfxOn) playSfx(m.won ? ASSETS.sounds.win : ASSETS.sounds.lose, settings.sfxVolume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!m) return <Navigate to="/lobby" replace />;
 

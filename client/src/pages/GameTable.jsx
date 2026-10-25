@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { IconGear, IconSmile } from '../components/Icons.jsx';
 import TableBackground from '../components/game/TableBackground.jsx';
@@ -19,6 +19,9 @@ import { buildMatchSummary } from '../game/summary';
 import useSettings from '../hooks/useSettings';
 import playTurnChime from '../hooks/playTurnChime';
 import playUno from '../hooks/playUno';
+import playAction from '../hooks/playAction';
+import playSfx from '../hooks/playSfx';
+import { ASSETS } from '../config/assets';
 import { useSocial } from '../context/SocialContext.jsx';
 import '../components/game/game.css';
 
@@ -36,11 +39,32 @@ function GameScreen({ modeKey, lineup, ranked }) {
   const { settings, set: setSetting } = useSettings();
 
   const current = state.players[state.turn];
+  const sfx = !settings.muted && settings.sfxOn;
 
   useEffect(() => {
-    if (isMyTurn && !state.winner && settings.turnSound && !settings.muted) playTurnChime(settings.sfxVolume);
+    if (isMyTurn && !state.winner && settings.turnSound && sfx) playTurnChime(settings.sfxVolume);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnKey]);
+
+  // Lá chức năng vừa lên chồng đánh -> phát âm hiệu ứng (bỏ qua lá lật đầu ván)
+  const topCard = state.discard[state.discard.length - 1];
+  const lastTopId = useRef(topCard?.id);
+  useEffect(() => {
+    if (!topCard || topCard.id === lastTopId.current) return;
+    lastTopId.current = topCard.id;
+    if (sfx) playAction(topCard.value, settings.sfxVolume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topCard?.id]);
+
+  // Tổng số lá trên tay tăng -> có người rút bài (bỏ qua lúc draft chia bài)
+  const handTotal = state.players.reduce((n, p) => n + p.hand.length, 0);
+  const lastHandTotal = useRef(handTotal);
+  useEffect(() => {
+    const grew = handTotal > lastHandTotal.current;
+    lastHandTotal.current = handTotal;
+    if (grew && !state.draft && sfx) playSfx(ASSETS.sounds.drawCard, settings.sfxVolume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handTotal]);
 
   useEffect(() => {
     if (!state.winner) return undefined;
@@ -179,7 +203,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
       {!state.draft && <UnoButton
           active={canSayUno}
           onClick={() => {
-            if (!settings.muted) playUno(settings.sfxVolume);
+            if (sfx) playUno(settings.sfxVolume);
             actions.sayUno();
           }}
         />}
@@ -197,6 +221,10 @@ function GameScreen({ modeKey, lineup, ranked }) {
         onLeave={() => navigate('/lobby')}
         turnSound={settings.turnSound}
         onTurnSound={(v) => setSetting('turnSound', v)}
+        music={settings.musicOn}
+        sound={settings.sfxOn}
+        onSound={(v) => setSetting('sfxOn', v)}
+        onMusic={(v) => setSetting('musicOn', v)}
       />
     </div>
   );

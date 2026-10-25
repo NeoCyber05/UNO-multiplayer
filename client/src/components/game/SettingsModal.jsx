@@ -1,11 +1,8 @@
-import { useState } from 'react';
 import Modal from '../Modal.jsx';
 import Toggle from '../Toggle.jsx';
 import { IconClose } from '../Icons.jsx';
 
-export default function SettingsModal({ open, onClose, onLeave, turnSound, onTurnSound }) {
-  const [sound, setSound] = useState(true);
-  const [music, setMusic] = useState(false);
+export default function SettingsModal({ open, onClose, onLeave, turnSound, onTurnSound, music, onMusic, sound, onSound }) {
 
   return (
     <Modal open={open} onClose={onClose} className="settings" label="Cài đặt">
@@ -14,8 +11,8 @@ export default function SettingsModal({ open, onClose, onLeave, turnSound, onTur
         <button type="button" className="icon-btn" onClick={onClose} aria-label="Đóng"><IconClose /></button>
       </div>
       <div className="settings__group">
-        <Toggle label="Hiệu ứng âm thanh" value={sound} onChange={setSound} />
-        <Toggle label="Nhạc nền" value={music} onChange={setMusic} />
+        <Toggle label="Hiệu ứng âm thanh" value={sound} onChange={onSound} />
+        <Toggle label="Nhạc nền" value={music} onChange={onMusic} />
         <Toggle label="Âm báo tới lượt" value={turnSound} onChange={onTurnSound} />
       </div>
       <div className="settings__rules">

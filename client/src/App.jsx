@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Stage from './components/Stage.jsx';
+import MusicPlayer from './components/MusicPlayer.jsx';
 import Login from './pages/Login.jsx';
 import Lobby from './pages/Lobby.jsx';
 import CustomRoom from './pages/CustomRoom.jsx';
@@ -11,6 +12,7 @@ import MatchResult from './pages/MatchResult.jsx';
 export default function App() {
   return (
     <Stage>
+      <MusicPlayer />
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/lobby" element={<Lobby />} />
