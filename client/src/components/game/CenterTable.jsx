@@ -27,16 +27,58 @@ const ARROWS = ARCS.map(([from, to]) => {
 });
 
 function DirectionRing({ direction }) {
+  // Đếm số lần đổi chiều để phát lại hiệu ứng lật (không chạy lúc mới vào bàn)
+  const prev = useRef(direction);
+  const flips = useRef(0);
+  if (prev.current !== direction) {
+    prev.current = direction;
+    flips.current += 1;
+  }
   return (
     <div className={`dir-ring ${direction === 1 ? '' : 'is-ccw'}`}>
-      <svg viewBox="0 0 200 200" className="dir-ring__svg">
-        {ARROWS.map((a) => (
-          <g key={a.arc}>
-            <path d={a.arc} />
-            <path d={a.head} className="dir-ring__head" />
-          </g>
-        ))}
-      </svg>
+      <div key={flips.current} className={`dir-ring__flip ${flips.current ? 'is-flipping' : ''}`}>
+        <svg viewBox="0 0 200 200" className="dir-ring__svg">
+          {ARROWS.map((a) => (
+            <g key={a.arc}>
+              <path d={a.arc} />
+              <path d={a.head} className="dir-ring__head" />
+            </g>
+          ))}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+const FX_TEXT = { skip: 'MẤT LƯỢT', reverse: 'ĐẢO CHIỀU', draw2: '+2', wild4: '+4', wild: '' };
+
+/** Hiệu ứng nổ giữa bàn khi lá chức năng vừa được đánh. */
+function ActionFx({ card, color, direction }) {
+  const first = useRef(card?.id);
+  if (!card || card.id === first.current || !(card.value in FX_TEXT)) return null;
+  const isWild = card.value === 'wild' || card.value === 'wild4';
+  return (
+    <div key={card.id} className={`afx afx--${card.value}`} style={{ '--c': COLOR_HEX[color] }} aria-hidden="true">
+      <span className="afx__ring" />
+      <span className="afx__ring afx__ring--2" />
+      {/* Đổi màu: bánh xe 4 màu, màu được chọn loang ra phủ kín từ tâm */}
+      {isWild && (
+        <span className="afx__swatch">
+          <span className="afx__swatch-fill" />
+        </span>
+      )}
+      {card.value === 'reverse' && (
+        // Vòng mũi tên quay theo chiều MỚI để người chơi thấy lượt sẽ đi hướng nào
+        <svg viewBox="0 0 200 200" className={`afx__arrow ${direction === 1 ? '' : 'is-ccw'}`}>
+          {ARROWS.map((a) => (
+            <g key={a.arc}>
+              <path d={a.arc} />
+              <path d={a.head} className="dir-ring__head" />
+            </g>
+          ))}
+        </svg>
+      )}
+      {FX_TEXT[card.value] && <span className="afx__text display">{FX_TEXT[card.value]}</span>}
     </div>
   );
 }
@@ -105,6 +147,7 @@ export default function CenterTable({ discard, currentColor, direction, deckCoun
           })}
         </div>
       </div>
+      <ActionFx card={discard[discard.length - 1]} color={currentColor} direction={direction} />
     </div>
   );
 }

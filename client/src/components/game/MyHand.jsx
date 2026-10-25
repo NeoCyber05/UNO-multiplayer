@@ -1,13 +1,17 @@
 import { useMemo } from 'react';
 import UnoCard from '../card/UnoCard.jsx';
 import { sortHand } from '../../game/deck';
+import useDealDelays from '../../hooks/useDealDelays';
 
 const CARD_W = 116;
 const MAX_W = 780;
+// Nhiều lá vào tay cùng lúc (chia bài, bị +2/+4) -> bay vào lần lượt cách nhau chừng này giây
+const DEAL_STAGGER = 0.28;
 
 /** Bài trên tay người chơi — xòe hình quạt, nhấc lên khi hover, sáng viền lá đánh được. */
 export default function MyHand({ cards, playableIds, isMyTurn, drawnCardId, onPlay }) {
   const sorted = useMemo(() => sortHand(cards), [cards]);
+  const delays = useDealDelays(cards, DEAL_STAGGER);
   const n = sorted.length;
   const step = n > 1 ? Math.min(80, (MAX_W - CARD_W) / (n - 1)) : 0;
   const angle = Math.min(4.5, 40 / Math.max(n, 1));
@@ -31,7 +35,7 @@ export default function MyHand({ cards, playableIds, isMyTurn, drawnCardId, onPl
             key={card.id}
             type="button"
             className={cls}
-            style={{ left: i * step, zIndex: i, '--r': `${off * angle}deg`, '--y': `${off * off * 1.1}px` }}
+            style={{ left: i * step, zIndex: i, '--r': `${off * angle}deg`, '--y': `${off * off * 1.1}px`, animationDelay: `${delays.get(card.id)}s` }}
             onClick={() => playable && onPlay(card.id)}
             disabled={!isMyTurn}
             aria-label={`${card.color} ${card.value}${playable ? ' — đánh được' : ''}`}
