@@ -14,6 +14,7 @@ export function buildMatchSummary(state, { ranked, now = Date.now() }) {
     name: p.name,
     initials: p.initials,
     tint: p.tint,
+    avatar: p.avatar,
     elo: p.elo,
     isHuman: p.isHuman,
     isBot: !!p.isBot,
