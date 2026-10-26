@@ -6,6 +6,7 @@ import MenuBackground from '../components/MenuBackground.jsx';
 import { IconBack, IconBot, IconCheck, IconClose, IconCopy } from '../components/Icons.jsx';
 import { useSocial } from '../context/SocialContext.jsx';
 import { BOT_LEVELS } from '../data/mockData';
+import { LOBBY_MODES } from '../data/lobbyModes';
 import './pages.css';
 
 // shortcut: mã phòng minh họa cố định, thay bằng mã do server cấp khi có multiplayer.
@@ -13,10 +14,10 @@ const ROOM_CODE = 'B7K2X9';
 
 // teams[i] = đội của ghế i ('A' = đội bạn). Khớp teammateSeat trong game/constants.js.
 const RULES = [
-  { key: 'classic', label: 'Classic', sub: 'Mỗi người một mình', teams: null },
-  { key: '2v2', label: '2 vs 2', sub: 'Đồng đội ngồi đối diện', teams: ['A', 'B', 'A', 'B'] },
-  { key: 'side', label: 'Side to Side', sub: 'Đồng đội ngồi cạnh (bên trái)', teams: ['A', 'A', 'B', 'B'] },
-  { key: 'draft', label: 'UNO Draft', sub: 'Lần lượt chọn bài trước trận', teams: null },
+  { key: 'classic', label: 'Classic', teams: null },
+  { key: '2v2', label: '2 vs 2', teams: ['A', 'B', 'A', 'B'] },
+  { key: 'side', label: 'Side to Side', teams: ['A', 'A', 'B', 'B'] },
+  { key: 'draft', label: 'UNO Draft', teams: null },
 ];
 const SEAT_POS = ['bottom', 'left', 'top', 'right'];
 
@@ -131,8 +132,8 @@ export default function CustomRoom() {
                 className={`rule-tab ${r.key === ruleKey ? 'is-on' : ''}`}
                 onClick={() => setRuleKey(r.key)}
               >
+                <img className="rule-tab__art" src={LOBBY_MODES.find((m) => m.key === r.key)?.image} alt="" />
                 <b>{r.label}<span className="rule-tab__check" aria-hidden="true"><IconCheck /></span></b>
-                <span>{r.sub}</span>
               </button>
             ))}
           </div>

@@ -88,11 +88,14 @@ export default function DraftSelection({ state, onPick, paused }) {
   return (
     <>
       <div className={`draft-scrim ${open ? 'is-open' : ''}`} />
-      <div className="draft-heading"><b className="display">UNO DRAFT</b><span>Chọn bài đầu ván · 4 vòng</span></div>
       {ready && closed && !paused && <button className="btn btn--primary draft-resume" onClick={() => setClosed(false)}>Tiếp tục chọn bài</button>}
       <div className={`draft-overlay draft-overlay--${['bottom', 'left', 'top', 'right'][seat]}`}>
         <Modal open={open} onClose={() => setClosed(true)} className="draft-box" label="Chọn bài đầu ván">
-          <div className="draft-box__head"><small>UNO DRAFT</small><h2 className="display">Vòng {round + 1} / 4</h2><span>{forced ? 'AUTO' : seat === 0 ? `${seconds}s` : '···'}</span></div>
+          <div className="draft-box__head">
+            <div><small>UNO DRAFT</small><h2 className="display">Vòng {round + 1} <i>/ 4</i></h2></div>
+            <ol className="draft-rounds" aria-hidden="true">{[0, 1, 2, 3].map(r => <li key={r} className={r < round ? 'is-done' : r === round ? 'is-now' : ''} />)}</ol>
+            <span className={`draft-timer ${seat === 0 && !forced && seconds <= 3 ? 'is-low' : ''}`}>{forced ? 'AUTO' : seat === 0 ? `${seconds}s` : '···'}</span>
+          </div>
           <div className="draft-offers" key={round}>
             {draft.offers.map((card, i) => (
               <button key={i} type="button" data-draft-offer={i} className={`draft-offer ${card ? '' : 'is-empty'} ${flying === i ? 'is-departing' : ''}`}
@@ -107,7 +110,9 @@ export default function DraftSelection({ state, onPick, paused }) {
           <ol className="draft-order" aria-label="Thứ tự chọn trong vòng">
             {Array.from({ length: 4 }, (_, i) => (round + i) % 4).map((s, i) => <li key={s} aria-current={s === seat ? 'step' : undefined}><b>{String.fromCharCode(65 + s)}</b> {s === 0 ? 'Bạn' : state.players[s].name}{i < 3 && <span>→</span>}</li>)}
           </ol>
-          <footer><span>{draft.turn} / 16 lượt chọn</span><span>Mỗi vòng đổi người chọn đầu</span><button type="button" onClick={() => setClosed(true)}>Xem bàn ↗</button></footer>
+          <footer>
+            <div className="draft-progress"><span>{draft.turn} / 16 lượt chọn · mỗi vòng đổi người chọn đầu</span><i style={{ '--p': draft.turn / 16 }} /></div>
+          </footer>
         </Modal>
       </div>
     </>
