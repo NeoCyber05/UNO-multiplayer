@@ -47,7 +47,7 @@ export default function DraftSelection({ state, onPick, paused }) {
     clone.setAttribute('aria-hidden', 'true');
     Object.assign(clone.style, { left: `${from.x}px`, top: `${from.y}px`, width: `${from.width}px`, height: `${from.height}px` });
     document.body.append(clone);
-    const width = seat === 0 ? 116 * from.width / 120 : to.width;
+    const width = seat === 0 ? 116 * from.width / 92 : to.width;
     const x = seat === 0 ? to.x + to.width / 2 - width / 2 : to.x;
     clone.animate(reduced ? [{ opacity: 1 }, { opacity: 0 }] : [
       { transform: 'translate(0, 0) scale(1)' },
@@ -101,7 +101,7 @@ export default function DraftSelection({ state, onPick, paused }) {
               <button key={i} type="button" data-draft-offer={i} className={`draft-offer ${card ? '' : 'is-empty'} ${flying === i ? 'is-departing' : ''}`}
                 disabled={!card || seat !== 0 || forced || flying != null} onClick={() => pick(i)}
                 aria-label={card ? `Chọn ${card.color} ${card.value}` : 'Lá đã được chọn'}>
-                {card ? <UnoCard card={card} width={120} /> : <span>Đã chọn</span>}
+                {card ? <UnoCard card={card} width={92} /> : <span>Đã chọn</span>}
               </button>
             ))}
           </div>
