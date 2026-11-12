@@ -93,6 +93,9 @@ static void invalid_and_draw(void) {
     assert(act(&g,0,PASS,NULL,NO_COLOR) == OK && g.turn == 1);
     g = before;
     assert(game_timeout(&g,g.turnNo,&events) == OK && g.hands[0].count == 3);
+    Game after_timeout = g;
+    assert(game_timeout(&g,before.turnNo,&events) == STALE_TURN);
+    assert(!memcmp(&after_timeout,&g,sizeof g));
 
     g = setup(ONE);
     g.deck.count = 0;
@@ -101,6 +104,12 @@ static void invalid_and_draw(void) {
     assert(g.discard.count == 1 && !strcmp(g.discard.cards[0].id,"c4"));
     assert(act(&g,0,PASS,NULL,NO_COLOR) == OK);
     assert(act(&g,1,DRAW,NULL,NO_COLOR) == OK && g.turn == 2 && g.hands[1].count == 7);
+
+    g = setup(WILD_FOUR);
+    g.hands[0].cards[0].color = WILD_COLOR;
+    g.deck.count = 0;
+    assert(act(&g,0,PLAY,"c1",GREEN) == OK && g.hands[1].count == 8);
+    assert(g.turn == 2 && g.discard.count == 1 && !strcmp(g.discard.cards[0].id,"c1"));
 }
 
 static void uno(void) {
@@ -116,6 +125,19 @@ static void uno(void) {
     g = setup(ONE);
     assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == OK);
     assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && !g.watch[0].active);
+
+    for (int timeout=0; timeout<=1; timeout++) {
+        g = setup(ONE);
+        g.hands[0].count = 1;
+        g.deck.cards[g.deck.count-1] = (Card){"c5",RED,TWO};
+        assert(act(&g,0,DRAW,NULL,NO_COLOR) == OK && g.hands[0].count == 2);
+        assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == OK);
+        if (timeout) assert(game_timeout(&g,g.turnNo,&events) == OK);
+        else assert(act(&g,0,PASS,NULL,NO_COLOR) == OK);
+        while (g.turn != 0) assert(game_timeout(&g,g.turnNo,&events) == OK);
+        assert(game_can_say_uno(&g,0));
+        assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && g.watch[0].active);
+    }
 }
 
 int main(void) {
@@ -126,11 +148,9 @@ int main(void) {
     assert(g.discard.count == 1 && g.discard.cards[0].value <= NINE);
     for (int i=0; i<1000; i++) {
         conservation(&g);
-        Seat s = g.turn;
-        if (g.phase == FINISHED) {
+        if (g.phase == FINISHED)
             assert(game_init(&g,CLASSIC,players,(uint64_t)i) == OK);
-            continue;
-        }
+        Seat s = g.turn;
         int k = 0;
         while (k < g.hands[s].count && !game_playable(&g,s,&g.hands[s].cards[k])) k++;
         if (k < g.hands[s].count) {

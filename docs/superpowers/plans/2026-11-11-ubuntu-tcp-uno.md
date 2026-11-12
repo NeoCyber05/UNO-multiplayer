@@ -199,10 +199,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** `Status game_init(Game *g,Mode mode,const PlayerSpec players[4],uint64_t seed)`; `Status game_apply(Game *g,Seat actor,const Intent *intent,EventBatch *out)`; `Status game_timeout(Game *g,uint32_t expected_turn,EventBatch *out)`; `Status game_uno_penalty(Game *g,Seat actor,uint32_t watch_generation,EventBatch *out)`. Game lưu UNO watch per seat; hàm trả lỗi không mutate. Timing wall-clock nằm ngoài engine; seed chỉ dùng PRNG shuffle/test, không token.
 
-- [ ] **1. Viết test** `assert(deck_count == 112); assert(unique_ids == 112); assert(hand_count(g,0) == 7);` cùng seed cùng deal; conservation 112 sau 1000 action; fixture Skip/Reverse/+2/+4/Discard All/draw-only-new-card/pass/reshuffle/deck cạn. PLAY sai actor/card/màu/turnNo trả lỗi và `memcmp` state trước/sau bằng nhau. Kiểm tra thắng lá cuối như spec.
-- [ ] **2. Chạy đỏ** `make test NAME=game`.
-- [ ] **3. Cài đặt** engine không I/O/socket/malloc trong apply, capacity 112 cho hand/deck/discard, validate index trước access; Wild color gửi cùng PLAY. EventBatch ghi nội bộ action, lá được rút, hiệu ứng, turn/winner/stats; không serialize event này trực tiếp cho client.
-- [ ] **4. Chạy xanh** `make test NAME=game`, `make sanitize NAME=game`; chạy `cd client && npm test` làm baseline tham chiếu, ghi rõ lỗi sẵn có nếu có, không sửa luật JS ngoài phạm vi online.
+- [x] **1. Viết test** `assert(deck_count == 112); assert(unique_ids == 112); assert(hand_count(g,0) == 7);` cùng seed cùng deal; conservation 112 sau 1000 action; fixture Skip/Reverse/+2/+4/Discard All/draw-only-new-card/pass/reshuffle/deck cạn. PLAY sai actor/card/màu/turnNo trả lỗi và `memcmp` state trước/sau bằng nhau. Kiểm tra thắng lá cuối như spec.
+- [x] **2. Chạy đỏ** `make test NAME=game`.
+- [x] **3. Cài đặt** engine không I/O/socket/malloc trong apply, capacity 112 cho hand/deck/discard, validate index trước access; Wild color gửi cùng PLAY. EventBatch ghi nội bộ action, lá được rút, hiệu ứng, turn/winner/stats; không serialize event này trực tiếp cho client.
+- [x] **4. Chạy xanh** `make test NAME=game`, `make sanitize NAME=game`; chạy `cd client && npm test` làm baseline tham chiếu, ghi rõ lỗi sẵn có nếu có, không sửa luật JS ngoài phạm vi online.
 
 ### Task 7: Team và Draft — Bách
 
@@ -210,10 +210,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** Consumes game_apply; adds DRAFT_PICK branch, `Status game_draft_timeout(Game *,uint32_t expected_pick,EventBatch *)`. Game.phase=DRAFT/PLAYING/FINISHED, draft.turn 0..15, offers[4] có occupied flag; teams cố định theo absolute seat.
 
-- [ ] **1. Viết test** `assert(team_2v2(0)==team_2v2(2)); assert(team_side(0)==team_side(1));` một người hết bài cả đội thắng; draft init 4 lá, slot bị pick không chọn lại, cả 16 pick đúng công thức spec, sau draft mọi người 8 lá. Wrong actor/old draftTurn không mutate; timeout lấy slot thấp nhất còn bài; PLAY trong DRAFT bị từ chối.
-- [ ] **2. Chạy đỏ** `make test NAME=modes`.
-- [ ] **3. Cài đặt** hai cấu hình team và draft trong engine chung, không copy engine thành bốn file/mode; giữ conservation 112 bao gồm offers. Không đổi mode sau match start.
-- [ ] **4. Chạy xanh** `make test NAME=modes`, `make test NAME=game`, `make sanitize NAME=modes`.
+- [x] **1. Viết test** `assert(team_2v2(0)==team_2v2(2)); assert(team_side(0)==team_side(1));` một người hết bài cả đội thắng; draft init 4 lá, slot bị pick không chọn lại, cả 16 pick đúng công thức spec, sau draft mọi người 8 lá. Wrong actor/old draftTurn không mutate; timeout lấy slot thấp nhất còn bài; PLAY trong DRAFT bị từ chối.
+- [x] **2. Chạy đỏ** `make test NAME=modes`.
+- [x] **3. Cài đặt** hai cấu hình team và draft trong engine chung, không copy engine thành bốn file/mode; giữ conservation 112 bao gồm offers. Không đổi mode sau match start.
+- [x] **4. Chạy xanh** `make test NAME=modes`, `make test NAME=game`, `make sanitize NAME=modes`.
 
 ### Task 8: View riêng từng ghế và ba mức bot — Bách
 
@@ -221,10 +221,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** `Status view_build(const Game *,Seat viewer,GameView *out)`; `Status view_json(const GameView *,json_object **out)` (caller sở hữu một ref); `Status bot_choose(const GameView *,BotLevel,uint64_t *rng_state,Intent *out)`. Bot không nhận Game/private deck. GameView chứa public counts và legal actions; bot cùng đường apply như human.
 
-- [ ] **1. Viết test** cả 4 viewer x 4 mode: `assert(hidden_hand_absent); assert(hidden_card_ids_absent); assert(no_seed_or_deck);` đúng teammate thấy bài. Bot 3 mức x 100 seed chỉ sinh nước hợp lệ, không có nước thì DRAW/PASS, draft pick đúng slot; hard fixture tránh phạt teammate nếu có nước tốt hơn và chặn enemy gần hết bài.
-- [ ] **2. Chạy đỏ** `make test NAME=view`, `make test NAME=bot`.
-- [ ] **3. Cài đặt** whitelist field khi serialize, không copy raw Game rồi xóa vài key. Fixture views phải có viewerSeat=2 để UI không mặc định mình ở ghế 0. Bot scoring chỉ xem dữ liệu visible, tie break deterministic theo RNG test.
-- [ ] **4. Chạy xanh** hai test và `make sanitize NAME=view`; parse JSON để kiểm tra keys đệ quy, không chỉ tìm chuỗi card có thể trùng ở top public.
+- [x] **1. Viết test** cả 4 viewer x 4 mode: `assert(hidden_hand_absent); assert(hidden_card_ids_absent); assert(no_seed_or_deck);` đúng teammate thấy bài. Bot 3 mức x 100 seed chỉ sinh nước hợp lệ, không có nước thì DRAW/PASS, draft pick đúng slot; hard fixture tránh phạt teammate nếu có nước tốt hơn và chặn enemy gần hết bài.
+- [x] **2. Chạy đỏ** `make test NAME=view`, `make test NAME=bot`.
+- [x] **3. Cài đặt** whitelist field khi serialize, không copy raw Game rồi xóa vài key. Fixture views phải có viewerSeat=2 để UI không mặc định mình ở ghế 0. Bot scoring chỉ xem dữ liệu visible, tie break deterministic theo RNG test.
+- [x] **4. Chạy xanh** hai test và `make sanitize NAME=view`; parse JSON để kiểm tra keys đệ quy, không chỉ tìm chuỗi card có thể trùng ở top public.
 
 ### Task 9: Match coordinator, timer và reconnect — Bách; Sơn nối dispatch
 

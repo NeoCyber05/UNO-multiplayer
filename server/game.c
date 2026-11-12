@@ -132,6 +132,7 @@ static Seat next(const Game *g, int steps) {
 }
 
 static void advance(Game *g, int steps, EventBatch *out) {
+    if (g->hands[g->turn].count > 1) g->watch[g->turn].declared = false;
     g->turn = next(g,steps);
     g->turnNo++;
     g->drawnCardId[0] = 0;
