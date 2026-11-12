@@ -21,11 +21,14 @@ typedef struct {
     int index, chatId;
 } Intent;
 typedef enum { PLAYING, FINISHED, DRAFTING } Phase;
+typedef struct { bool occupied; Card card; } Offer;
+typedef struct { uint32_t turn; Offer offers[4]; } DraftState;
 typedef struct {
     Mode mode;
     Phase phase;
     PlayerSpec players[SEAT_COUNT];
     Pile deck, discard, hands[SEAT_COUNT];
+    DraftState draft;
     Color currentColor;
     Seat turn;
     uint32_t turnNo;
@@ -39,6 +42,7 @@ typedef struct {
 Status game_init(Game *g, Mode mode, const PlayerSpec players[4], uint64_t seed);
 Status game_apply(Game *g, Seat actor, const Intent *intent, EventBatch *out);
 Status game_timeout(Game *g, uint32_t expected_turn, EventBatch *out);
+Status game_draft_timeout(Game *g, uint32_t expected_pick, EventBatch *out);
 Status game_uno_penalty(Game *g, Seat actor, uint32_t watch_generation, EventBatch *out);
 /* card is borrowed from hands[actor]. */
 bool game_playable(const Game *g, Seat actor, const Card *card);

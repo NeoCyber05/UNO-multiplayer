@@ -31,8 +31,13 @@ static void add_card(Pile *deck, Color color, Value value) {
     push(deck, c);
 }
 
+static void deal_offers(Game *g) {
+    for (int i = 0; i < 4; i++)
+        g->draft.offers[i] = (Offer){.occupied=true,.card=pop(&g->deck)};
+}
+
 Status game_init(Game *g, Mode mode, const PlayerSpec players[4], uint64_t seed) {
-    if (!g || !players || mode != CLASSIC) return BAD_REQUEST;
+    if (!g || !players || (unsigned)mode > DRAFT) return BAD_REQUEST;
     for (int s = 0; s < 4; s++) {
         if (!memchr(players[s].name, 0, sizeof players[s].name) ||
             !memchr(players[s].avatar, 0, sizeof players[s].avatar) ||
@@ -40,13 +45,17 @@ Status game_init(Game *g, Mode mode, const PlayerSpec players[4], uint64_t seed)
     }
     memset(g, 0, sizeof *g);
     g->mode = mode;
-    g->phase = PLAYING;
+    g->phase = mode == DRAFT ? DRAFTING : PLAYING;
     g->rng = seed;
     g->direction = 1;
     g->revision = g->turnNo = 1;
     g->winnerSeat = g->winnerTeam = -1;
     memcpy(g->players, players, sizeof g->players);
-    for (int s = 0; s < 4; s++) g->team[s] = -1;
+    for (int s = 0; s < 4; s++) {
+        g->team[s] = -1;
+        if (mode == TWO_V_TWO) g->team[s] = s % 2;
+        if (mode == SIDE) g->team[s] = s / 2;
+    }
     for (Color c = RED; c <= BLUE; c++) {
         add_card(&g->deck, c, ZERO);
         for (Value v = ONE; v <= DRAW_TWO; v++) {
@@ -60,8 +69,10 @@ Status game_init(Game *g, Mode mode, const PlayerSpec players[4], uint64_t seed)
         add_card(&g->deck, WILD_COLOR, WILD_FOUR);
     }
     shuffle(g);
-    for (int r = 0; r < 7; r++)
+    int opening = mode == DRAFT ? 4 : 7;
+    for (int r = 0; r < opening; r++)
         for (Seat s = 0; s < 4; s++) push(&g->hands[s], pop(&g->deck));
+    if (mode == DRAFT) deal_offers(g);
     int i = 0;
     while (g->deck.cards[i].value > NINE) i++;
     Card first = g->deck.cards[i];
@@ -173,9 +184,51 @@ static void play(Game *g, Seat s, Card c, Color chosen, EventBatch *out) {
     advance(g,(attack || c.value == SKIP) ? 2 : 1,out);
 }
 
+static void draft_pick(Game *g, int index, bool timeout, EventBatch *out) {
+    Offer *offer = &g->draft.offers[index];
+    g->revision++;
+    push(&g->hands[g->turn],offer->card);
+    event(g,out,timeout ? -1 : (int)g->turn,"DRAFT_PICK",
+          "{\"seat\":%u,\"draftTurn\":%u,\"index\":%d,\"cardId\":\"%s\"}",
+          (unsigned)g->turn,g->draft.turn,index,offer->card.id);
+    *offer = (Offer){0};
+    uint32_t t = ++g->draft.turn;
+    if (t == 16) {
+        g->phase = PLAYING;
+        g->turn = 0;
+        event(g,out,-1,"TURN","{\"turn\":0,\"turnNo\":1,\"direction\":1}");
+    } else {
+        if (t % 4 == 0) deal_offers(g);
+        g->turn = (Seat)((t / 4 + t % 4) % 4);
+    }
+}
+
+Status game_draft_timeout(Game *g, uint32_t expected_pick, EventBatch *out) {
+    if (!g || !out) return BAD_REQUEST;
+    out->count = 0;
+    if (g->phase != DRAFTING) return INVALID_ACTION;
+    if (expected_pick != g->draft.turn) return STALE_TURN;
+    for (int i = 0; i < 4; i++) {
+        if (g->draft.offers[i].occupied) {
+            draft_pick(g,i,true,out);
+            return OK;
+        }
+    }
+    return INVALID_ACTION;
+}
+
 Status game_apply(Game *g, Seat s, const Intent *a, EventBatch *out) {
     if (!g || !a || !out || s >= 4) return BAD_REQUEST;
     out->count = 0;
+    if (g->phase == DRAFTING) {
+        if (a->kind != DRAFT_PICK) return INVALID_ACTION;
+        if (a->draftTurn != g->draft.turn) return STALE_TURN;
+        if (s != g->turn) return NOT_YOUR_TURN;
+        if (a->index < 0 || a->index >= 4 || !g->draft.offers[a->index].occupied)
+            return INVALID_ACTION;
+        draft_pick(g,a->index,false,out);
+        return OK;
+    }
     if (g->phase != PLAYING) return INVALID_ACTION;
     if (a->kind == SAY_UNO) {
         if (!game_can_say_uno(g,s)) return INVALID_ACTION;
