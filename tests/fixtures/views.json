@@ -1,0 +1,348 @@
+[
+  {
+    "matchId": "123e4567-e89b-12d3-a456-426614174000",
+    "revision": 3,
+    "viewerSeat": 2,
+    "mode": "classic",
+    "teams": false,
+    "turn": 2,
+    "turnNo": 3,
+    "direction": 1,
+    "currentColor": "blue",
+    "topCard": {"id": "c85", "color": "blue", "value": "3"},
+    "drawCount": 81,
+    "phase": "PLAYING",
+    "deadline": 30000,
+    "serverNowMs": 10000,
+    "durationMs": 5000,
+    "canDraw": true,
+    "canPass": false,
+    "canSayUno": false,
+    "players": [
+      {
+        "seat": 0,
+        "userId": "17",
+        "name": "An",
+        "avatar": "boy",
+        "team": -1,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 1,
+        "userId": "28",
+        "name": "Lan",
+        "avatar": "girl",
+        "team": -1,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 2,
+        "userId": "39",
+        "name": "Minh",
+        "avatar": "nerd",
+        "team": -1,
+        "cardCount": 7,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null,
+        "hand": [
+          {"id": "c107", "color": "wild", "value": "wild"},
+          {"id": "c5", "color": "red", "value": "2"},
+          {"id": "c4", "color": "red", "value": "2"},
+          {"id": "c79", "color": "blue", "value": "0"},
+          {"id": "c75", "color": "green", "value": "reverse"},
+          {"id": "c63", "color": "green", "value": "5"},
+          {"id": "c25", "color": "red", "value": "draw2"}
+        ]
+      },
+      {
+        "seat": 3,
+        "userId": "0",
+        "name": "Bot",
+        "avatar": "bun",
+        "team": -1,
+        "cardCount": 7,
+        "connected": false,
+        "isBot": true,
+        "botLevel": "hard"
+      }
+    ],
+    "legalCardIds": [
+      "c107",
+      "c79"
+    ],
+    "offers": [],
+    "draftTurn": null,
+    "winner": null
+  },
+  {
+    "matchId": "123e4567-e89b-12d3-a456-426614174000",
+    "revision": 3,
+    "viewerSeat": 2,
+    "mode": "2v2",
+    "teams": true,
+    "turn": 2,
+    "turnNo": 3,
+    "direction": 1,
+    "currentColor": "blue",
+    "topCard": {"id": "c85", "color": "blue", "value": "3"},
+    "drawCount": 81,
+    "phase": "PLAYING",
+    "deadline": 30000,
+    "serverNowMs": 10000,
+    "durationMs": 5000,
+    "canDraw": true,
+    "canPass": false,
+    "canSayUno": false,
+    "players": [
+      {
+        "seat": 0,
+        "userId": "17",
+        "name": "An",
+        "avatar": "boy",
+        "team": 0,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null,
+        "hand": [
+          {"id": "c44", "color": "yellow", "value": "9"},
+          {"id": "c22", "color": "red", "value": "reverse"},
+          {"id": "c52", "color": "yellow", "value": "discard_all"},
+          {"id": "c6", "color": "red", "value": "3"},
+          {"id": "c47", "color": "yellow", "value": "skip"},
+          {"id": "c62", "color": "green", "value": "5"},
+          {"id": "c101", "color": "blue", "value": "reverse"},
+          {"id": "c20", "color": "red", "value": "skip"}
+        ]
+      },
+      {
+        "seat": 1,
+        "userId": "28",
+        "name": "Lan",
+        "avatar": "girl",
+        "team": 1,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 2,
+        "userId": "39",
+        "name": "Minh",
+        "avatar": "nerd",
+        "team": 0,
+        "cardCount": 7,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null,
+        "hand": [
+          {"id": "c107", "color": "wild", "value": "wild"},
+          {"id": "c5", "color": "red", "value": "2"},
+          {"id": "c4", "color": "red", "value": "2"},
+          {"id": "c79", "color": "blue", "value": "0"},
+          {"id": "c75", "color": "green", "value": "reverse"},
+          {"id": "c63", "color": "green", "value": "5"},
+          {"id": "c25", "color": "red", "value": "draw2"}
+        ]
+      },
+      {
+        "seat": 3,
+        "userId": "0",
+        "name": "Bot",
+        "avatar": "bun",
+        "team": 1,
+        "cardCount": 7,
+        "connected": false,
+        "isBot": true,
+        "botLevel": "hard"
+      }
+    ],
+    "legalCardIds": [
+      "c107",
+      "c79"
+    ],
+    "offers": [],
+    "draftTurn": null,
+    "winner": null
+  },
+  {
+    "matchId": "123e4567-e89b-12d3-a456-426614174000",
+    "revision": 3,
+    "viewerSeat": 2,
+    "mode": "side",
+    "teams": true,
+    "turn": 2,
+    "turnNo": 3,
+    "direction": 1,
+    "currentColor": "blue",
+    "topCard": {"id": "c85", "color": "blue", "value": "3"},
+    "drawCount": 81,
+    "phase": "PLAYING",
+    "deadline": 30000,
+    "serverNowMs": 10000,
+    "durationMs": 5000,
+    "canDraw": true,
+    "canPass": false,
+    "canSayUno": false,
+    "players": [
+      {
+        "seat": 0,
+        "userId": "17",
+        "name": "An",
+        "avatar": "boy",
+        "team": 0,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 1,
+        "userId": "28",
+        "name": "Lan",
+        "avatar": "girl",
+        "team": 0,
+        "cardCount": 8,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 2,
+        "userId": "39",
+        "name": "Minh",
+        "avatar": "nerd",
+        "team": 1,
+        "cardCount": 7,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null,
+        "hand": [
+          {"id": "c107", "color": "wild", "value": "wild"},
+          {"id": "c5", "color": "red", "value": "2"},
+          {"id": "c4", "color": "red", "value": "2"},
+          {"id": "c79", "color": "blue", "value": "0"},
+          {"id": "c75", "color": "green", "value": "reverse"},
+          {"id": "c63", "color": "green", "value": "5"},
+          {"id": "c25", "color": "red", "value": "draw2"}
+        ]
+      },
+      {
+        "seat": 3,
+        "userId": "0",
+        "name": "Bot",
+        "avatar": "bun",
+        "team": 1,
+        "cardCount": 7,
+        "connected": false,
+        "isBot": true,
+        "botLevel": "hard",
+        "hand": [
+          {"id": "c51", "color": "yellow", "value": "draw2"},
+          {"id": "c99", "color": "blue", "value": "skip"},
+          {"id": "c53", "color": "green", "value": "0"},
+          {"id": "c35", "color": "yellow", "value": "4"},
+          {"id": "c43", "color": "yellow", "value": "8"},
+          {"id": "c84", "color": "blue", "value": "3"},
+          {"id": "c32", "color": "yellow", "value": "3"}
+        ]
+      }
+    ],
+    "legalCardIds": [
+      "c107",
+      "c79"
+    ],
+    "offers": [],
+    "draftTurn": null,
+    "winner": null
+  },
+  {
+    "matchId": "123e4567-e89b-12d3-a456-426614174000",
+    "revision": 3,
+    "viewerSeat": 2,
+    "mode": "draft",
+    "teams": false,
+    "turn": 2,
+    "turnNo": 1,
+    "direction": 1,
+    "currentColor": "blue",
+    "topCard": {"id": "c85", "color": "blue", "value": "3"},
+    "drawCount": 91,
+    "phase": "DRAFT",
+    "deadline": 30000,
+    "serverNowMs": 10000,
+    "durationMs": 0,
+    "canDraw": false,
+    "canPass": false,
+    "canSayUno": false,
+    "players": [
+      {
+        "seat": 0,
+        "userId": "17",
+        "name": "An",
+        "avatar": "boy",
+        "team": -1,
+        "cardCount": 5,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 1,
+        "userId": "28",
+        "name": "Lan",
+        "avatar": "girl",
+        "team": -1,
+        "cardCount": 5,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null
+      },
+      {
+        "seat": 2,
+        "userId": "39",
+        "name": "Minh",
+        "avatar": "nerd",
+        "team": -1,
+        "cardCount": 4,
+        "connected": true,
+        "isBot": false,
+        "botLevel": null,
+        "hand": [
+          {"id": "c107", "color": "wild", "value": "wild"},
+          {"id": "c5", "color": "red", "value": "2"},
+          {"id": "c4", "color": "red", "value": "2"},
+          {"id": "c79", "color": "blue", "value": "0"}
+        ]
+      },
+      {
+        "seat": 3,
+        "userId": "0",
+        "name": "Bot",
+        "avatar": "bun",
+        "team": -1,
+        "cardCount": 4,
+        "connected": false,
+        "isBot": true,
+        "botLevel": "hard"
+      }
+    ],
+    "legalCardIds": [],
+    "offers": [
+      null,
+      null,
+      {"id": "c75", "color": "green", "value": "reverse"},
+      {"id": "c43", "color": "yellow", "value": "8"}
+    ],
+    "draftTurn": 2,
+    "winner": null
+  }
+]
