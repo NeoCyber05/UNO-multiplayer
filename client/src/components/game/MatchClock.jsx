@@ -4,7 +4,7 @@ import { IconClock } from '../Icons.jsx';
 const fmt = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
 
 /** Đồng hồ thời gian ván đấu (góc trên trái). */
-export default function MatchClock({ startedAt, stopped }) {
+export default function MatchClock({ mode, startedAt, stopped }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (stopped || startedAt == null) return undefined;
@@ -16,7 +16,8 @@ export default function MatchClock({ startedAt, stopped }) {
   return (
     <div className="hud-clock">
       <span className="hud-clock__icon"><IconClock size={22} /></span>
-      {fmt(Math.max(0, Math.floor((startedAt == null ? 0 : now - startedAt) / 1000)))}
+      <span className="hud-clock__mode">{mode}</span>
+      <time>{fmt(Math.max(0, Math.floor((startedAt == null ? 0 : now - startedAt) / 1000)))}</time>
     </div>
   );
 }

@@ -42,24 +42,11 @@ export default function Lobby() {
         onSettings={() => setModal('settings')}
       />
 
-      <div className="lobby__heading"><h1>Chọn chế độ chơi</h1><p>Một bộ bài, nhiều cách vui.</p></div>
+      <h1 className="lobby__heading display">Chọn chế độ chơi</h1>
 
       <main className="lobby__stage" aria-label="Bộ bài chế độ chơi">
         <ModeCarousel modes={LOBBY_MODES} active={active} onChange={setActive} onSelect={enter} keyboard={!modal} />
       </main>
-
-      <section key={mode.key} className="lobby__info">
-        <div className="lobby__selection">
-        <h2 className="display lobby__mode-title">{mode.title}</h2>
-        <span className={`chip lobby__chip ${mode.ranked ? 'is-ranked' : ''}`}>{mode.ranked ? 'XẾP HẠNG' : 'PHÒNG RIÊNG'}</span>
-        </div>
-        <p className="lobby__mode-desc">{mode.desc}</p>
-        <div className="lobby__cta">
-          <button type="button" className="btn btn--primary lobby__play" onClick={() => enter(mode)}>
-            <IconPlay /> {mode.key === 'custom' ? 'TẠO PHÒNG RIÊNG' : 'CHƠI NGAY'}
-          </button>
-        </div>
-      </section>
 
       <div className="lobby__dots">
         {LOBBY_MODES.map((m, i) => (
@@ -73,6 +60,21 @@ export default function Lobby() {
           />
         ))}
       </div>
+
+      <section className="lobby__info" aria-label="Chế độ đã chọn">
+        <div key={mode.key} className="lobby__details">
+          <div className="lobby__selection">
+            <h2 className="display lobby__mode-title">{mode.title}</h2>
+            <span className="chip lobby__chip">{mode.chip}</span>
+          </div>
+          <p className="lobby__mode-desc">{mode.desc}</p>
+        </div>
+        <div className="lobby__cta">
+          <button type="button" className="btn btn--primary lobby__play" aria-label={mode.key === 'custom' ? 'Tạo phòng riêng' : `Chơi ngay · ${mode.title}`} onClick={() => enter(mode)}>
+            <IconPlay /> {mode.key === 'custom' ? 'TẠO PHÒNG RIÊNG' : 'CHƠI NGAY'}
+          </button>
+        </div>
+      </section>
 
       <Dock
         items={[
