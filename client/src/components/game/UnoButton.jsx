@@ -1,46 +1,53 @@
 import { useState } from 'react';
 import { ASSETS } from '../../config/assets';
+import UnoCard from '../card/UnoCard.jsx';
+import { COLORS } from '../../game/constants';
 
-/** Nút CALL UNO 3D. Sáng + nhấp nháy khi được phép hô. */
-export default function UnoButton({ active, onClick }) {
-  const [burst, setBurst] = useState(0);
-  const press = () => {
-    setBurst((n) => n + 1);
-    onClick();
-  };
+export default function UnoButton({ active, calls, onClick }) {
   return (
     <>
-      {burst > 0 && <UnoBurst key={burst} />}
-    <button
-      type="button"
-      className={`uno-btn ${active ? 'is-active' : ''} ${ASSETS.unoButton ? 'uno-btn--img' : ''}`}
-      onClick={press}
-      disabled={!active}
-      aria-label="Hô UNO"
-    >
-      {ASSETS.unoButton ? (
-        <img src={ASSETS.unoButton} alt="" draggable={false} />
-      ) : (
-        <span className="uno-btn__cap">
-          <span className="uno-btn__call">CALL</span>
-          <span className="uno-btn__uno">UNO</span>
-        </span>
-      )}
-    </button>
+      {calls > 0 && <UnoBurst key={calls} />}
+      <button
+        type="button"
+        className={`uno-btn ${active ? 'is-active' : ''} ${ASSETS.unoButton ? 'uno-btn--img' : ''}`}
+        onClick={onClick}
+        disabled={!active}
+        aria-label="Hô UNO"
+      >
+        {ASSETS.unoButton ? (
+          <img src={ASSETS.unoButton} alt="" draggable={false} />
+        ) : (
+          <span className="uno-btn__cap">
+            <span className="uno-btn__call">HÔ</span>
+            <span className="uno-btn__uno">UNO</span>
+          </span>
+        )}
+      </button>
     </>
   );
 }
 
-/** Vòng sóng + tia lấp lánh + chữ "UNO!" bung ra từ nút. */
 function UnoBurst() {
+  const [finished, setFinished] = useState(false);
+  if (finished) return null;
+
   return (
-    <div className="uno-burst" aria-hidden="true">
+    <div
+      className="uno-burst"
+      aria-hidden="true"
+      onAnimationEnd={(event) => {
+        if (event.animationName === 'uno-dismiss') setFinished(true);
+      }}
+    >
       <span className="uno-burst__ring" />
-      <span className="uno-burst__ring uno-burst__ring--2" />
-      {Array.from({ length: 12 }, (_, i) => (
-        <i key={i} className="uno-burst__spark" style={{ '--a': `${i * 30}deg`, '--c': ['#ffd21f', '#ff4d4d', '#4da3ff', '#43d17a'][i % 4] }} />
-      ))}
-      <span className="uno-burst__text display">UNO!</span>
+      <div className="uno-burst__stamp">
+        {COLORS.map((color, i) => (
+          <div key={color} className="uno-burst__card" style={{ '--offset': i - 1.5 }}>
+            <UnoCard card={{ color, value: '1' }} width={88} />
+          </div>
+        ))}
+        <strong className="uno-burst__text display">UNO!</strong>
+      </div>
     </div>
   );
 }

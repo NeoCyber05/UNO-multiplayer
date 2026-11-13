@@ -4,6 +4,7 @@ import { IconGear, IconSmile } from '../components/Icons.jsx';
 import TableBackground from '../components/game/TableBackground.jsx';
 import PlayerBadge from '../components/game/PlayerBadge.jsx';
 import Fan from '../components/game/Fan.jsx';
+import DrawFlight from '../components/game/DrawFlight.jsx';
 import CenterTable from '../components/game/CenterTable.jsx';
 import MyHand from '../components/game/MyHand.jsx';
 import UnoButton from '../components/game/UnoButton.jsx';
@@ -92,7 +93,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
       <TableBackground />
 
       {/* HUD */}
-      <MatchClock startedAt={state.startedAt} stopped={!!state.winner} />
+      <MatchClock mode={cfg.label} startedAt={state.startedAt} stopped={!!state.winner} />
       <div className="hud-actions">
         <button type="button" className="hud-btn" onClick={() => setSettingsOpen(true)} aria-label="Cài đặt">
           <IconGear size={28} />
@@ -118,7 +119,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
               size={pos === 'top' ? 88 : 92}
               arrowSide={pos === 'top' ? 'left' : 'top'}
             />
-            {state.draft ? <DraftTray player={p} seat={idx} active={draftSeat(state.draft) === idx} /> : <div className={`seat__hand seat__hand--${pos}`}>
+            {state.draft ? <DraftTray player={p} seat={idx} active={draftSeat(state.draft) === idx} /> : <div className={`seat__hand seat__hand--${pos}`} data-draw-seat={idx}>
               <div className="fan-wrap">
                 <Fan
                   cards={p.hand}
@@ -140,6 +141,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
         direction={state.direction}
         deckCount={state.drawPile.length}
         canDraw={isMyTurn && !state.hasDrawn && !state.pendingWild}
+        needsDraw={playableIds.size === 0}
         onDraw={actions.draw}
         turnSeat={state.winner ? null : SEATS[state.turn]}
       />}
@@ -152,14 +154,14 @@ function GameScreen({ modeKey, lineup, ranked }) {
 
       <div className="hand-bar">
         {!state.draft && !state.winner && (
-          <div className={`turn-pill ${isMyTurn ? 'is-mine' : ''}`}>
+          <div className={`turn-pill ${isMyTurn ? 'is-mine' : ''}`} role="status">
             <span className="turn-pill__dot" />
             {isMyTurn
               ? state.hasDrawn
                 ? 'Đánh lá vừa rút hoặc bỏ lượt'
                 : playableIds.size
-                  ? 'Lượt của bạn'
-                  : 'Không có lá phù hợp — hãy rút bài'
+                  ? `Lượt của bạn · ${playableIds.size} lá đánh được`
+                  : 'Lượt của bạn · Rút 1 lá'
               : `Lượt của ${current.name}`}
           </div>
         )}
@@ -170,7 +172,8 @@ function GameScreen({ modeKey, lineup, ranked }) {
         )}
       </div>
 
-      <div className="hand-area">
+      {!state.draft && <DrawFlight players={state.players} />}
+      <div className="hand-area" data-draw-seat={0}>
         {/* Khu vực của bạn — avatar bám sát mép trái bài trên tay */}
         <div className="me">
           <div className="me__tools">
@@ -202,6 +205,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
 
       {!state.draft && <UnoButton
           active={canSayUno}
+          calls={me.stats.unoCalls}
           onClick={() => {
             if (sfx) playUno(settings.sfxVolume);
             actions.sayUno();

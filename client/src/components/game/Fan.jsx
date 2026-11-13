@@ -22,7 +22,7 @@ export default function Fan({ cards, faceUp = false, cardWidth = 60, step = 24, 
           <div
             key={card.id}
             className="fan__card"
-            style={{ left: i * gap, transform: `translateY(${off * off * 0.8}px) rotate(${off * angle}deg)` }}
+            style={{ left: i * gap, transform: `translateY(${Math.min(off * off * 0.8, 18)}px) rotate(${off * angle}deg)` }}
           >
             <UnoCard card={card} faceDown={!faceUp} width={cardWidth} style={{ animationDelay: `${delays.get(card.id)}s` }} />
           </div>

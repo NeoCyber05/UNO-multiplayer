@@ -16,19 +16,20 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
   const visible = Math.min(4, n);
   const start = Math.max(0, Math.min(active - 1, n - visible));
   const lastWheel = useRef(0);
+  const track = useRef(null);
 
   const go = (step) => onChange((active + step + n) % n);
 
   useEffect(() => {
     if (!keyboard) return undefined;
     const onKey = (e) => {
-      if (e.target.closest?.('input, textarea, select')) return;
-      if (e.key === 'ArrowLeft') onChange((active - 1 + n) % n);
-      else if (e.key === 'ArrowRight') onChange((active + 1) % n);
-      else if (e.key === 'Enter' && !e.repeat) {
-        // Nút khác (dock, modal...) đang focus thì để nút đó tự xử lý Enter
-        if (e.target.closest?.('button:not(.carousel__item)')) return;
-        e.preventDefault(); // chặn click mặc định của thẻ đang focus -> không vào 2 lần
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        const next = (active + (e.key === 'ArrowLeft' ? -1 : 1) + n) % n;
+        onChange(next);
+      } else if (e.key === 'Enter' && !e.target.closest?.('button, a') && !e.repeat) {
+        e.preventDefault();
         onSelect(modes[active]);
       }
     };
@@ -36,7 +37,14 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
     return () => window.removeEventListener('keydown', onKey);
   }, [keyboard, active, n, modes, onChange, onSelect]);
 
+  useEffect(() => {
+    if (track.current?.contains(document.activeElement)) {
+      track.current.querySelector('.is-active')?.focus({ preventScroll: true });
+    }
+  }, [active]);
+
   const onWheel = (e) => {
+    if (e.ctrlKey) return;
     const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
     const now = Date.now();
     if (Math.abs(delta) < 4 || now - lastWheel.current < WHEEL_GAP_MS) return;
@@ -45,14 +53,12 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
   };
 
   return (
-    // preventDefault ở mousedown: bấm chuột không giữ focus trên thẻ/mũi tên,
-    // nên phím ← → Enter luôn áp dụng cho thẻ đang ở giữa.
-    <div className="carousel" onWheel={onWheel} onMouseDown={(e) => e.preventDefault()}>
+    <div className="carousel" onWheel={onWheel}>
       <button type="button" className="carousel__arrow carousel__arrow--left" onClick={() => go(-1)} aria-label="Chế độ trước">
         <IconBack size={28} />
       </button>
 
-      <div className="carousel__track">
+      <div className="carousel__track" ref={track}>
         {modes.map((m, i) => {
           const off = i - start - (visible - 1) / 2;
           const abs = Math.abs(off);
@@ -64,7 +70,7 @@ export default function ModeCarousel({ modes, active, onChange, onSelect, keyboa
               type="button"
               className={`carousel__item ${selected ? 'is-active' : ''} ${hidden ? 'is-hidden' : ''}`}
               style={{ '--off': off, '--abs': abs, zIndex: selected ? 10 : 1 }}
-              tabIndex={hidden ? -1 : 0}
+              tabIndex={selected ? 0 : -1}
               aria-hidden={hidden}
               aria-pressed={selected}
               aria-label={selected ? `Chơi ${m.title}` : m.title}

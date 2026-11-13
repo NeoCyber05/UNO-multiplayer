@@ -103,7 +103,7 @@ function TurnPointer({ seat }) {
 }
 
 /** Khu vực giữa bàn: chồng rút, chồng đánh, vòng chiều đi, màu hiện tại. */
-export default function CenterTable({ discard, currentColor, direction, deckCount, canDraw, onDraw, turnSeat }) {
+export default function CenterTable({ discard, currentColor, direction, deckCount, canDraw, needsDraw, onDraw, turnSeat }) {
   const visible = discard.slice(-4);
   const colorHex = COLOR_HEX[currentColor];
 
@@ -121,7 +121,7 @@ export default function CenterTable({ discard, currentColor, direction, deckCoun
       <div className="center__piles">
         <button
           type="button"
-          className={`deck ${canDraw ? 'can-draw' : ''}`}
+          className={`deck ${canDraw && needsDraw ? 'needs-draw' : ''}`}
           onClick={onDraw}
           disabled={!canDraw}
           aria-label="Rút bài"

@@ -1,4 +1,5 @@
 import Avatar from '../Avatar.jsx';
+import { IconCards } from '../Icons.jsx';
 import { TURN_SECONDS } from '../../game/constants';
 
 export function SpeechBubble({ text, side = 'right' }) {
@@ -34,7 +35,9 @@ export default function PlayerBadge({
           </span>
         )}
         <Avatar person={player} size={size} shape="square" />
-        <span className="pbadge__count" title={`${count} lá`}>{count}</span>
+        <span key={count} className="pbadge__count" title={`${count} lá`}>
+          <IconCards size={15} />{count}
+        </span>
         {count === 1 && <span className="pbadge__uno">UNO!</span>}
         {bubble && <SpeechBubble key={bubble.id} text={bubble.text} side={bubbleSide} />}
       </div>
