@@ -1,16 +1,22 @@
 CC = gcc
 BUILD ?= build
-CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c)
-CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror
-LDLIBS += $(shell pkg-config --libs json-c)
+GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.1)
+GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
+CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium) $(GTK_CFLAGS)
+CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
+LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) $(GTK_LIBS) -pthread
 
 shared := $(wildcard shared/*.c)
 modules := $(filter-out server/main.c,$(wildcard server/*.c))
+desktop_modules := $(filter-out desktop/main.c,$(wildcard desktop/*.c))
 headers := $(wildcard shared/*.h server/*.h desktop/*.h)
+ifeq ($(origin NAME),environment)
+NAME :=
+endif
 test_names := $(patsubst tests/test_%.c,%,$(wildcard tests/test_*.c))
 tests := $(addprefix $(BUILD)/tests/test_,$(if $(NAME),$(NAME),$(test_names)))
 
-.PHONY: all server desktop test integration sanitize package
+.PHONY: all server desktop desktop-smoke test integration sanitize package
 all: $(patsubst tests/test_%.c,$(BUILD)/tests/test_%,$(wildcard tests/test_*.c)) $(if $(wildcard server/main.c),server) $(if $(wildcard desktop/main.c),desktop)
 
 server: $(BUILD)/uno-server
@@ -24,12 +30,40 @@ $(BUILD)/uno-desktop: desktop/main.c $(filter-out desktop/main.c,$(wildcard desk
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(headers) Makefile
+$(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(desktop_modules) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
 test: $(tests)
 	@set -e; for t in $(tests); do "$$t"; done
+
+desktop-smoke: server desktop
+	@set -e; \
+	SERVER_LOG=$$(mktemp); \
+	./$(BUILD)/uno-server --port 0 --bind 127.0.0.1 > "$$SERVER_LOG" 2>&1 & \
+	SERVER_PID=$$!; \
+	trap 'kill $$SERVER_PID 2>/dev/null || true; rm -f "$$SERVER_LOG"' EXIT INT TERM; \
+	PORT=""; \
+	for i in $$(seq 1 50); do \
+		PORT=$$(grep -o 'PORT [0-9]*' "$$SERVER_LOG" 2>/dev/null | awk '{print $$2}' || true); \
+		if [ -n "$$PORT" ]; then break; fi; \
+		sleep 0.1; \
+	done; \
+	if [ -z "$$PORT" ]; then \
+		echo "Failed to start server"; \
+		cat "$$SERVER_LOG"; \
+		exit 1; \
+	fi; \
+	RUN_DESKTOP="./$(BUILD)/uno-desktop --port $$PORT --assets tests/fixtures"; \
+	if [ -z "$$DISPLAY" ]; then \
+		timeout 5 xvfb-run -a $$RUN_DESKTOP; \
+	else \
+		timeout 5 $$RUN_DESKTOP; \
+	fi; \
+	echo "desktop-smoke: OK"; \
+	kill $$SERVER_PID 2>/dev/null || true; \
+	rm -f "$$SERVER_LOG"; \
+	trap - EXIT INT TERM
 
 integration: server
 	python3 -m unittest $(if $(NAME),tests.integration.test_$(NAME) -v,discover -s tests/integration -v)

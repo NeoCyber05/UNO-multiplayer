@@ -1,0 +1,183 @@
+import json
+import os
+import re
+import socket
+import struct
+import subprocess
+import time
+
+class ServerProcess:
+    def __init__(self, bind="127.0.0.1", port=0, db=":memory:", auth_limit=5, extra_args=None):
+        self.bind = bind
+        self.requested_port = port
+        self.db = db
+        self.auth_limit = auth_limit
+        self.extra_args = extra_args or []
+        self.proc = None
+        self.port = None
+
+    def start(self):
+        binary = os.path.abspath("build/uno-server")
+        if not os.path.exists(binary):
+            raise FileNotFoundError(f"Server binary not found at {binary}")
+
+        cmd = [
+            binary,
+            "--bind", self.bind,
+            "--port", str(self.requested_port),
+            "--db", self.db,
+            "--auth-limit", str(self.auth_limit)
+        ] + self.extra_args
+
+        self.proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+
+        start_time = time.time()
+        while time.time() - start_time < 5.0:
+            if self.proc.poll() is not None:
+                err = self.proc.stderr.read()
+                raise RuntimeError(f"Server exited prematurely with code {self.proc.returncode}: {err}")
+            line = self.proc.stdout.readline()
+            if line:
+                m = re.search(r"PORT\s+(\d+)", line)
+                if m:
+                    self.port = int(m.group(1))
+                    break
+            time.sleep(0.02)
+
+        if self.port is None:
+            self.stop()
+            raise RuntimeError("Failed to detect server port within timeout")
+
+    def stop(self):
+        if self.proc:
+            try:
+                if self.proc.stdout:
+                    self.proc.stdout.close()
+                if self.proc.stderr:
+                    self.proc.stderr.close()
+            except Exception:
+                pass
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=2.0)
+            except Exception:
+                try:
+                    self.proc.kill()
+                    self.proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            self.proc = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+
+
+class WireClient:
+    def __init__(self, host="127.0.0.1", port=9090, timeout=3.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(timeout)
+        self.sock.connect((host, port))
+        self.next_id = 1
+        self._buf = bytearray()
+        self._queue = []
+
+    def send_raw(self, data: bytes):
+        self.sock.sendall(data)
+
+    def send_envelope(self, req_id: int, msg_type: str, payload: dict = None):
+        if payload is None:
+            payload = {}
+        body = json.dumps({
+            "v": 1,
+            "id": req_id,
+            "type": msg_type,
+            "payload": payload
+        }, separators=(',', ':')).encode('utf-8')
+        frame = struct.pack(">I", len(body)) + body
+        self.sock.sendall(frame)
+
+    def _read_one_raw(self, timeout=None):
+        if timeout is not None:
+            self.sock.settimeout(max(0.001, timeout))
+        else:
+            self.sock.settimeout(self.timeout)
+
+        while len(self._buf) < 4:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionResetError("Connection closed by peer while reading prefix")
+            self._buf.extend(chunk)
+
+        length = struct.unpack(">I", self._buf[:4])[0]
+        while len(self._buf) < 4 + length:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionResetError("Connection closed by peer while reading body")
+            self._buf.extend(chunk)
+
+        body = self._buf[4:4+length]
+        del self._buf[:4+length]
+        return json.loads(body.decode('utf-8'))
+
+    def recv_envelope(self, timeout=None):
+        if self._queue:
+            return self._queue.pop(0)
+        return self._read_one_raw(timeout=timeout)
+
+    def request(self, msg_type: str, payload: dict = None, timeout=None):
+        req_id = self.next_id
+        self.next_id += 1
+        self.send_envelope(req_id, msg_type, payload)
+        start = time.time()
+        deadline = (timeout if timeout is not None else self.timeout)
+        while True:
+            for i, env in enumerate(self._queue):
+                if env.get("id") == req_id:
+                    return self._queue.pop(i)
+            remaining = deadline - (time.time() - start)
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for response to {msg_type} (id {req_id})")
+            env = self._read_one_raw(timeout=remaining)
+            if env.get("id") == req_id:
+                return env
+            self._queue.append(env)
+
+    def recv_event(self, event_type=None, timeout=None):
+        start = time.time()
+        deadline = (timeout if timeout is not None else self.timeout)
+        while True:
+            for i, env in enumerate(self._queue):
+                if event_type is None or env.get("type") == event_type:
+                    return self._queue.pop(i)
+            remaining = deadline - (time.time() - start)
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for event {event_type}")
+            env = self._read_one_raw(timeout=remaining)
+            if event_type is None or env.get("type") == event_type:
+                return env
+            self._queue.append(env)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
