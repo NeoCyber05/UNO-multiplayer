@@ -2,9 +2,9 @@ CC = gcc
 BUILD ?= build
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.1)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
-CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium) $(GTK_CFLAGS)
+CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium)
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
-LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) $(GTK_LIBS) -pthread
+LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread
 
 shared := $(wildcard shared/*.c)
 modules := $(filter-out server/main.c,$(wildcard server/*.c))
@@ -26,11 +26,17 @@ $(BUILD)/uno-server: server/main.c $(modules) $(shared) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BUILD)/uno-desktop: desktop/main.c $(filter-out desktop/main.c,$(wildcard desktop/*.c)) $(shared) $(headers) Makefile
+$(BUILD)/uno-desktop: desktop/main.c $(desktop_modules) $(shared) $(headers) Makefile
 	mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
-$(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(desktop_modules) $(headers) Makefile
+$(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(headers) Makefile
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
+
+$(BUILD)/tests/test_net: desktop/tcp_client.c
+
+$(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -40,7 +46,7 @@ test: $(tests)
 desktop-smoke: server desktop
 	@set -e; \
 	SERVER_LOG=$$(mktemp); \
-	./$(BUILD)/uno-server --port 0 --bind 127.0.0.1 > "$$SERVER_LOG" 2>&1 & \
+	./$(BUILD)/uno-server --port 0 --bind 127.0.0.1 --db :memory: > "$$SERVER_LOG" 2>&1 & \
 	SERVER_PID=$$!; \
 	trap 'kill $$SERVER_PID 2>/dev/null || true; rm -f "$$SERVER_LOG"' EXIT INT TERM; \
 	PORT=""; \
@@ -54,11 +60,11 @@ desktop-smoke: server desktop
 		cat "$$SERVER_LOG"; \
 		exit 1; \
 	fi; \
-	RUN_DESKTOP="./$(BUILD)/uno-desktop --port $$PORT --assets tests/fixtures"; \
+	RUN_DESKTOP="./$(BUILD)/uno-desktop --port $$PORT --timeout 5 --assets tests/fixtures"; \
 	if [ -z "$$DISPLAY" ]; then \
-		timeout 5 xvfb-run -a $$RUN_DESKTOP; \
+		xvfb-run -a $$RUN_DESKTOP; \
 	else \
-		timeout 5 $$RUN_DESKTOP; \
+		$$RUN_DESKTOP; \
 	fi; \
 	echo "desktop-smoke: OK"; \
 	kill $$SERVER_PID 2>/dev/null || true; \

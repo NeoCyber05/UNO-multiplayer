@@ -1,6 +1,7 @@
 #include "shared/net.h"
 #include "desktop/tcp_client.h"
 #include "shared/protocol.h"
+#include "server/app.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -233,8 +234,42 @@ static void test_client_connect_fail(void)
     assert(client == NULL);
 }
 
+static void test_token_bucket_rate_limiter(void)
+{
+    AppConnSlot slot;
+    memset(&slot, 0, sizeof(slot));
+    uint64_t now_ms = 1000000;
+    slot.rate_last_ms = now_ms;
+    slot.rate_tokens = 60.0;
+
+    /* Burst cap: 60 requests in the same millisecond should succeed */
+    for (int i = 0; i < 60; i++) {
+        assert(app_conn_check_rate_limit(&slot, now_ms) == true);
+    }
+
+    /* 61st request in the same millisecond should be rejected */
+    assert(app_conn_check_rate_limit(&slot, now_ms) == false);
+
+    /* After 100ms, refill: 100ms * 0.03 = 3 tokens */
+    now_ms += 100;
+    for (int i = 0; i < 3; i++) {
+        assert(app_conn_check_rate_limit(&slot, now_ms) == true);
+    }
+    /* 4th request after refill should be rejected */
+    assert(app_conn_check_rate_limit(&slot, now_ms) == false);
+
+    /* Burst cap clamp: after 10000ms (+300 tokens), should be capped at 60 */
+    now_ms += 10000;
+    for (int i = 0; i < 60; i++) {
+        assert(app_conn_check_rate_limit(&slot, now_ms) == true);
+    }
+    /* 61st request should be rejected */
+    assert(app_conn_check_rate_limit(&slot, now_ms) == false);
+}
+
 int main(void)
 {
+    test_token_bucket_rate_limiter();
     test_partial_write_and_flush();
     test_fragmented_read();
     test_slow_consumer_threshold();

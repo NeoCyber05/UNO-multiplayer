@@ -35,7 +35,7 @@ static void test_table_creation_and_migration(void)
 
     const char *tables[] = {
         "matches", "match_players", "match_events",
-        "accounts", "friends", "achievements"
+        "accounts", "friends", "achievements", "profile_stats"
     };
     for (size_t i = 0; i < sizeof(tables) / sizeof(tables[0]); i++) {
         char query[256];
@@ -240,7 +240,8 @@ static void test_store_finalize_idempotency_and_no_double_elo(void)
     assert(sqlite3_exec(db,
         "INSERT INTO accounts (id, email, password_hash, name, avatar, elo, created_at) VALUES "
         "(101, 'alice@test.com', 'h1', 'Alice', 'a1', 1500, 1000),"
-        "(102, 'bob@test.com', 'h2', 'Bob', 'a2', 1500, 1000);",
+        "(102, 'bob@test.com', 'h2', 'Bob', 'a2', 1500, 1000);"
+        "INSERT INTO profile_stats (user_id, peak_elo) VALUES (101, 1500), (102, 1500);",
         NULL, NULL, NULL) == SQLITE_OK);
 
     MatchId mid = "00000000-0000-0000-0000-000000000003";
@@ -300,17 +301,17 @@ static void test_store_finalize_idempotency_and_no_double_elo(void)
 
     ProfileDelta deltas[4];
     memset(deltas, 0, sizeof(deltas));
-    deltas[0].matches = 1;
-    deltas[0].wins = 1;
-    deltas[0].plus4 = 1;
-    deltas[0].unoCalls = 1;
+    deltas[0].add.matches = 1;
+    deltas[0].add.wins = 1;
+    deltas[0].add.plus4 = 1;
+    deltas[0].add.unoCalls = 1;
     deltas[0].streak = 1;
     deltas[0].bestStreak = 1;
     deltas[0].peakElo = 1516;
-    deltas[0].badges.firstWin = 1;
+    deltas[0].unlocked = BADGE_FIRST_WIN;
 
-    deltas[1].matches = 1;
-    deltas[1].wins = 0;
+    deltas[1].add.matches = 1;
+    deltas[1].add.wins = 0;
     deltas[1].peakElo = 1500;
 
     /* First finalize -> should succeed */
@@ -469,8 +470,8 @@ static void test_transaction_rollback_on_failure(void)
 
     ProfileDelta deltas[4];
     memset(deltas, 0, sizeof(deltas));
-    deltas[0].matches = 1;
-    deltas[0].wins = 1;
+    deltas[0].add.matches = 1;
+    deltas[0].add.wins = 1;
 
     /* store_finalize should encounter error and rollback entire transaction */
     Status st = store_finalize(s, &res, deltas);
@@ -649,6 +650,196 @@ static void test_store_export_match(void)
     cleanup_file(db_path);
 }
 
+static void test_profile_stats_initial_state(void)
+{
+    const char *db_path = "/tmp/test_uno_profile_stats_init.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.email, "player@test.com", sizeof(c.email) - 1);
+    strncpy(c.hash, "hash123", sizeof(c.hash) - 1);
+    strncpy(c.name, "PlayerOne", sizeof(c.name) - 1);
+    strncpy(c.avatar, "avatar1", sizeof(c.avatar) - 1);
+
+    UserId uid = 0;
+    assert(store_account_create(s, &c, &uid) == OK);
+    assert(uid > 0);
+
+    ProfileStats stats;
+    memset(&stats, 0xFF, sizeof(stats));
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.matches == 0);
+    assert(stats.wins == 0);
+    assert(stats.teamWins == 0);
+    assert(stats.plus4 == 0);
+    assert(stats.unoCalls == 0);
+    assert(stats.streak == 0);
+    assert(stats.bestStreak == 0);
+    assert(stats.peakElo == 1500);
+
+    /* Non-existent user returns NOT_FOUND */
+    assert(store_profile_stats(s, 999999, &stats) == NOT_FOUND);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_profile_stats_finalize_accumulation_and_overwrite(void)
+{
+    const char *db_path = "/tmp/test_uno_profile_stats_accum.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.email, "player@test.com", sizeof(c.email) - 1);
+    strncpy(c.hash, "hash123", sizeof(c.hash) - 1);
+    strncpy(c.name, "PlayerOne", sizeof(c.name) - 1);
+    strncpy(c.avatar, "avatar1", sizeof(c.avatar) - 1);
+
+    UserId uid = 0;
+    assert(store_account_create(s, &c, &uid) == OK);
+    assert(uid > 0);
+
+    PlayerSpec players[4] = {
+        {uid, "PlayerOne", "avatar1", EASY, false},
+        {0, "Bot1", "avatar_bot", EASY, true},
+        {0, "Bot2", "avatar_bot", EASY, true},
+        {0, "Bot3", "avatar_bot", EASY, true}
+    };
+
+    /* Match 1: Win */
+    MatchId mid1 = "00000000-0000-0000-0000-000000000011";
+    assert(store_match_start(s, (const MatchId *)&mid1, players, CLASSIC, true) == OK);
+
+    MatchResult res1;
+    memset(&res1, 0, sizeof(res1));
+    strncpy(res1.matchId, mid1, sizeof(res1.matchId) - 1);
+    res1.mode = CLASSIC;
+    res1.ranked = true;
+    res1.status = MATCH_FINALIZED;
+    res1.winnerSeat = 0;
+    res1.winnerTeam = -1;
+    res1.durationMs = 30000;
+    res1.players[0].userId = uid;
+    res1.players[0].eloBefore = 1500;
+    res1.players[0].eloAfter = 1516;
+
+    ProfileDelta deltas1[4];
+    memset(deltas1, 0, sizeof(deltas1));
+    deltas1[0].add.matches = 1;
+    deltas1[0].add.wins = 1;
+    deltas1[0].streak = 1;
+    deltas1[0].bestStreak = 1;
+    deltas1[0].peakElo = 1516;
+    deltas1[0].unlocked = BADGE_FIRST_WIN;
+
+    assert(store_finalize(s, &res1, deltas1) == OK);
+
+    ProfileStats stats;
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.matches == 1);
+    assert(stats.wins == 1);
+    assert(stats.streak == 1);
+    assert(stats.bestStreak == 1);
+    assert(stats.peakElo == 1516);
+
+    /* Verify badge in achievements table */
+    sqlite3 *db = store_get_db(s);
+    sqlite3_stmt *stmt = NULL;
+    assert(sqlite3_prepare_v2(db, "SELECT badge, match_id FROM achievements WHERE user_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == BADGE_FIRST_WIN);
+    assert(strcmp((const char *)sqlite3_column_text(stmt, 1), mid1) == 0);
+    sqlite3_finalize(stmt);
+
+    /* Match 2: Loss */
+    MatchId mid2 = "00000000-0000-0000-0000-000000000012";
+    assert(store_match_start(s, (const MatchId *)&mid2, players, CLASSIC, true) == OK);
+
+    MatchResult res2;
+    memset(&res2, 0, sizeof(res2));
+    strncpy(res2.matchId, mid2, sizeof(res2.matchId) - 1);
+    res2.mode = CLASSIC;
+    res2.ranked = true;
+    res2.status = MATCH_FINALIZED;
+    res2.winnerSeat = 1;
+    res2.winnerTeam = -1;
+    res2.durationMs = 45000;
+    res2.players[0].userId = uid;
+    res2.players[0].eloBefore = 1516;
+    res2.players[0].eloAfter = 1500;
+
+    ProfileDelta deltas2[4];
+    memset(deltas2, 0, sizeof(deltas2));
+    deltas2[0].add.matches = 1;
+    deltas2[0].add.wins = 0;
+    deltas2[0].streak = -1;
+    deltas2[0].bestStreak = 1;
+    deltas2[0].peakElo = 1516;
+    deltas2[0].unlocked = 0;
+
+    assert(store_finalize(s, &res2, deltas2) == OK);
+
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.matches == 2);
+    assert(stats.wins == 1);
+    assert(stats.streak == -1);     /* resets to negative! */
+    assert(stats.bestStreak == 1); /* preserved! */
+    assert(stats.peakElo == 1516);  /* NOT 1516+1516=3032! */
+
+    /* Match 3: Win with peak ELO 1805 */
+    MatchId mid3 = "00000000-0000-0000-0000-000000000013";
+    assert(store_match_start(s, (const MatchId *)&mid3, players, CLASSIC, true) == OK);
+
+    MatchResult res3;
+    memset(&res3, 0, sizeof(res3));
+    strncpy(res3.matchId, mid3, sizeof(res3.matchId) - 1);
+    res3.mode = CLASSIC;
+    res3.ranked = true;
+    res3.status = MATCH_FINALIZED;
+    res3.winnerSeat = 0;
+    res3.winnerTeam = -1;
+    res3.durationMs = 50000;
+    res3.players[0].userId = uid;
+    res3.players[0].eloBefore = 1790;
+    res3.players[0].eloAfter = 1805;
+
+    ProfileDelta deltas3[4];
+    memset(deltas3, 0, sizeof(deltas3));
+    deltas3[0].add.matches = 1;
+    deltas3[0].add.wins = 1;
+    deltas3[0].streak = 1;
+    deltas3[0].bestStreak = 1;
+    deltas3[0].peakElo = 1805;
+    deltas3[0].unlocked = BADGE_DIAMOND;
+
+    assert(store_finalize(s, &res3, deltas3) == OK);
+
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.matches == 3);
+    assert(stats.wins == 2);
+    assert(stats.peakElo == 1805);
+
+    /* Verify BADGE_DIAMOND is unlocked in achievements */
+    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM achievements WHERE user_id = ? AND badge = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
+    sqlite3_bind_int(stmt, 2, BADGE_DIAMOND);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 1);
+    sqlite3_finalize(stmt);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
 int main(void)
 {
     test_table_creation_and_migration();
@@ -658,6 +849,8 @@ int main(void)
     test_crash_recovery_aborted();
     test_transaction_rollback_on_failure();
     test_store_export_match();
+    test_profile_stats_initial_state();
+    test_profile_stats_finalize_accumulation_and_overwrite();
 
     puts("store: OK");
     return 0;

@@ -17,6 +17,22 @@ bool accounts_validate_avatar(const char *avatar);
 /* Token and tag helpers */
 void accounts_generate_token(char out_token[65]);
 void accounts_format_tag(UserId user_id, char out_tag[32]);
+uint64_t accounts_get_now_ms(void);
+
+#define MAX_SESSIONS 256
+
+typedef struct {
+    bool in_use;
+    UserId user_id;
+    char token[65];
+    ConnId conn_id;
+    bool connected;
+    uint64_t created_at_ms;
+} SessionEntry;
+
+struct Sessions {
+    SessionEntry entries[MAX_SESSIONS];
+};
 
 /* Sessions and rate limiter lifecycle */
 Status sessions_init(App *app);

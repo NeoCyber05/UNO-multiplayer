@@ -93,10 +93,13 @@ Room *rooms_find_by_user(Rooms *r, UserId user_id);
 Status rooms_create(Rooms *r, UserId host_id, const char *name, const char *avatar, Mode mode, char out_code[7]);
 Status rooms_join(Rooms *r, UserId user_id, const char *name, const char *avatar, const char *code, Seat *out_seat);
 Status rooms_leave(Rooms *r, UserId user_id);
-Status rooms_set_bot(Rooms *r, UserId requester_id, Seat seat, BotLevel level);
-Status rooms_kick(Rooms *r, UserId requester_id, Seat seat);
+Status rooms_set_bot(Rooms *r, UserId requester_id, int seat, BotLevel level);
+Status rooms_kick(Rooms *r, UserId requester_id, int seat);
 Status rooms_set_mode(Rooms *r, UserId requester_id, Mode mode);
 Status rooms_start(App *app, const char *room_id);
+
+/* Invite operations */
+Status rooms_invite_create(Rooms *r, UserId sender_id, UserId recipient_id, const char *kind, const char *room_code, char out_invite_id[37]);
 
 /* Disconnect handler */
 void rooms_disconnect(App *app, UserId user_id, uint64_t now_ms);

@@ -1,5 +1,6 @@
 #include "server/rooms.h"
 #include "server/app.h"
+#include "server/accounts.h"
 #include "shared/contracts.h"
 #include <assert.h>
 #include <ctype.h>
@@ -210,7 +211,10 @@ static void test_host_migration(void)
 static void test_room_start(void)
 {
     Rooms *rooms = NULL;
-    assert(rooms_init(&rooms, NULL, dummy_start_fail) == OK);
+    App *dummy_app = calloc(1, sizeof(App));
+    assert(dummy_app != NULL);
+    assert(rooms_init(&rooms, dummy_app, dummy_start_fail) == OK);
+    dummy_app->rooms = rooms;
 
     char code[7] = {0};
     assert(rooms_create(rooms, 301, "Host", "fox", CLASSIC, code) == OK);
@@ -218,7 +222,7 @@ static void test_room_start(void)
     assert(rooms_set_bot(rooms, 301, 2, NORMAL) == OK);
 
     /* Not all 4 seats are filled (seat 3 empty) -> rooms_start must fail */
-    assert(rooms_start(NULL, code) != OK);
+    assert(rooms_start(dummy_app, code) != OK);
 
     /* Fill seat 3 */
     assert(rooms_set_bot(rooms, 301, 3, HARD) == OK);
@@ -230,7 +234,7 @@ static void test_room_start(void)
     assert(r != NULL);
     assert(r->status == ROOM_STATUS_WAITING);
 
-    Status st = rooms_start(NULL, code);
+    Status st = rooms_start(dummy_app, code);
     assert(st == BAD_REQUEST);
     /* Room remains intact, active, not mutated to in-match */
     assert(r->active == true);
@@ -238,8 +242,139 @@ static void test_room_start(void)
 
     /* Now set callback to success */
     rooms->on_start = dummy_start_success;
-    st = rooms_start(NULL, code);
+    st = rooms_start(dummy_app, code);
     assert(st == OK);
+
+    rooms_destroy(rooms);
+    free(dummy_app);
+}
+
+static void test_user_in_room_cannot_create_or_join_another(void)
+{
+    Rooms *rooms = NULL;
+    assert(rooms_init(&rooms, NULL, NULL) == OK);
+
+    char code_a[7] = {0};
+    char code_b[7] = {0};
+    assert(rooms_create(rooms, 1, "User1", "fox", CLASSIC, code_a) == OK);
+    assert(rooms_create(rooms, 2, "User2", "bear", CLASSIC, code_b) == OK);
+
+    /* User 1 is in Room A; calling rooms_create must return BUSY */
+    char code_c[7] = {0};
+    assert(rooms_create(rooms, 1, "User1", "fox", CLASSIC, code_c) == BUSY);
+
+    /* User 1 is in Room A; calling rooms_join into Room B must return BUSY */
+    Seat seat = 0;
+    assert(rooms_join(rooms, 1, "User1", "fox", code_b, &seat) == BUSY);
+
+    /* Room A still retains User 1 at seat 0 */
+    Room *room_a = rooms_find_by_code(rooms, code_a);
+    assert(room_a != NULL);
+    assert(room_a->seats[0].occupied);
+    assert(room_a->seats[0].user_id == 1);
+
+    /* Room B does not have User 1 */
+    Room *room_b = rooms_find_by_code(rooms, code_b);
+    assert(room_b != NULL);
+    assert(room_b->seats[0].user_id == 2);
+    for (int i = 1; i < ROOM_MAX_SEATS; i++) {
+        assert(!room_b->seats[i].occupied || room_b->seats[i].user_id != 1);
+    }
+
+    rooms_destroy(rooms);
+}
+
+static void test_room_start_invariants(void)
+{
+    Rooms *rooms = NULL;
+    App *dummy_app = calloc(1, sizeof(App));
+    assert(dummy_app != NULL);
+    assert(rooms_init(&rooms, dummy_app, NULL) == OK);
+    dummy_app->rooms = rooms;
+
+    char code[7] = {0};
+    assert(rooms_create(rooms, 301, "Host", "fox", CLASSIC, code) == OK);
+    assert(rooms_set_bot(rooms, 301, 1, EASY) == OK);
+    assert(rooms_set_bot(rooms, 301, 2, NORMAL) == OK);
+
+    /* 1. Less than 4 seats occupied -> INVALID_ACTION */
+    assert(rooms_start(dummy_app, code) == INVALID_ACTION);
+
+    /* Fill 4th seat */
+    assert(rooms_set_bot(rooms, 301, 3, HARD) == OK);
+
+    /* 2. 4 seats occupied but on_start == NULL -> BUSY */
+    assert(rooms_start(dummy_app, code) == BUSY);
+
+    /* 3. With on_start callback succeeding -> OK */
+    rooms->on_start = dummy_start_success;
+    assert(rooms_start(dummy_app, code) == OK);
+
+    Room *r = rooms_find_by_code(rooms, code);
+    assert(r != NULL);
+    assert(r->status == ROOM_STATUS_IN_MATCH);
+
+    /* 4. Room already IN_MATCH -> INVALID_ACTION */
+    assert(rooms_start(dummy_app, code) == INVALID_ACTION);
+
+    rooms_destroy(rooms);
+    free(dummy_app);
+}
+
+static void test_invite_30s_slot_reclamation(void)
+{
+    Rooms *rooms = NULL;
+    assert(rooms_init(&rooms, NULL, NULL) == OK);
+
+    /* Fill all 64 invite slots with expired invites (31 seconds ago) */
+    uint64_t now = accounts_get_now_ms();
+    for (int i = 0; i < MAX_INVITES; i++) {
+        rooms->invites[i].active = true;
+        snprintf(rooms->invites[i].invite_id, sizeof(rooms->invites[i].invite_id), "inv-%03d", i);
+        rooms->invites[i].sender_id = 100 + (UserId)i;
+        rooms->invites[i].recipient_id = 200 + (UserId)i;
+        strcpy(rooms->invites[i].kind, "party");
+        rooms->invites[i].created_at_ms = now - 31000ULL;
+    }
+
+    /* Slot 0 is made active and fresh (< 30s) */
+    rooms->invites[0].created_at_ms = now;
+
+    /* Slot 1 is expired (created 31s ago) */
+    rooms->invites[1].created_at_ms = now - 31000ULL;
+
+    char out_id[37] = {0};
+    /* Creating an invite should reclaim an expired slot (e.g. slot 1), NOT overwrite active slot 0 */
+    assert(rooms_invite_create(rooms, 999, 888, "party", NULL, out_id) == OK);
+
+    /* Verify slot 0 is STILL active and untouched */
+    assert(rooms->invites[0].active == true);
+    assert(rooms->invites[0].sender_id == 100);
+    assert(strcmp(rooms->invites[0].invite_id, "inv-000") == 0);
+
+    /* Verify an expired slot was reclaimed */
+    assert(rooms->invites[1].active == true);
+    assert(rooms->invites[1].sender_id == 999);
+    assert(strcmp(rooms->invites[1].invite_id, out_id) == 0);
+
+    rooms_destroy(rooms);
+}
+
+static void test_seat_bounds_validation(void)
+{
+    Rooms *rooms = NULL;
+    assert(rooms_init(&rooms, NULL, NULL) == OK);
+
+    char code[7] = {0};
+    assert(rooms_create(rooms, 101, "Host", "fox", CLASSIC, code) == OK);
+
+    assert(rooms_set_bot(rooms, 101, -1, EASY) == BAD_REQUEST);
+    assert(rooms_set_bot(rooms, 101, 4, EASY) == BAD_REQUEST);
+    assert(rooms_set_bot(rooms, 101, 257, EASY) == BAD_REQUEST);
+
+    assert(rooms_kick(rooms, 101, -1) == BAD_REQUEST);
+    assert(rooms_kick(rooms, 101, 4) == BAD_REQUEST);
+    assert(rooms_kick(rooms, 101, 257) == BAD_REQUEST);
 
     rooms_destroy(rooms);
 }
@@ -253,6 +388,10 @@ int main(void)
     test_bot_configuration();
     test_host_migration();
     test_room_start();
+    test_user_in_room_cannot_create_or_join_another();
+    test_room_start_invariants();
+    test_invite_30s_slot_reclamation();
+    test_seat_bounds_validation();
 
     printf("rooms: OK\n");
     return 0;

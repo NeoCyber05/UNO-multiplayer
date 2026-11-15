@@ -62,10 +62,22 @@ CREATE TABLE IF NOT EXISTS friends (
     PRIMARY KEY (user_id, friend_id)
 );
 
+CREATE TABLE IF NOT EXISTS profile_stats (
+    user_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+    matches INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    team_wins INTEGER NOT NULL DEFAULT 0,
+    plus4 INTEGER NOT NULL DEFAULT 0,
+    uno_calls INTEGER NOT NULL DEFAULT 0,
+    streak INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    peak_elo INTEGER NOT NULL DEFAULT 1500
+);
+
 CREATE TABLE IF NOT EXISTS achievements (
     user_id INTEGER NOT NULL,
-    key TEXT NOT NULL,
-    progress INTEGER NOT NULL DEFAULT 0,
-    unlocked_at INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, key)
+    badge INTEGER NOT NULL,
+    unlocked_at INTEGER NOT NULL,
+    match_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, badge)
 );

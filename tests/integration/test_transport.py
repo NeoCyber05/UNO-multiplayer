@@ -1,5 +1,7 @@
 import json
+import socket
 import struct
+import time
 import unittest
 from tests.integration.helpers import ServerProcess, WireClient
 
@@ -43,6 +45,66 @@ class TestTransport(unittest.TestCase):
                 self.assertEqual(resp2["id"], 102)
                 self.assertEqual(resp2["type"], "OK")
 
+    def test_slow_consumer_disconnect(self):
+        with ServerProcess() as server:
+            with WireClient("127.0.0.1", server.port) as client_normal:
+                resp = client_normal.request("PING", {})
+                self.assertEqual(resp["type"], "OK")
+
+                # Connect slow client with small receive buffer so it fills up quickly
+                slow_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                slow_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+                slow_sock.connect(("127.0.0.1", server.port))
+                slow_sock.settimeout(3.0)
+
+                # Send frames exceeding 256 KiB buffer without reading
+                body = json.dumps({"v": 1, "id": 1, "type": "PING", "payload": {}}).encode("utf-8")
+                frame = struct.pack(">I", len(body)) + body
+                batch = frame * 25000
+                closed = False
+                try:
+                    slow_sock.sendall(batch)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    closed = True
+
+                # Client does not read while server processes and pushes frames exceeding 256 KiB
+                time.sleep(0.5)
+
+                # Server should mark closing and terminate the socket
+                if not closed:
+                    start = time.time()
+                    while time.time() - start < 3.0:
+                        try:
+                            data = slow_sock.recv(65536)
+                            if len(data) == 0:
+                                closed = True
+                                break
+                        except (ConnectionResetError, ConnectionError, BrokenPipeError):
+                            closed = True
+                            break
+                        except TimeoutError:
+                            break
+                slow_sock.close()
+                self.assertTrue(closed, "Server should terminate slow consumer connection")
+
+                # Verify normal client continues to PING without interruption
+                resp = client_normal.request("PING", {})
+                self.assertEqual(resp["type"], "OK")
+
+    def test_client_disconnect_mid_frame(self):
+        with ServerProcess() as server:
+            # Client connects, sends partial 4-byte length prefix (e.g. 2 bytes), then immediately closes socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(("127.0.0.1", server.port))
+            s.sendall(b"\x00\x00")
+            s.close()
+
+            # Verify server is healthy, cleans up slot without hanging or crashing
+            time.sleep(0.1)
+            with WireClient("127.0.0.1", server.port) as client:
+                resp = client.request("PING", {})
+                self.assertEqual(resp["type"], "OK")
+
     def test_max_connections(self):
         with ServerProcess() as server:
             clients = []
@@ -54,22 +116,15 @@ class TestTransport(unittest.TestCase):
                     self.assertEqual(resp["type"], "OK")
                     clients.append(c)
 
-                # 65th connection should be rejected: either refused/closed or gets SERVER_FULL
-                rejected = False
+                # 65th connection should receive ERROR with code SERVER_FULL
+                c65 = WireClient("127.0.0.1", server.port, timeout=2.0)
                 try:
-                    c65 = WireClient("127.0.0.1", server.port, timeout=1.0)
-                    try:
-                        resp = c65.request("PING", {}, timeout=1.0)
-                        if resp.get("type") == "SERVER_FULL":
-                            rejected = True
-                    except (ConnectionResetError, ConnectionError, TimeoutError, OSError):
-                        rejected = True
-                    finally:
-                        c65.close()
-                except (ConnectionResetError, ConnectionError, OSError):
-                    rejected = True
-
-                self.assertTrue(rejected, "65th connection should be rejected or closed")
+                    resp = c65.recv_envelope(timeout=2.0)
+                    self.assertEqual(resp.get("type"), "ERROR")
+                    self.assertEqual(resp.get("payload", {}).get("code"), "SERVER_FULL")
+                    self.assertEqual(resp.get("payload", {}).get("message"), "Server connection limit reached")
+                finally:
+                    c65.close()
 
                 # Verify all original 64 connections are still healthy and can PING
                 for c in clients:

@@ -20,10 +20,14 @@ struct Store {
     sqlite3_stmt *stmt_event_insert;
     sqlite3_stmt *stmt_event_select_all;
     sqlite3_stmt *stmt_account_update_elo;
-    sqlite3_stmt *stmt_achievement_upsert;
+    sqlite3_stmt *stmt_achievement_insert;
     sqlite3_stmt *stmt_account_insert;
     sqlite3_stmt *stmt_account_select_by_email;
     sqlite3_stmt *stmt_account_select_by_id;
+    sqlite3_stmt *stmt_profile_stats_init;
+    sqlite3_stmt *stmt_profile_stats_select;
+    sqlite3_stmt *stmt_profile_stats_update;
+    sqlite3_stmt *stmt_profile_stats_insert_fallback;
 };
 
 static const char *EMBEDDED_SCHEMA_SQL =
@@ -83,12 +87,23 @@ static const char *EMBEDDED_SCHEMA_SQL =
     "    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),\n"
     "    PRIMARY KEY (user_id, friend_id)\n"
     ");\n"
+    "CREATE TABLE IF NOT EXISTS profile_stats (\n"
+    "    user_id INTEGER PRIMARY KEY REFERENCES accounts(id),\n"
+    "    matches INTEGER NOT NULL DEFAULT 0,\n"
+    "    wins INTEGER NOT NULL DEFAULT 0,\n"
+    "    team_wins INTEGER NOT NULL DEFAULT 0,\n"
+    "    plus4 INTEGER NOT NULL DEFAULT 0,\n"
+    "    uno_calls INTEGER NOT NULL DEFAULT 0,\n"
+    "    streak INTEGER NOT NULL DEFAULT 0,\n"
+    "    best_streak INTEGER NOT NULL DEFAULT 0,\n"
+    "    peak_elo INTEGER NOT NULL DEFAULT 1500\n"
+    ");\n"
     "CREATE TABLE IF NOT EXISTS achievements (\n"
     "    user_id INTEGER NOT NULL,\n"
-    "    key TEXT NOT NULL,\n"
-    "    progress INTEGER NOT NULL DEFAULT 0,\n"
-    "    unlocked_at INTEGER NOT NULL DEFAULT 0,\n"
-    "    PRIMARY KEY (user_id, key)\n"
+    "    badge INTEGER NOT NULL,\n"
+    "    unlocked_at INTEGER NOT NULL,\n"
+    "    match_id TEXT NOT NULL,\n"
+    "    PRIMARY KEY (user_id, badge)\n"
     ");\n";
 
 static Status prepare_statements(Store *s)
@@ -134,11 +149,31 @@ static Status prepare_statements(Store *s)
     const char *sql_a_upd_elo = "UPDATE accounts SET elo = ? WHERE id = ?;";
     if (sqlite3_prepare_v2(s->db, sql_a_upd_elo, -1, &s->stmt_account_update_elo, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
-    const char *sql_ach_upsert = "INSERT INTO achievements (user_id, key, progress, unlocked_at) VALUES (?, ?, ?, ?) "
-                                 "ON CONFLICT(user_id, key) DO UPDATE SET "
-                                 "progress = achievements.progress + excluded.progress, "
-                                 "unlocked_at = CASE WHEN excluded.unlocked_at > 0 THEN excluded.unlocked_at ELSE achievements.unlocked_at END;";
-    if (sqlite3_prepare_v2(s->db, sql_ach_upsert, -1, &s->stmt_achievement_upsert, NULL) != SQLITE_OK) return STORAGE_ERROR;
+    const char *sql_ach_ins = "INSERT OR IGNORE INTO achievements (user_id, badge, unlocked_at, match_id) VALUES (?, ?, ?, ?);";
+    if (sqlite3_prepare_v2(s->db, sql_ach_ins, -1, &s->stmt_achievement_insert, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_prof_init = "INSERT INTO profile_stats (user_id, peak_elo) VALUES (?, 1500);";
+    if (sqlite3_prepare_v2(s->db, sql_prof_init, -1, &s->stmt_profile_stats_init, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_prof_sel = "SELECT matches, wins, team_wins, plus4, uno_calls, streak, best_streak, peak_elo "
+                               "FROM profile_stats WHERE user_id = ?;";
+    if (sqlite3_prepare_v2(s->db, sql_prof_sel, -1, &s->stmt_profile_stats_select, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_prof_upd = "UPDATE profile_stats "
+                               "SET matches = matches + ?, "
+                               "    wins = wins + ?, "
+                               "    team_wins = team_wins + ?, "
+                               "    plus4 = plus4 + ?, "
+                               "    uno_calls = uno_calls + ?, "
+                               "    streak = ?, "
+                               "    best_streak = ?, "
+                               "    peak_elo = ? "
+                               "WHERE user_id = ?;";
+    if (sqlite3_prepare_v2(s->db, sql_prof_upd, -1, &s->stmt_profile_stats_update, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_prof_fb = "INSERT INTO profile_stats (user_id, matches, wins, team_wins, plus4, uno_calls, streak, best_streak, peak_elo) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    if (sqlite3_prepare_v2(s->db, sql_prof_fb, -1, &s->stmt_profile_stats_insert_fallback, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
     const char *sql_acc_ins = "INSERT INTO accounts (email, password_hash, name, avatar, elo, created_at) "
                               "VALUES (?, ?, ?, ?, 1500, strftime('%s', 'now'));";
@@ -167,10 +202,14 @@ static void finalize_statements(Store *s)
     if (s->stmt_event_insert) { sqlite3_finalize(s->stmt_event_insert); s->stmt_event_insert = NULL; }
     if (s->stmt_event_select_all) { sqlite3_finalize(s->stmt_event_select_all); s->stmt_event_select_all = NULL; }
     if (s->stmt_account_update_elo) { sqlite3_finalize(s->stmt_account_update_elo); s->stmt_account_update_elo = NULL; }
-    if (s->stmt_achievement_upsert) { sqlite3_finalize(s->stmt_achievement_upsert); s->stmt_achievement_upsert = NULL; }
+    if (s->stmt_achievement_insert) { sqlite3_finalize(s->stmt_achievement_insert); s->stmt_achievement_insert = NULL; }
     if (s->stmt_account_insert) { sqlite3_finalize(s->stmt_account_insert); s->stmt_account_insert = NULL; }
     if (s->stmt_account_select_by_email) { sqlite3_finalize(s->stmt_account_select_by_email); s->stmt_account_select_by_email = NULL; }
     if (s->stmt_account_select_by_id) { sqlite3_finalize(s->stmt_account_select_by_id); s->stmt_account_select_by_id = NULL; }
+    if (s->stmt_profile_stats_init) { sqlite3_finalize(s->stmt_profile_stats_init); s->stmt_profile_stats_init = NULL; }
+    if (s->stmt_profile_stats_select) { sqlite3_finalize(s->stmt_profile_stats_select); s->stmt_profile_stats_select = NULL; }
+    if (s->stmt_profile_stats_update) { sqlite3_finalize(s->stmt_profile_stats_update); s->stmt_profile_stats_update = NULL; }
+    if (s->stmt_profile_stats_insert_fallback) { sqlite3_finalize(s->stmt_profile_stats_insert_fallback); s->stmt_profile_stats_insert_fallback = NULL; }
 }
 
 Status store_open(Store **out, const char *path)
@@ -428,49 +467,73 @@ Status store_events(Store *s, const MatchId *match_id, const EventBatch *batch)
     return OK;
 }
 
-static Status apply_profile_delta(Store *s, UserId uid, const ProfileDelta *d)
+static Status apply_profile_delta(Store *s, UserId uid, const char *mid, const ProfileDelta *d)
 {
     if (!d) return OK;
 
-    struct KeyVal {
-        const char *key;
-        uint32_t val;
-        uint32_t unlocked;
-    } items[] = {
-        {"matches", d->matches, 0},
-        {"wins", d->wins, 0},
-        {"plus4", d->plus4, 0},
-        {"unoCalls", d->unoCalls, 0},
-        {"teamWins", d->teamWins, 0},
-        {"streak", d->streak, 0},
-        {"bestStreak", d->bestStreak, 0},
-        {"peakElo", d->peakElo, 0},
-        {"badge_firstWin", d->badges.firstWin, d->badges.firstWin ? 1 : 0},
-        {"badge_win100", d->badges.win100, d->badges.win100 ? 1 : 0},
-        {"badge_streak10", d->badges.streak10, d->badges.streak10 ? 1 : 0},
-        {"badge_plus4", d->badges.plus4, d->badges.plus4 ? 1 : 0},
-        {"badge_unoMaster", d->badges.unoMaster, d->badges.unoMaster ? 1 : 0},
-        {"badge_team", d->badges.team, d->badges.team ? 1 : 0},
-        {"badge_matches500", d->badges.matches500, d->badges.matches500 ? 1 : 0},
-        {"badge_diamond", d->badges.diamond, d->badges.diamond ? 1 : 0}
-    };
+    /* Update profile_stats */
+    sqlite3_stmt *stmt = s->stmt_profile_stats_update;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
 
-    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
-        if (items[i].val == 0 && items[i].unlocked == 0) continue;
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)d->add.matches);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)d->add.wins);
+    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)d->add.teamWins);
+    sqlite3_bind_int64(stmt, 4, (sqlite3_int64)d->add.plus4);
+    sqlite3_bind_int64(stmt, 5, (sqlite3_int64)d->add.unoCalls);
+    sqlite3_bind_int(stmt, 6, d->streak);
+    sqlite3_bind_int64(stmt, 7, (sqlite3_int64)d->bestStreak);
+    sqlite3_bind_int(stmt, 8, d->peakElo);
+    sqlite3_bind_int64(stmt, 9, (sqlite3_int64)uid);
 
-        sqlite3_stmt *stmt = s->stmt_achievement_upsert;
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
         sqlite3_reset(stmt);
-        sqlite3_clear_bindings(stmt);
-        sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
-        sqlite3_bind_text(stmt, 2, items[i].key, -1, SQLITE_STATIC);
-        sqlite3_bind_int(stmt, 3, (int)items[i].val);
-        sqlite3_bind_int(stmt, 4, (int)items[i].unlocked);
+        return STORAGE_ERROR;
+    }
+    sqlite3_reset(stmt);
 
-        if (sqlite3_step(stmt) != SQLITE_DONE) {
-            sqlite3_reset(stmt);
+    /* Fallback insert if row didn't exist */
+    if (sqlite3_changes(s->db) == 0) {
+        sqlite3_stmt *fb = s->stmt_profile_stats_insert_fallback;
+        sqlite3_reset(fb);
+        sqlite3_clear_bindings(fb);
+        sqlite3_bind_int64(fb, 1, (sqlite3_int64)uid);
+        sqlite3_bind_int64(fb, 2, (sqlite3_int64)d->add.matches);
+        sqlite3_bind_int64(fb, 3, (sqlite3_int64)d->add.wins);
+        sqlite3_bind_int64(fb, 4, (sqlite3_int64)d->add.teamWins);
+        sqlite3_bind_int64(fb, 5, (sqlite3_int64)d->add.plus4);
+        sqlite3_bind_int64(fb, 6, (sqlite3_int64)d->add.unoCalls);
+        sqlite3_bind_int(fb, 7, d->streak);
+        sqlite3_bind_int64(fb, 8, (sqlite3_int64)d->bestStreak);
+        sqlite3_bind_int(fb, 9, d->peakElo);
+
+        if (sqlite3_step(fb) != SQLITE_DONE) {
+            sqlite3_reset(fb);
             return STORAGE_ERROR;
         }
-        sqlite3_reset(stmt);
+        sqlite3_reset(fb);
+    }
+
+    /* Insert unlocked badge bits into achievements */
+    if (d->unlocked != 0) {
+        for (int b = 0; b < 32; b++) {
+            uint32_t bit = 1u << b;
+            if (d->unlocked & bit) {
+                sqlite3_stmt *astmt = s->stmt_achievement_insert;
+                sqlite3_reset(astmt);
+                sqlite3_clear_bindings(astmt);
+                sqlite3_bind_int64(astmt, 1, (sqlite3_int64)uid);
+                sqlite3_bind_int(astmt, 2, (int)bit);
+                sqlite3_bind_int64(astmt, 3, (sqlite3_int64)time(NULL));
+                sqlite3_bind_text(astmt, 4, mid, -1, SQLITE_STATIC);
+
+                if (sqlite3_step(astmt) != SQLITE_DONE) {
+                    sqlite3_reset(astmt);
+                    return STORAGE_ERROR;
+                }
+                sqlite3_reset(astmt);
+            }
+        }
     }
 
     return OK;
@@ -611,7 +674,7 @@ Status store_finalize(Store *s, const MatchResult *result, const ProfileDelta de
 
         /* Update profile deltas if provided and userId > 0 */
         if (deltas && pr->userId > 0) {
-            if (apply_profile_delta(s, pr->userId, &deltas[i]) != OK) {
+            if (apply_profile_delta(s, pr->userId, mid, &deltas[i]) != OK) {
                 sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
                 return STORAGE_ERROR;
             }
@@ -761,8 +824,20 @@ Status store_account_create(Store *s, const AccountCreate *c, UserId *out_id)
         return STORAGE_ERROR;
     }
 
-    *out_id = (UserId)sqlite3_last_insert_rowid(s->db);
+    UserId new_id = (UserId)sqlite3_last_insert_rowid(s->db);
     sqlite3_reset(s->stmt_account_insert);
+
+    sqlite3_stmt *p_init = s->stmt_profile_stats_init;
+    sqlite3_reset(p_init);
+    sqlite3_clear_bindings(p_init);
+    sqlite3_bind_int64(p_init, 1, (sqlite3_int64)new_id);
+    if (sqlite3_step(p_init) != SQLITE_DONE) {
+        sqlite3_reset(p_init);
+        return STORAGE_ERROR;
+    }
+    sqlite3_reset(p_init);
+
+    *out_id = new_id;
     return OK;
 }
 
@@ -834,6 +909,35 @@ Status store_account_get_by_id(Store *s, UserId id, Account *out)
         return OK;
     }
     sqlite3_reset(s->stmt_account_select_by_id);
+    if (rc == SQLITE_DONE) return NOT_FOUND;
+    return STORAGE_ERROR;
+}
+
+Status store_profile_stats(Store *s, UserId user_id, ProfileStats *out)
+{
+    if (!s || !out) return BAD_REQUEST;
+
+    sqlite3_reset(s->stmt_profile_stats_select);
+    sqlite3_clear_bindings(s->stmt_profile_stats_select);
+
+    sqlite3_bind_int64(s->stmt_profile_stats_select, 1, (sqlite3_int64)user_id);
+
+    int rc = sqlite3_step(s->stmt_profile_stats_select);
+    if (rc == SQLITE_ROW) {
+        memset(out, 0, sizeof(*out));
+        out->matches = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 0);
+        out->wins = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 1);
+        out->teamWins = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 2);
+        out->plus4 = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 3);
+        out->unoCalls = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 4);
+        out->streak = (int32_t)sqlite3_column_int(s->stmt_profile_stats_select, 5);
+        out->bestStreak = (uint32_t)sqlite3_column_int64(s->stmt_profile_stats_select, 6);
+        out->peakElo = (int32_t)sqlite3_column_int(s->stmt_profile_stats_select, 7);
+
+        sqlite3_reset(s->stmt_profile_stats_select);
+        return OK;
+    }
+    sqlite3_reset(s->stmt_profile_stats_select);
     if (rc == SQLITE_DONE) return NOT_FOUND;
     return STORAGE_ERROR;
 }

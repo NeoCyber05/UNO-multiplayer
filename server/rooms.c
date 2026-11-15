@@ -11,14 +11,12 @@
 #include <strings.h>
 #include <time.h>
 
-static Rooms *g_last_rooms = NULL;
-
 static uint64_t get_now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    return accounts_get_now_ms();
 }
+
+static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
 
 static void send_error(App *app, ConnId conn_id, int32_t req_id, const char *code, const char *msg)
 {
@@ -143,7 +141,6 @@ Status rooms_init(Rooms **out, App *app, OnMatchStart on_start)
     r->on_start = on_start;
     r->next_party_id = 1;
     r->next_invite_id = 1;
-    g_last_rooms = r;
     *out = r;
     return OK;
 }
@@ -151,7 +148,6 @@ Status rooms_init(Rooms **out, App *app, OnMatchStart on_start)
 void rooms_destroy(Rooms *r)
 {
     if (!r) return;
-    if (g_last_rooms == r) g_last_rooms = NULL;
     free(r);
 }
 
@@ -186,8 +182,7 @@ Status rooms_create(Rooms *r, UserId host_id, const char *name, const char *avat
 {
     if (!r || host_id == 0) return BAD_REQUEST;
 
-    /* Leave any existing room */
-    rooms_leave(r, host_id);
+    if (rooms_find_by_user(r, host_id) != NULL) return BUSY;
 
     /* Find empty room slot */
     int slot = -1;
@@ -225,19 +220,10 @@ Status rooms_join(Rooms *r, UserId user_id, const char *name, const char *avatar
 {
     if (!r || user_id == 0 || !code) return BAD_REQUEST;
 
+    if (rooms_find_by_user(r, user_id) != NULL) return BUSY;
+
     Room *room = rooms_find_by_code(r, code);
     if (!room) return NOT_FOUND;
-
-    /* If user already in this room, return their current seat */
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].is_bot && room->seats[i].user_id == user_id) {
-            if (out_seat) *out_seat = (Seat)i;
-            return OK;
-        }
-    }
-
-    /* Leave any previous room */
-    rooms_leave(r, user_id);
 
     /* Find lowest-numbered empty seat */
     int empty_seat = -1;
@@ -303,10 +289,10 @@ Status rooms_leave(Rooms *r, UserId user_id)
     return OK;
 }
 
-Status rooms_set_bot(Rooms *r, UserId requester_id, Seat seat, BotLevel level)
+Status rooms_set_bot(Rooms *r, UserId requester_id, int seat, BotLevel level)
 {
     if (!r || requester_id == 0) return BAD_REQUEST;
-    if (seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
+    if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
 
     Room *room = rooms_find_by_user(r, requester_id);
     if (!room) return NOT_FOUND;
@@ -331,10 +317,10 @@ Status rooms_set_bot(Rooms *r, UserId requester_id, Seat seat, BotLevel level)
     return OK;
 }
 
-Status rooms_kick(Rooms *r, UserId requester_id, Seat seat)
+Status rooms_kick(Rooms *r, UserId requester_id, int seat)
 {
     if (!r || requester_id == 0) return BAD_REQUEST;
-    if (seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
+    if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
 
     Room *room = rooms_find_by_user(r, requester_id);
     if (!room) return NOT_FOUND;
@@ -371,16 +357,20 @@ Status rooms_set_mode(Rooms *r, UserId requester_id, Mode mode)
 
 Status rooms_start(App *app, const char *room_id)
 {
-    Rooms *r = app ? app->rooms : g_last_rooms;
-    if (!r || !room_id) return BAD_REQUEST;
+    if (!app || !app->rooms || !room_id) return BAD_REQUEST;
+    Rooms *r = app->rooms;
 
     Room *room = rooms_find_by_code(r, room_id);
     if (!room) return NOT_FOUND;
+
+    if (room->status != ROOM_STATUS_WAITING) return INVALID_ACTION;
 
     /* Check all 4 seats occupied */
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
         if (!room->seats[i].occupied) return INVALID_ACTION;
     }
+
+    if (!r->on_start) return BUSY;
 
     RoomStart rs;
     memset(&rs, 0, sizeof(rs));
@@ -395,13 +385,11 @@ Status rooms_start(App *app, const char *room_id)
         rs.players[i].botLevel = room->seats[i].bot_level;
     }
 
-    if (r->on_start) {
-        MatchId out_match_id = {0};
-        Status st = r->on_start(app, &rs, &out_match_id);
-        if (st != OK) {
-            /* Callback failed: room remains intact without mutating to in-match */
-            return st;
-        }
+    MatchId out_match_id = {0};
+    Status st = r->on_start(app, &rs, &out_match_id);
+    if (st != OK) {
+        /* Callback failed: room remains intact without mutating to in-match */
+        return st;
     }
 
     room->status = ROOM_STATUS_IN_MATCH;
@@ -473,8 +461,7 @@ Status rooms_broadcast_state(App *app, const Room *room)
     json_object_object_add(payload, "revision", json_object_new_int64(room->revision));
     json_object_object_add(payload, "roomId", json_object_new_string(room->code));
     json_object_object_add(payload, "code", json_object_new_string(room->code));
-    const char *mode_strs[] = {"classic", "2v2", "side", "draft"};
-    json_object_object_add(payload, "mode", json_object_new_string(mode_strs[room->mode]));
+    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[room->mode]));
     json_object_object_add(payload, "ranked", json_object_new_boolean(room->ranked));
     json_object_object_add(payload, "hostSeat", json_object_new_int(room->host_seat));
 
@@ -578,8 +565,71 @@ Status party_leave(Rooms *r, UserId user_id)
     Party *p = party_find_by_user(r, user_id);
     if (!p) return OK;
 
+    if (r->app) {
+        UserId old_members[PARTY_MAX_MEMBERS];
+        size_t old_count = p->member_count;
+        for (size_t i = 0; i < old_count; i++) {
+            old_members[i] = p->members[i];
+        }
+        uint32_t party_id = p->party_id;
+        uint64_t rev = p->revision + 1;
+
+        struct json_object *payload = json_object_new_object();
+        json_object_object_add(payload, "partyId", json_object_new_int((int)party_id));
+        json_object_object_add(payload, "leaderId", json_object_new_string("0"));
+        json_object_object_add(payload, "revision", json_object_new_int64(rev));
+        json_object_object_add(payload, "members", json_object_new_array());
+
+        Envelope push_env = {1, 0, "PARTY_STATE", payload};
+        for (size_t i = 0; i < old_count; i++) {
+            ConnId conn_id;
+            if (sessions_find_conn(r->app, old_members[i], &conn_id) == OK) {
+                if (conn_id.slot < APP_MAX_CONNS) {
+                    AppConnSlot *s = &r->app->slots[conn_id.slot];
+                    if (s->active && s->generation == conn_id.generation) {
+                        conn_queue(&s->conn, &push_env);
+                        conn_flush(&s->conn);
+                    }
+                }
+            }
+        }
+        json_object_put(payload);
+    }
+
     /* Party max 2 members. If someone leaves, dissolve party */
     memset(p, 0, sizeof(*p));
+    return OK;
+}
+
+Status rooms_invite_create(Rooms *r, UserId sender_id, UserId recipient_id, const char *kind, const char *room_code, char out_invite_id[37])
+{
+    if (!r || sender_id == 0 || recipient_id == 0) return BAD_REQUEST;
+
+    uint64_t now_ms = get_now_ms();
+    int inv_slot = -1;
+    for (int i = 0; i < MAX_INVITES; i++) {
+        if (!r->invites[i].active || (now_ms > r->invites[i].created_at_ms && (now_ms - r->invites[i].created_at_ms > 30000ULL))) {
+            inv_slot = i;
+            break;
+        }
+    }
+    if (inv_slot < 0) {
+        return SERVER_FULL;
+    }
+
+    Invite *inv = &r->invites[inv_slot];
+    memset(inv, 0, sizeof(*inv));
+    inv->active = true;
+    generate_uuid(inv->invite_id);
+    inv->sender_id = sender_id;
+    inv->recipient_id = recipient_id;
+    if (kind) strncpy(inv->kind, kind, sizeof(inv->kind) - 1);
+    if (room_code) strncpy(inv->room_code, room_code, sizeof(inv->room_code) - 1);
+    inv->created_at_ms = now_ms;
+
+    if (out_invite_id) {
+        strcpy(out_invite_id, inv->invite_id);
+    }
     return OK;
 }
 
@@ -613,6 +663,10 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
 
         char code[7] = {0};
         Status st = rooms_create(r, user_id, acc.name, acc.avatar, mode, code);
+        if (st == BUSY) {
+            send_error(app, conn_id, e->id, "BUSY", "User already in a room");
+            return OK;
+        }
         if (st == SERVER_FULL) {
             send_error(app, conn_id, e->id, "SERVER_FULL", "Server room capacity reached");
             return OK;
@@ -625,8 +679,7 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
         struct json_object *resp_payload = json_object_new_object();
         json_object_object_add(resp_payload, "roomId", json_object_new_string(code));
         json_object_object_add(resp_payload, "code", json_object_new_string(code));
-        const char *m_names[] = {"classic", "2v2", "side", "draft"};
-        json_object_object_add(resp_payload, "mode", json_object_new_string(m_names[mode]));
+        json_object_object_add(resp_payload, "mode", json_object_new_string(MODE_NAMES[mode]));
         json_object_object_add(resp_payload, "seat", json_object_new_int(0));
         send_ok(app, conn_id, e->id, resp_payload);
 
@@ -644,6 +697,10 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
         const char *code = json_object_get_string(c_obj);
         Seat seat = 0;
         Status st = rooms_join(r, user_id, acc.name, acc.avatar, code, &seat);
+        if (st == BUSY) {
+            send_error(app, conn_id, e->id, "BUSY", "User already in a room");
+            return OK;
+        }
         if (st == NOT_FOUND) {
             send_error(app, conn_id, e->id, "NOT_FOUND", "Room not found");
             return OK;
@@ -712,8 +769,7 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
         }
 
         struct json_object *resp_payload = json_object_new_object();
-        const char *m_names[] = {"classic", "2v2", "side", "draft"};
-        json_object_object_add(resp_payload, "mode", json_object_new_string(m_names[mode]));
+        json_object_object_add(resp_payload, "mode", json_object_new_string(MODE_NAMES[mode]));
         send_ok(app, conn_id, e->id, resp_payload);
 
         Room *room = rooms_find_by_user(r, user_id);
@@ -730,13 +786,17 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
             return OK;
         }
         int seat_val = json_object_get_int(s_obj);
+        if (seat_val < 0 || seat_val >= ROOM_MAX_SEATS) {
+            send_error(app, conn_id, e->id, "BAD_REQUEST", "Seat must be between 0 and 3");
+            return OK;
+        }
         BotLevel level = EASY;
         if (!parse_bot_level(l_obj, &level)) {
             send_error(app, conn_id, e->id, "BAD_REQUEST", "Invalid bot level");
             return OK;
         }
 
-        Status st = rooms_set_bot(r, user_id, (Seat)seat_val, level);
+        Status st = rooms_set_bot(r, user_id, seat_val, level);
         if (st == FORBIDDEN) {
             send_error(app, conn_id, e->id, "FORBIDDEN", "Only host can configure bots");
             return OK;
@@ -768,7 +828,11 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
             return OK;
         }
         int seat_val = json_object_get_int(s_obj);
-        Status st = rooms_kick(r, user_id, (Seat)seat_val);
+        if (seat_val < 0 || seat_val >= ROOM_MAX_SEATS) {
+            send_error(app, conn_id, e->id, "BAD_REQUEST", "Seat must be between 0 and 3");
+            return OK;
+        }
+        Status st = rooms_kick(r, user_id, seat_val);
         if (st == FORBIDDEN) {
             send_error(app, conn_id, e->id, "FORBIDDEN", "Only host can kick members");
             return OK;
@@ -803,6 +867,10 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
         }
 
         Status st = rooms_start(app, room->code);
+        if (st == BUSY) {
+            send_error(app, conn_id, e->id, "BUSY", "Match engine not available");
+            return OK;
+        }
         if (st != OK) {
             send_error(app, conn_id, e->id, "INVALID_ACTION", "Cannot start room: all 4 seats must be filled");
             return OK;
@@ -880,25 +948,23 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
         }
 
         /* Create invite */
-        int inv_slot = -1;
+        char invite_id_buf[37];
+        Status inv_st = rooms_invite_create(r, user_id, target_uid, kind, room_code, invite_id_buf);
+        if (inv_st != OK) {
+            send_error(app, conn_id, e->id, "SERVER_FULL", "Too many active invites");
+            return OK;
+        }
+        Invite *inv = NULL;
         for (int i = 0; i < MAX_INVITES; i++) {
-            if (!r->invites[i].active) {
-                inv_slot = i;
+            if (r->invites[i].active && strcmp(r->invites[i].invite_id, invite_id_buf) == 0) {
+                inv = &r->invites[i];
                 break;
             }
         }
-        if (inv_slot < 0) {
-            inv_slot = 0; /* overwrite oldest */
+        if (!inv) {
+            send_error(app, conn_id, e->id, "STORAGE_ERROR", "Failed to allocate invite");
+            return OK;
         }
-
-        Invite *inv = &r->invites[inv_slot];
-        inv->active = true;
-        generate_uuid(inv->invite_id);
-        inv->sender_id = user_id;
-        inv->recipient_id = target_uid;
-        strncpy(inv->kind, kind, sizeof(inv->kind) - 1);
-        strncpy(inv->room_code, room_code, sizeof(inv->room_code) - 1);
-        inv->created_at_ms = get_now_ms();
 
         /* Push INVITE to recipient */
         struct json_object *push_payload = json_object_new_object();
@@ -969,8 +1035,16 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
 
         /* Accept invite */
         if (strcasecmp(inv->kind, "room") == 0) {
+            if (rooms_find_by_user(r, user_id) != NULL) {
+                send_error(app, conn_id, e->id, "BUSY", "Already in a room");
+                return OK;
+            }
             Seat seat = 0;
             Status st = rooms_join(r, user_id, acc.name, acc.avatar, inv->room_code, &seat);
+            if (st == BUSY) {
+                send_error(app, conn_id, e->id, "BUSY", "Already in a room");
+                return OK;
+            }
             if (st == NOT_FOUND) {
                 inv->active = false;
                 send_error(app, conn_id, e->id, "NOT_FOUND", "Room not found");
@@ -1002,6 +1076,10 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
             return OK;
         } else {
             /* Party invite accepted */
+            if (party_find_by_user(r, user_id) != NULL) {
+                send_error(app, conn_id, e->id, "BUSY", "Already in a party");
+                return OK;
+            }
             Party *p = party_find_by_user(r, inv->sender_id);
             if (!p) {
                 /* Create new party */

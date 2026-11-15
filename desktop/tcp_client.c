@@ -10,11 +10,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-struct Client {
-    Conn conn;
-    bool connected;
-};
-
 Status client_connect(Client **out, const char *host, uint16_t port)
 {
     if (!out || !host || port == 0) return BAD_REQUEST;
@@ -90,43 +85,28 @@ Status client_send(Client *client, const Envelope *e)
     if (!client || !client->connected || client->conn.fd < 0 || !e) return BAD_REQUEST;
     Status s = conn_queue(&client->conn, e);
     if (s != OK) return s;
-    return conn_flush(&client->conn);
+    Status ret = conn_flush(&client->conn);
+    if (client->on_pending_cb) {
+        client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
+    }
+    return ret;
 }
 
-Status client_poll(Client *client, FrameCallback cb, void *ctx, int timeout_ms)
+Status client_flush(Client *client)
 {
     if (!client || !client->connected || client->conn.fd < 0) return BAD_REQUEST;
-
-    struct pollfd pfd;
-    pfd.fd = client->conn.fd;
-    pfd.events = POLLIN;
-    pfd.revents = 0;
-    if (client->conn.out_len > client->conn.out_pos) {
-        pfd.events |= POLLOUT;
+    Status s = conn_flush(&client->conn);
+    if (client->on_pending_cb) {
+        client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
     }
+    return s;
+}
 
-    int ret = poll(&pfd, 1, timeout_ms);
-    if (ret < 0) {
-        if (errno == EINTR) return OK;
-        return BAD_REQUEST;
-    }
-    if (ret == 0) return OK;
-
-    if (pfd.revents & POLLOUT) {
-        Status s = conn_flush(&client->conn);
-        if (s != OK) return s;
-    }
-
-    if (pfd.revents & POLLIN) {
-        Status s = conn_read(&client->conn, cb, ctx);
-        if (s != OK) return s;
-    }
-
-    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-        if (client->conn.closing) return BAD_REQUEST;
-    }
-
-    return OK;
+void client_set_pending_callback(Client *client, ClientPendingCallback cb, void *ctx)
+{
+    if (!client) return;
+    client->on_pending_cb = cb;
+    client->pending_ctx = ctx;
 }
 
 Status client_read(Client *client, FrameCallback cb, void *ctx)

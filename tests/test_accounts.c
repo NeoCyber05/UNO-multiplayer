@@ -216,6 +216,68 @@ static void test_session_lifecycle(void)
     free(app);
 }
 
+static void test_token_24h_expiration(void)
+{
+    App *app = calloc(1, sizeof(App));
+    assert(app != NULL);
+    assert(app_init(app, "127.0.0.1", 0, ":memory:", 5) == OK);
+
+    app->slots[0].active = true;
+    app->slots[0].generation = 1;
+    ConnId conn1 = {0, 1};
+
+    char token1[65];
+    accounts_generate_token(token1);
+    assert(sessions_bind(app, conn1, 42, token1) == OK);
+
+    /* Find the session entry for token1 */
+    int session_idx = -1;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (app->sessions->entries[i].in_use && strcmp(app->sessions->entries[i].token, token1) == 0) {
+            session_idx = i;
+            break;
+        }
+    }
+    assert(session_idx >= 0);
+
+    /* Disconnect conn1 */
+    sessions_disconnect(app, conn1);
+
+    /* Setup conn2 to attempt resume */
+    app->slots[1].active = true;
+    app->slots[1].generation = 1;
+    ConnId conn2 = {1, 1};
+
+    /* 1. Test within 24h (23 hours ago) */
+    uint64_t now = app->sessions->entries[session_idx].created_at_ms;
+    app->sessions->entries[session_idx].created_at_ms = now - 23ULL * 3600ULL * 1000ULL;
+
+    assert(sessions_resume(app, conn2, token1) == OK);
+    UserId out_uid = 0;
+    assert(sessions_user(app, conn2, &out_uid) == OK);
+    assert(out_uid == 42);
+
+    /* Disconnect conn2 */
+    sessions_disconnect(app, conn2);
+
+    /* Setup conn3 to attempt resume */
+    app->slots[2].active = true;
+    app->slots[2].generation = 1;
+    ConnId conn3 = {2, 1};
+
+    /* 2. Test over 24h (24 hours and 1 second ago) */
+    now = app->sessions->entries[session_idx].created_at_ms;
+    app->sessions->entries[session_idx].created_at_ms = now - 24ULL * 3600ULL * 1000ULL - 1000ULL;
+
+    assert(sessions_resume(app, conn3, token1) == UNAUTHENTICATED);
+    /* Verify slot is cleared */
+    assert(app->sessions->entries[session_idx].in_use == false);
+    assert(sessions_user(app, conn3, &out_uid) == UNAUTHENTICATED);
+
+    app_cleanup(app);
+    free(app);
+}
+
 int main(void)
 {
     test_email_validation();
@@ -225,6 +287,7 @@ int main(void)
     test_token_generation();
     test_tag_generation();
     test_session_lifecycle();
+    test_token_24h_expiration();
 
     puts("accounts: OK");
     return 0;

@@ -17,6 +17,7 @@ void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx);
 Status bridge_init(WebKitWebView *web_view, Client *client);
 Status bridge_dispatch(Client *client, const char *json_str, size_t len);
 void bridge_emit(WebKitWebView *web_view, const Envelope *e);
+char *bridge_format_emit_script(const Envelope *e);
 
 Status bridge_resolve_path(const char *assets_dir, const char *uri, char *out_path, size_t max_len);
 const char *bridge_mime_type(const char *path);

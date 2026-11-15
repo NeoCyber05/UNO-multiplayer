@@ -37,28 +37,37 @@ static bool is_whitelisted_type(const char *type)
     static const char *const whitelist[] = {
         "HELLO",
         "PING",
-        "SPIKE_DONE",
-        "AUTH_REGISTER",
-        "AUTH_LOGIN",
-        "AUTH_GUEST",
-        "AUTH_LOGOUT",
+        "RESUME",
+        "LOGOUT",
+        "REGISTER",
+        "LOGIN",
         "PROFILE_GET",
         "PROFILE_UPDATE",
+        "LOBBY_GET",
+        "FRIEND_REQUEST",
+        "FRIEND_REPLY",
+        "FRIEND_LIST",
+        "LEADERBOARD_GET",
         "ROOM_CREATE",
         "ROOM_JOIN",
         "ROOM_LEAVE",
         "ROOM_BOT",
         "ROOM_KICK",
+        "ROOM_MODE",
         "ROOM_START",
         "INVITE_SEND",
-        "INVITE_RESPOND",
-        "PARTY_INVITE",
+        "INVITE_REPLY",
         "PARTY_LEAVE",
-        "GAME_ACTION",
-        "MATCH_CONFIRM",
-        "REMATCH_REQUEST",
-        "MATCH_SURRENDER",
-        "CHAT_SEND",
+        "QUEUE_JOIN",
+        "QUEUE_LEAVE",
+        "PLAY",
+        "DRAW",
+        "PASS",
+        "SAY_UNO",
+        "DRAFT_PICK",
+        "MATCH_LEAVE",
+        "CHAT",
+        "SPIKE_DONE",
         NULL
     };
     for (int i = 0; whitelist[i] != NULL; i++) {
@@ -152,27 +161,48 @@ Status bridge_dispatch(Client *client, const char *json_str, size_t len)
     return s;
 }
 
-void bridge_emit(WebKitWebView *web_view, const Envelope *e)
+char *bridge_format_emit_script(const Envelope *e)
 {
-    if (!web_view || !e) return;
+    if (!e) return NULL;
 
     struct json_object *root = json_object_new_object();
-    if (!root) return;
+    if (!root) return NULL;
 
     json_object_object_add(root, "v", json_object_new_int(e->v));
     json_object_object_add(root, "id", json_object_new_int(e->id));
     json_object_object_add(root, "type", json_object_new_string(e->type ? e->type : ""));
 
-    if (e->payload) {
-        json_object_get(e->payload);
-        json_object_object_add(root, "payload", e->payload);
+    struct json_object *payload_to_emit = NULL;
+    if (e->payload && json_object_is_type(e->payload, json_type_object)) {
+        if (json_object_object_get(e->payload, "token")) {
+            payload_to_emit = json_object_new_object();
+            json_object_object_foreach(e->payload, key, val) {
+                if (strcmp(key, "token") != 0) {
+                    json_object_get(val);
+                    json_object_object_add(payload_to_emit, key, val);
+                }
+            }
+        } else {
+            json_object_get(e->payload);
+            payload_to_emit = e->payload;
+        }
     } else {
-        json_object_object_add(root, "payload", json_object_new_object());
+        payload_to_emit = json_object_new_object();
     }
+    json_object_object_add(root, "payload", payload_to_emit);
 
     const char *json_str = json_object_to_json_string(root);
-    gchar *script = g_strdup_printf("window.dispatchEvent(new CustomEvent('uno:message', {detail: %s}));", json_str);
+    gchar *script = g_strdup_printf("window.dispatchEvent(new CustomEvent('uno:message', {detail: %s}));", json_str ? json_str : "{}");
     json_object_put(root);
+    return script;
+}
+
+void bridge_emit(WebKitWebView *web_view, const Envelope *e)
+{
+    if (!web_view || !e) return;
+
+    gchar *script = bridge_format_emit_script(e);
+    if (!script) return;
 
     webkit_web_view_evaluate_javascript(web_view, script, -1, NULL, NULL, NULL, NULL, NULL);
     g_free(script);
@@ -296,19 +326,6 @@ static void on_uri_scheme_request(WebKitURISchemeRequest *request, gpointer user
         webkit_uri_scheme_request_finish_error(request, err);
         g_error_free(err);
         return;
-    }
-
-    /* Fallback: if index.html requested but does not exist, check if spike_test.html exists */
-    if (access(file_path, R_OK) != 0) {
-        const char *base = strrchr(file_path, '/');
-        if (base && strcmp(base + 1, "index.html") == 0) {
-            char alt_path[512];
-            snprintf(alt_path, sizeof(alt_path), "%s/spike_test.html", assets_dir);
-            if (access(alt_path, R_OK) == 0) {
-                strncpy(file_path, alt_path, sizeof(file_path) - 1);
-                file_path[sizeof(file_path) - 1] = '\0';
-            }
-        }
     }
 
     GFile *file = g_file_new_for_path(file_path);

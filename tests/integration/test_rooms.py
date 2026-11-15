@@ -198,5 +198,84 @@ class TestRooms(unittest.TestCase):
                 client_b.close()
                 client_c.close()
 
+    def test_race_for_last_seat(self):
+        with ServerProcess(auth_limit=50) as server:
+            host, uid_h = register_and_login(server, "host_race@test.com", "HostRace", "fox")
+            c1, uid_1 = register_and_login(server, "joiner1@test.com", "Joiner1", "bear")
+            c2, uid_2 = register_and_login(server, "joiner2@test.com", "Joiner2", "cat")
+            try:
+                # Host creates room
+                resp = host.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(resp["type"], "OK")
+                code = resp["payload"].get("code") or resp["payload"].get("roomId")
+
+                # Host fills seat 1 and seat 2 with bots
+                resp_b1 = host.request("ROOM_BOT", {"seat": 1, "level": "easy"})
+                self.assertEqual(resp_b1["type"], "OK")
+                resp_b2 = host.request("ROOM_BOT", {"seat": 2, "level": "normal"})
+                self.assertEqual(resp_b2["type"], "OK")
+
+                # Room now has 3 players: seat 0 (host), seat 1 (bot), seat 2 (bot).
+                # Exactly 1 empty seat remains (seat 3).
+                import concurrent.futures
+                def do_join(c):
+                    return c.request("ROOM_JOIN", {"code": code})
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    f1 = executor.submit(do_join, c1)
+                    f2 = executor.submit(do_join, c2)
+                    r1 = f1.result()
+                    r2 = f2.result()
+
+                results = [r1, r2]
+                ok_count = sum(1 for r in results if r.get("type") == "OK")
+                full_count = sum(1 for r in results if is_error(r, "ROOM_FULL"))
+
+                self.assertEqual(ok_count, 1, f"Expected exactly 1 OK, got {results}")
+                self.assertEqual(full_count, 1, f"Expected exactly 1 ROOM_FULL, got {results}")
+
+                ok_resp = next(r for r in results if r.get("type") == "OK")
+                self.assertEqual(ok_resp["payload"]["seat"], 3)
+            finally:
+                host.close()
+                c1.close()
+                c2.close()
+
+    def test_party_leave_broadcast(self):
+        with ServerProcess(auth_limit=50) as server:
+            client_a, uid_a = register_and_login(server, "pa@test.com", "PartyA", "fox")
+            client_b, uid_b = register_and_login(server, "pb@test.com", "PartyB", "bear")
+            try:
+                # A invites B to party
+                resp_inv = client_a.request("INVITE_SEND", {"userId": uid_b, "kind": "party"})
+                self.assertEqual(resp_inv["type"], "OK")
+                inv_id = resp_inv["payload"]["inviteId"]
+
+                push_inv = recv_until_type(client_b, "INVITE")
+                self.assertEqual(push_inv["payload"]["inviteId"], inv_id)
+
+                # B accepts
+                resp_reply = client_b.request("INVITE_REPLY", {"inviteId": inv_id, "accept": True})
+                self.assertEqual(resp_reply["type"], "OK")
+
+                # Both receive PARTY_STATE with 2 members
+                pstate_a = recv_until_type(client_a, "PARTY_STATE")
+                pstate_b = recv_until_type(client_b, "PARTY_STATE")
+                self.assertEqual(len(pstate_a["payload"]["members"]), 2)
+                self.assertEqual(len(pstate_b["payload"]["members"]), 2)
+
+                # B leaves party
+                resp_leave = client_b.request("PARTY_LEAVE", {})
+                self.assertEqual(resp_leave["type"], "OK")
+
+                # Both receive disbanded PARTY_STATE with empty members
+                pstate_leave_a = recv_until_type(client_a, "PARTY_STATE")
+                pstate_leave_b = recv_until_type(client_b, "PARTY_STATE")
+                self.assertEqual(len(pstate_leave_a["payload"]["members"]), 0)
+                self.assertEqual(len(pstate_leave_b["payload"]["members"]), 0)
+            finally:
+                client_a.close()
+                client_b.close()
+
 if __name__ == "__main__":
     unittest.main()

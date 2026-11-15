@@ -35,7 +35,32 @@ typedef struct {
     uint32_t generation;
 } FrameContext;
 
-static void app_close_slot(App *app, int slot_idx)
+static uint64_t get_monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms)
+{
+    if (!slot) return false;
+    if (now_ms > slot->rate_last_ms) {
+        uint64_t elapsed = now_ms - slot->rate_last_ms;
+        slot->rate_tokens += (double)elapsed * 0.03;
+        if (slot->rate_tokens > 60.0) {
+            slot->rate_tokens = 60.0;
+        }
+        slot->rate_last_ms = now_ms;
+    }
+    if (slot->rate_tokens < 1.0) {
+        return false;
+    }
+    slot->rate_tokens -= 1.0;
+    return true;
+}
+
+void app_close_slot(App *app, int slot_idx)
 {
     if (slot_idx < 0 || slot_idx >= APP_MAX_CONNS) return;
     AppConnSlot *s = &app->slots[slot_idx];
@@ -52,6 +77,8 @@ static void app_close_slot(App *app, int slot_idx)
     s->active = false;
     s->generation++;
     s->client_ip[0] = '\0';
+    s->rate_last_ms = 0;
+    s->rate_tokens = 0.0;
 }
 
 static Status app_on_frame(const Envelope *e, void *ctx)
@@ -62,6 +89,18 @@ static Status app_on_frame(const Envelope *e, void *ctx)
     AppConnSlot *slot = &app->slots[fc->slot_idx];
     if (!slot->active || slot->generation != fc->generation) {
         return BAD_REQUEST;
+    }
+
+    uint64_t now_ms = get_monotonic_ms();
+    if (!app_conn_check_rate_limit(slot, now_ms)) {
+        struct json_object *payload = json_object_new_object();
+        json_object_object_add(payload, "code", json_object_new_string("RATE_LIMITED"));
+        json_object_object_add(payload, "message", json_object_new_string("Too many requests"));
+        Envelope resp = {1, e->id, "ERROR", payload};
+        conn_queue(&slot->conn, &resp);
+        json_object_put(payload);
+        conn_flush(&slot->conn);
+        return OK;
     }
 
     if (strcmp(e->type, "HELLO") == 0) {
@@ -152,10 +191,6 @@ Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_pat
         app->auth_pipe_write = pfd[1];
 
         auth_worker_init(&app->auth_worker, app->auth_pipe_write);
-    }
-
-    if (!app->store) {
-        store_open(&app->store, app->db_path);
     }
 
     signal(SIGPIPE, SIG_IGN);
@@ -314,7 +349,6 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
         if (pfd[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             auth_drain(app);
         }
-        auth_drain(app);
 
         /* Check listening socket */
         if (pfd[0].revents & POLLIN) {
@@ -338,13 +372,16 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
 
                 if (free_slot < 0) {
                     /* Server capacity reached: reject client */
-                    Envelope full_env = {1, 0, "SERVER_FULL", json_object_new_object()};
-                    uint8_t out[128];
+                    struct json_object *payload = json_object_new_object();
+                    json_object_object_add(payload, "code", json_object_new_string("SERVER_FULL"));
+                    json_object_object_add(payload, "message", json_object_new_string("Server connection limit reached"));
+                    Envelope full_env = {1, 0, "ERROR", payload};
+                    uint8_t out[256];
                     size_t written = 0;
                     if (frame_encode(&full_env, out, sizeof(out), &written) == OK) {
                         send(cfd, out, written, MSG_NOSIGNAL);
                     }
-                    json_object_put(full_env.payload);
+                    json_object_put(payload);
                     close(cfd);
                     continue;
                 }
@@ -353,6 +390,8 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
                 slot->active = true;
                 slot->generation++;
                 inet_ntop(AF_INET, &client_addr.sin_addr, slot->client_ip, sizeof(slot->client_ip));
+                slot->rate_last_ms = get_monotonic_ms();
+                slot->rate_tokens = 60.0;
                 conn_init(&slot->conn, cfd, (uint32_t)free_slot, slot->generation);
             }
         }
@@ -388,6 +427,13 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
 
         /* Drain auth after handling any new client requests */
         auth_drain(app);
+
+        /* Teardown slow peers immediately */
+        for (int i = 0; i < APP_MAX_CONNS; i++) {
+            if (app->slots[i].active && app->slots[i].conn.closing) {
+                app_close_slot(app, i);
+            }
+        }
     }
 
     app_cleanup(app);

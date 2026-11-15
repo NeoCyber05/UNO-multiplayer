@@ -9,6 +9,32 @@
 
 static Client *g_client = NULL;
 static WebKitWebView *g_web_view = NULL;
+static GIOChannel *g_io_channel = NULL;
+static guint g_io_watch_id = 0;
+
+static gboolean on_socket_io(GIOChannel *source, GIOCondition condition, gpointer data);
+
+static void update_socket_watch(void)
+{
+    if (g_io_watch_id > 0) {
+        g_source_remove(g_io_watch_id);
+        g_io_watch_id = 0;
+    }
+    if (!g_io_channel || !g_client) return;
+
+    GIOCondition cond = G_IO_IN | G_IO_HUP | G_IO_ERR;
+    if (g_client->conn.out_len > g_client->conn.out_pos) {
+        cond |= G_IO_OUT;
+    }
+    g_io_watch_id = g_io_add_watch(g_io_channel, cond, on_socket_io, g_web_view);
+}
+
+static void on_client_pending_write(void *ctx, bool has_pending)
+{
+    (void)ctx;
+    (void)has_pending;
+    update_socket_watch();
+}
 
 static Status on_client_frame(const Envelope *e, void *ctx)
 {
@@ -30,12 +56,48 @@ static gboolean on_socket_io(GIOChannel *source, GIOCondition condition, gpointe
         }
     }
 
+    if (condition & G_IO_OUT) {
+        Status s = conn_flush(&g_client->conn);
+        if (s != OK) {
+            gtk_main_quit();
+            return G_SOURCE_REMOVE;
+        }
+        if (g_client->conn.out_len == g_client->conn.out_pos) {
+            update_socket_watch();
+            return G_SOURCE_REMOVE;
+        }
+    }
+
     if (condition & (G_IO_HUP | G_IO_ERR)) {
         gtk_main_quit();
         return G_SOURCE_REMOVE;
     }
 
     return G_SOURCE_CONTINUE;
+}
+
+static gboolean on_decide_policy(WebKitWebView *web_view,
+                                 WebKitPolicyDecision *decision,
+                                 WebKitPolicyDecisionType type,
+                                 gpointer user_data)
+{
+    (void)web_view;
+    (void)user_data;
+
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION ||
+        type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        WebKitNavigationPolicyDecision *nav_decision = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+        WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(nav_decision);
+        WebKitURIRequest *req = webkit_navigation_action_get_request(action);
+        const char *uri = req ? webkit_uri_request_get_uri(req) : NULL;
+
+        if (!uri || (strncmp(uri, "uno://app/", 10) != 0 && strcmp(uri, "uno://app") != 0)) {
+            webkit_policy_decision_ignore(decision);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static void on_spike_done(void *ctx)
@@ -59,7 +121,7 @@ int main(int argc, char *argv[])
     uint16_t port = 9090;
     const char *assets = "./client/dist";
     const char *uri = "uno://app/index.html";
-    int timeout_sec = 10;
+    int timeout_sec = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
@@ -68,16 +130,9 @@ int main(int argc, char *argv[])
             port = (uint16_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--assets") == 0 && i + 1 < argc) {
             assets = argv[++i];
-        } else if (strcmp(argv[i], "--uri") == 0 && i + 1 < argc) {
-            uri = argv[++i];
         } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
             timeout_sec = atoi(argv[++i]);
         }
-    }
-
-    const char *env_uri = getenv("UNO_URI");
-    if (env_uri && *env_uri) {
-        uri = env_uri;
     }
 
     bridge_set_assets_dir(assets);
@@ -98,6 +153,7 @@ int main(int argc, char *argv[])
 
     GtkWidget *view_widget = webkit_web_view_new();
     g_web_view = WEBKIT_WEB_VIEW(view_widget);
+    g_signal_connect(g_web_view, "decide-policy", G_CALLBACK(on_decide_policy), NULL);
     gtk_container_add(GTK_CONTAINER(window), view_widget);
 
     st = bridge_init(g_web_view, g_client);
@@ -108,11 +164,11 @@ int main(int argc, char *argv[])
     }
 
     int fd = client_fd(g_client);
-    GIOChannel *channel = g_io_channel_unix_new(fd);
-    g_io_channel_set_encoding(channel, NULL, NULL);
-    g_io_channel_set_buffered(channel, FALSE);
-    g_io_add_watch(channel, G_IO_IN | G_IO_HUP | G_IO_ERR, on_socket_io, g_web_view);
-    g_io_channel_unref(channel);
+    g_io_channel = g_io_channel_unix_new(fd);
+    g_io_channel_set_encoding(g_io_channel, NULL, NULL);
+    g_io_channel_set_buffered(g_io_channel, FALSE);
+    client_set_pending_callback(g_client, on_client_pending_write, NULL);
+    update_socket_watch();
 
     if (timeout_sec > 0) {
         g_timeout_add_seconds(timeout_sec, on_timeout, NULL);
@@ -122,6 +178,15 @@ int main(int argc, char *argv[])
     gtk_widget_show_all(window);
 
     gtk_main();
+
+    if (g_io_watch_id > 0) {
+        g_source_remove(g_io_watch_id);
+        g_io_watch_id = 0;
+    }
+    if (g_io_channel) {
+        g_io_channel_unref(g_io_channel);
+        g_io_channel = NULL;
+    }
 
     client_close(g_client);
     g_client = NULL;

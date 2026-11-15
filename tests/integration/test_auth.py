@@ -1,5 +1,8 @@
 import json
+import os
+import sqlite3
 import struct
+import tempfile
 import threading
 import time
 import unittest
@@ -160,6 +163,76 @@ class TestAuth(unittest.TestCase):
                 self.assertEqual(resp2["type"], "OK")
             finally:
                 c2.close()
+
+    def test_new_login_disconnects_old_connection(self):
+        with ServerProcess(auth_limit=50) as server:
+            # Register user
+            with WireClient("127.0.0.1", server.port) as reg_client:
+                resp = reg_client.request("REGISTER", {
+                    "email": "multilogin@example.com",
+                    "password": "password123",
+                    "name": "Multi",
+                    "avatar": "fox"
+                })
+                self.assertEqual(resp["type"], "OK")
+
+            # Client A connects and logs in
+            client_a = WireClient("127.0.0.1", server.port)
+            resp_a = client_a.request("LOGIN", {
+                "email": "multilogin@example.com",
+                "password": "password123"
+            })
+            self.assertEqual(resp_a["type"], "OK")
+            self.assertIn("token", resp_a["payload"])
+
+            # Client B connects and logs in with the same account
+            client_b = WireClient("127.0.0.1", server.port)
+            resp_b = client_b.request("LOGIN", {
+                "email": "multilogin@example.com",
+                "password": "password123"
+            })
+            self.assertEqual(resp_b["type"], "OK")
+            self.assertIn("token", resp_b["payload"])
+
+            # Client A socket should be closed by server (reads EOF)
+            time.sleep(0.1)
+            try:
+                data = client_a.sock.recv(4096)
+                self.assertEqual(data, b"", f"Expected EOF on Client A socket, got {data}")
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+            finally:
+                client_a.close()
+                client_b.close()
+
+    def test_register_db_error_reports_storage_error(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+
+        try:
+            with ServerProcess(db=db_path, auth_limit=50) as server:
+                # Open sqlite connection to the db and lock it exclusively
+                db_conn = sqlite3.connect(db_path, timeout=0.1)
+                try:
+                    db_conn.execute("BEGIN EXCLUSIVE")
+                    with WireClient("127.0.0.1", server.port) as client:
+                        resp = client.request("REGISTER", {
+                            "email": "dberror@example.com",
+                            "password": "password123",
+                            "name": "DbError",
+                            "avatar": "fox"
+                        }, timeout=3.0)
+                        self.assertEqual(resp["type"], "ERROR")
+                        self.assertEqual(resp.get("payload", {}).get("code"), "STORAGE_ERROR")
+                finally:
+                    db_conn.rollback()
+                    db_conn.close()
+        finally:
+            if os.path.exists(db_path):
+                try:
+                    os.remove(db_path)
+                except OSError:
+                    pass
 
 if __name__ == "__main__":
     unittest.main()

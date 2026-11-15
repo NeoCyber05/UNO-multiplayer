@@ -112,9 +112,66 @@ static void test_mime_types(void)
     assert(strcmp(bridge_mime_type("unknown.xyz"), "application/octet-stream") == 0);
 }
 
+static void test_bridge_opcode_whitelist(void)
+{
+    /* Valid spec §3 opcodes (+ SPIKE_DONE for smoke test) must return OK */
+    static const char *const valid_opcodes[] = {
+        "LOGIN", "REGISTER", "ROOM_MODE", "LOGOUT", "QUEUE_JOIN",
+        "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "CHAT",
+        "HELLO", "PING", "RESUME", "PROFILE_GET", "PROFILE_UPDATE",
+        "LOBBY_GET", "FRIEND_REQUEST", "FRIEND_REPLY", "FRIEND_LIST",
+        "LEADERBOARD_GET", "ROOM_CREATE", "ROOM_JOIN", "ROOM_LEAVE",
+        "ROOM_BOT", "ROOM_KICK", "ROOM_START", "INVITE_SEND",
+        "INVITE_REPLY", "PARTY_LEAVE", "QUEUE_LEAVE", "MATCH_LEAVE",
+        "SPIKE_DONE", NULL
+    };
+
+    char buf[256];
+    for (int i = 0; valid_opcodes[i] != NULL; i++) {
+        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}", i + 1, valid_opcodes[i]);
+        assert(bridge_dispatch(NULL, buf, strlen(buf)) == OK);
+    }
+
+    /* Invalid or obsolete opcodes must return BAD_REQUEST */
+    static const char *const invalid_opcodes[] = {
+        "AUTH_LOGIN", "AUTH_REGISTER", "AUTH_GUEST", "AUTH_LOGOUT",
+        "INVITE_RESPOND", "GAME_ACTION", "PARTY_INVITE", "MATCH_CONFIRM",
+        "REMATCH_REQUEST", "MATCH_SURRENDER", "CHAT_SEND", NULL
+    };
+
+    for (int i = 0; invalid_opcodes[i] != NULL; i++) {
+        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}", i + 100, invalid_opcodes[i]);
+        assert(bridge_dispatch(NULL, buf, strlen(buf)) == BAD_REQUEST);
+    }
+}
+
+static void test_bridge_emit_strips_token(void)
+{
+    struct json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "token", json_object_new_string("secret_token_123"));
+    json_object_object_add(payload, "user", json_object_new_string("alice"));
+
+    Envelope e;
+    e.v = 1;
+    e.id = 42;
+    e.type = "OK";
+    e.payload = payload;
+
+    char *script = bridge_format_emit_script(&e);
+    assert(script != NULL);
+    assert(strstr(script, "secret_token_123") == NULL);
+    assert(strstr(script, "\"token\"") == NULL);
+    assert(strstr(script, "alice") != NULL);
+
+    g_free(script);
+    json_object_put(payload);
+}
+
 int main(void)
 {
     test_bridge_dispatch_validation();
+    test_bridge_opcode_whitelist();
+    test_bridge_emit_strips_token();
     test_scheme_path_traversal();
     test_mime_types();
     printf("bridge: OK\n");

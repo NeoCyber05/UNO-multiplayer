@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "auth_worker.h"
+#include "accounts.h"
 #include <errno.h>
 #include <pthread.h>
 #include <sodium.h>
@@ -77,9 +78,7 @@ static void *auth_worker_thread(void *arg)
                     res.account = job.account;
 
                     /* Generate secure 32-byte token and hex encode */
-                    unsigned char token_bytes[32];
-                    randombytes_buf(token_bytes, sizeof(token_bytes));
-                    sodium_bin2hex(res.token, sizeof(res.token), token_bytes, sizeof(token_bytes));
+                    accounts_generate_token(res.token);
                 } else {
                     res.status = UNAUTHENTICATED;
                 }

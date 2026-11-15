@@ -12,22 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX_SESSIONS 256
 #define MAX_RATE_LIMIT_IPS 256
 #define MAX_TIMESTAMPS_PER_IP 128
-
-typedef struct {
-    bool in_use;
-    UserId user_id;
-    char token[65];
-    ConnId conn_id;
-    bool connected;
-    uint64_t created_at_ms;
-} SessionEntry;
-
-struct Sessions {
-    SessionEntry entries[MAX_SESSIONS];
-};
 
 typedef struct {
     char ip[64];
@@ -40,11 +26,17 @@ struct RateLimiter {
     IpRateEntry entries[MAX_RATE_LIMIT_IPS];
 };
 
-static uint64_t get_now_ms(void)
+uint64_t accounts_get_now_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    const uint64_t base_offset_ms = 100ULL * 24ULL * 3600ULL * 1000ULL;
+    return base_offset_ms + (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+static uint64_t get_now_ms(void)
+{
+    return accounts_get_now_ms();
 }
 
 /* -------------------- Validation Functions -------------------- */
@@ -310,6 +302,11 @@ Status sessions_resume(App *app, ConnId conn_id, const char *token)
     Sessions *s = app->sessions;
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         if (s->entries[i].in_use && strcmp(s->entries[i].token, token) == 0) {
+            uint64_t now = get_now_ms();
+            if (now > s->entries[i].created_at_ms && (now - s->entries[i].created_at_ms) > 24ULL * 3600ULL * 1000ULL) {
+                memset(&s->entries[i], 0, sizeof(s->entries[i]));
+                return UNAUTHENTICATED;
+            }
             /* Found matching session. Reassign to new conn_id */
             s->entries[i].conn_id = conn_id;
             s->entries[i].connected = true;
@@ -615,14 +612,24 @@ void auth_drain(App *app)
                     conn_queue(&slot->conn, &resp);
                     json_object_put(payload);
                     conn_flush(&slot->conn);
-                } else {
+                } else if (st == BAD_REQUEST) {
                     accounts_send_error(app, slot_idx, res.req_id, "BAD_REQUEST", "Email already registered");
+                } else {
+                    accounts_send_error(app, slot_idx, res.req_id, "STORAGE_ERROR", "Database storage failure");
                 }
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "STORAGE_ERROR", "Password hashing failed");
             }
         } else if (res.kind == AUTH_LOGIN) {
             if (res.status == OK) {
+                /* Disconnect any existing connection for this user */
+                ConnId old_conn;
+                if (sessions_find_conn(app, res.user_id, &old_conn) == OK) {
+                    if (old_conn.slot != res.conn_id.slot && old_conn.slot < APP_MAX_CONNS) {
+                        app_close_slot(app, old_conn.slot);
+                    }
+                }
+
                 /* Bind session to current connection */
                 sessions_bind(app, res.conn_id, res.user_id, res.token);
 

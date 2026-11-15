@@ -59,12 +59,30 @@ typedef struct {
     PlayerResult players[4];
 } MatchResult;
 
+typedef enum {
+    BADGE_FIRST_WIN  = 1u << 0, /* wins >= 1 */
+    BADGE_WIN_100    = 1u << 1, /* wins >= 100 */
+    BADGE_STREAK_10  = 1u << 2, /* bestStreak >= 10 */
+    BADGE_PLUS4      = 1u << 3, /* plus4 >= 50 */
+    BADGE_UNO_MASTER = 1u << 4, /* unoCalls >= 300 */
+    BADGE_TEAM       = 1u << 5, /* teamWins >= 50 */
+    BADGE_MATCHES    = 1u << 6, /* matches >= 500 */
+    BADGE_DIAMOND    = 1u << 7  /* peakElo >= 1800 */
+} BadgeBit;
+
 typedef struct {
-    uint32_t matches, wins, plus4, unoCalls, teamWins;
-    uint32_t streak, bestStreak, peakElo;
-    struct {
-        uint32_t firstWin, win100, streak10, plus4, unoMaster, team, matches500, diamond;
-    } badges;
+    uint32_t matches, wins, teamWins, plus4, unoCalls;
+    int32_t  streak;      /* >0 chuỗi thắng, <0 chuỗi thua */
+    uint32_t bestStreak;
+    int32_t  peakElo;
+} ProfileStats;
+
+typedef struct {
+    struct { uint32_t matches, wins, teamWins, plus4, unoCalls; } add; /* cộng dồn */
+    int32_t  streak;      /* giá trị MỚI, ghi đè */
+    uint32_t bestStreak;  /* giá trị MỚI, ghi đè */
+    int32_t  peakElo;     /* giá trị MỚI, ghi đè */
+    uint32_t unlocked;    /* BadgeBit mở lần đầu trong trận này */
 } ProfileDelta;
 
 typedef struct Store Store;
