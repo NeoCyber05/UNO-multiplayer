@@ -840,9 +840,113 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     cleanup_file(db_path);
 }
 
+static int db_query_int(sqlite3 *db, const char *sql)
+{
+    sqlite3_stmt *stmt = NULL;
+    assert(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    int v = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    return v;
+}
+
+static void test_upgrade_from_v1_database(void)
+{
+    const char *db_path = "/tmp/test_uno_store_upgrade_v1.db";
+    cleanup_file(db_path);
+
+    /* Build a v1-shaped file: an existing account, the old key/progress
+     * achievements table, no profile_stats rows and user_version 0. */
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.email, "legacy@test.com", sizeof(c.email) - 1);
+    strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+    strncpy(c.name, "Legacy", sizeof(c.name) - 1);
+    strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
+    UserId uid = 0;
+    assert(store_account_create(s, &c, &uid) == OK);
+    sqlite3 *db = store_get_db(s);
+    assert(sqlite3_exec(db,
+                        "UPDATE accounts SET elo = 1620 WHERE id = 1;"
+                        "DELETE FROM profile_stats;"
+                        "DROP TABLE achievements;"
+                        "CREATE TABLE achievements (user_id INTEGER NOT NULL, key TEXT NOT NULL,"
+                        " progress INTEGER NOT NULL DEFAULT 0, unlocked_at INTEGER NOT NULL DEFAULT 0,"
+                        " PRIMARY KEY (user_id, key));"
+                        "INSERT INTO achievements (user_id, key, progress) VALUES (1, 'wins', 3);"
+                        "PRAGMA user_version = 0;",
+                        NULL, NULL, NULL) == SQLITE_OK);
+    store_close(s);
+
+    /* Reopening must upgrade instead of failing to prepare statements. */
+    s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    db = store_get_db(s);
+    assert(db_query_int(db, "PRAGMA user_version;") == 2);
+    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'badge';") == 1);
+    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'key';") == 0);
+
+    ProfileStats stats;
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.matches == 0);
+    assert(stats.peakElo == 1620);
+    store_close(s);
+
+    /* A second open of a v2 file is a no-op and keeps data. */
+    s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(stats.peakElo == 1620);
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_account_create_is_atomic(void)
+{
+    const char *db_path = "/tmp/test_uno_account_atomic.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    /* Make the profile_stats insert fail after the account insert succeeded. */
+    assert(sqlite3_exec(db,
+                        "CREATE TEMP TRIGGER fail_profile BEFORE INSERT ON profile_stats "
+                        "BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+                        NULL, NULL, NULL) == SQLITE_OK);
+
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.email, "atomic@test.com", sizeof(c.email) - 1);
+    strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+    strncpy(c.name, "Atomic", sizeof(c.name) - 1);
+    strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
+    UserId uid = 0;
+    assert(store_account_create(s, &c, &uid) == STORAGE_ERROR);
+    assert(db_query_int(db, "SELECT count(*) FROM accounts;") == 0);
+
+    /* Once storage recovers, the same email can register. */
+    assert(sqlite3_exec(db, "DROP TRIGGER fail_profile;", NULL, NULL, NULL) == SQLITE_OK);
+    assert(store_account_create(s, &c, &uid) == OK);
+    assert(db_query_int(db, "SELECT count(*) FROM accounts;") == 1);
+    assert(db_query_int(db, "SELECT count(*) FROM profile_stats;") == 1);
+
+    /* Duplicate email still maps to BAD_REQUEST and leaves no open transaction. */
+    assert(store_account_create(s, &c, &uid) == BAD_REQUEST);
+    assert(sqlite3_get_autocommit(db) != 0);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
 int main(void)
 {
     test_table_creation_and_migration();
+    test_upgrade_from_v1_database();
+    test_account_create_is_atomic();
     test_store_match_start_persisting();
     test_store_events_uniqueness_and_idempotency();
     test_store_finalize_idempotency_and_no_double_elo();

@@ -212,6 +212,66 @@ static void finalize_statements(Store *s)
     if (s->stmt_profile_stats_insert_fallback) { sqlite3_finalize(s->stmt_profile_stats_insert_fallback); s->stmt_profile_stats_insert_fallback = NULL; }
 }
 
+/* Bump whenever EMBEDDED_SCHEMA_SQL changes in a way CREATE TABLE IF NOT EXISTS
+ * cannot apply to an existing database file. Tracked in PRAGMA user_version.
+ *   1: original schema (achievements as key/progress rows)
+ *   2: profile_stats table + achievements(user_id, badge, unlocked_at, match_id) */
+#define STORE_SCHEMA_VERSION 2
+
+static int query_int(sqlite3 *db, const char *sql, int *out)
+{
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+    int rc = sqlite3_step(stmt);
+    *out = (rc == SQLITE_ROW) ? sqlite3_column_int(stmt, 0) : 0;
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_ROW || rc == SQLITE_DONE) ? 0 : -1;
+}
+
+static Status migrate_schema(Store *s)
+{
+    if (sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK) {
+        return STORAGE_ERROR;
+    }
+
+    int version = 0;
+    if (query_int(s->db, "PRAGMA user_version;", &version) != 0) goto fail;
+
+    if (version < 2) {
+        /* v1 stored badge progress as key/value rows that the v2 model derives
+         * from profile_stats instead, so the old rows carry nothing to keep. */
+        int legacy = 0;
+        if (query_int(s->db,
+                      "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'key';",
+                      &legacy) != 0) goto fail;
+        if (legacy > 0 &&
+            sqlite3_exec(s->db, "DROP TABLE achievements;", NULL, NULL, NULL) != SQLITE_OK) goto fail;
+    }
+
+    if (sqlite3_exec(s->db, EMBEDDED_SCHEMA_SQL, NULL, NULL, NULL) != SQLITE_OK) goto fail;
+
+    if (version < 2) {
+        /* Accounts created before v2 have no profile_stats row yet. */
+        if (sqlite3_exec(s->db,
+                         "INSERT OR IGNORE INTO profile_stats (user_id, peak_elo) "
+                         "SELECT id, MAX(elo, 1500) FROM accounts;",
+                         NULL, NULL, NULL) != SQLITE_OK) goto fail;
+    }
+
+    if (version < STORE_SCHEMA_VERSION) {
+        char sql[64];
+        snprintf(sql, sizeof(sql), "PRAGMA user_version = %d;", STORE_SCHEMA_VERSION);
+        if (sqlite3_exec(s->db, sql, NULL, NULL, NULL) != SQLITE_OK) goto fail;
+    }
+
+    if (sqlite3_exec(s->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) goto fail;
+    return OK;
+
+fail:
+    sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
+    return STORAGE_ERROR;
+}
+
 Status store_open(Store **out, const char *path)
 {
     if (!out || !path) return BAD_REQUEST;
@@ -246,8 +306,7 @@ Status store_open(Store **out, const char *path)
     }
 
     /* Execute Schema Migration */
-    if (sqlite3_exec(s->db, EMBEDDED_SCHEMA_SQL, NULL, NULL, &errmsg) != SQLITE_OK) {
-        sqlite3_free(errmsg);
+    if (migrate_schema(s) != OK) {
         store_close(s);
         return STORAGE_ERROR;
     }
@@ -806,6 +865,13 @@ Status store_account_create(Store *s, const AccountCreate *c, UserId *out_id)
 {
     if (!s || !c || !out_id) return BAD_REQUEST;
 
+    /* The account row and its profile_stats row must be created together:
+     * otherwise a failed second insert leaves an account whose email is taken
+     * while the client was told registration failed. */
+    if (sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK) {
+        return STORAGE_ERROR;
+    }
+
     sqlite3_reset(s->stmt_account_insert);
     sqlite3_clear_bindings(s->stmt_account_insert);
 
@@ -815,27 +881,33 @@ Status store_account_create(Store *s, const AccountCreate *c, UserId *out_id)
     sqlite3_bind_text(s->stmt_account_insert, 4, c->avatar, -1, SQLITE_TRANSIENT);
 
     int rc = sqlite3_step(s->stmt_account_insert);
+    sqlite3_reset(s->stmt_account_insert);
     if (rc == SQLITE_CONSTRAINT) {
-        sqlite3_reset(s->stmt_account_insert);
+        sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
         return BAD_REQUEST; /* email already taken */
     }
     if (rc != SQLITE_DONE) {
-        sqlite3_reset(s->stmt_account_insert);
+        sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
         return STORAGE_ERROR;
     }
 
     UserId new_id = (UserId)sqlite3_last_insert_rowid(s->db);
-    sqlite3_reset(s->stmt_account_insert);
 
     sqlite3_stmt *p_init = s->stmt_profile_stats_init;
     sqlite3_reset(p_init);
     sqlite3_clear_bindings(p_init);
     sqlite3_bind_int64(p_init, 1, (sqlite3_int64)new_id);
-    if (sqlite3_step(p_init) != SQLITE_DONE) {
-        sqlite3_reset(p_init);
+    rc = sqlite3_step(p_init);
+    sqlite3_reset(p_init);
+    if (rc != SQLITE_DONE) {
+        sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
         return STORAGE_ERROR;
     }
-    sqlite3_reset(p_init);
+
+    if (sqlite3_exec(s->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
+        sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
+        return STORAGE_ERROR;
+    }
 
     *out_id = new_id;
     return OK;

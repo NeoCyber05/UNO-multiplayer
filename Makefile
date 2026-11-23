@@ -1,7 +1,11 @@
 CC = gcc
 BUILD ?= build
+# GTK/WebKit is only needed by the desktop app and test_bridge; server and engine tests must build without it.
+HAVE_GTK := $(shell pkg-config --exists gtk+-3.0 webkit2gtk-4.1 && echo 1)
+ifeq ($(HAVE_GTK),1)
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.1)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
+endif
 CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium)
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread
@@ -13,11 +17,15 @@ headers := $(wildcard shared/*.h server/*.h desktop/*.h)
 ifeq ($(origin NAME),environment)
 NAME :=
 endif
+gtk_test_names := bridge
 test_names := $(patsubst tests/test_%.c,%,$(wildcard tests/test_*.c))
+ifneq ($(HAVE_GTK),1)
+test_names := $(filter-out $(gtk_test_names),$(test_names))
+endif
 tests := $(addprefix $(BUILD)/tests/test_,$(if $(NAME),$(NAME),$(test_names)))
 
 .PHONY: all server desktop desktop-smoke test integration sanitize package
-all: $(patsubst tests/test_%.c,$(BUILD)/tests/test_%,$(wildcard tests/test_*.c)) $(if $(wildcard server/main.c),server) $(if $(wildcard desktop/main.c),desktop)
+all: $(addprefix $(BUILD)/tests/test_,$(test_names)) $(if $(wildcard server/main.c),server) $(if $(and $(HAVE_GTK),$(wildcard desktop/main.c)),desktop)
 
 server: $(BUILD)/uno-server
 desktop: $(BUILD)/uno-desktop
