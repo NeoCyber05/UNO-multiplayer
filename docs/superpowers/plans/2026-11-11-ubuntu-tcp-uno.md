@@ -155,10 +155,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** Consumes framing Task 1. Produces `Status conn_read(Conn *c, FrameCallback cb, void *ctx)`, `Status conn_queue(Conn *c, const Envelope *e)`, `Status conn_flush(Conn *c)`; Conn sở hữu fd và input/output buffers, hàm `void conn_close(Conn *c)` idempotent. `Status client_connect(Client **out, const char *host, uint16_t port)`, `Status client_send(Client *, const Envelope *)`, `void client_close(Client *)`; Client bọc Conn, connect async, fd/status getter phục vụ GLib. `int app_run(const char *bind_ip,uint16_t port,const char *db_path)`; lúc này chỉ HELLO/PING. Helpers Python `ServerProcess` start binary với `--port 0` đọc actual port từ stdout, nhận thêm danh sách cờ CLI tùy test; `WireClient.request(type,payload)`/`recv_event(type,timeout)` dùng exact frame spec.
 
-- [ ] **1. Viết test** socketpair với send buffer nhỏ để ép EAGAIN: `assert(flushed_bytes_equal_encoded_frames)`; `test_transport` mở 8 client, partial frame/close giữa frame, gửi 2 HELLO trong một write và kiểm tra đúng id; client thứ 65 bị từ chối mà client cũ còn PING được. Output >262144 byte đóng riêng peer chậm.
-- [ ] **2. Chạy đỏ** `make test NAME=net` và `make integration NAME=transport`, phải fail ở hành vi TCP chưa có, không chỉ timeout vô hạn; mọi test có timeout 3s.
-- [ ] **3. Cài đặt** non-blocking sockets + poll, accept đến EAGAIN, retry EINTR, giữ offset partial write, bỏ SIGPIPE; connect kiểm tra SO_ERROR. Thêm CLI server --bind/--port/--db; cleanup fd/memory khi EOF/error/Ctrl+C. App tạo ConnId generation chống fd reuse. Heartbeat và auth chưa giả lập tại đây.
-- [ ] **4. Chạy xanh** cả hai lệnh trên; `make sanitize NAME=net` pass ASan/UBSan. Native Client test dùng server thật và phải trả lỗi connect thay vì treo khi host không tồn tại.
+- [x] **1. Viết test** socketpair với send buffer nhỏ để ép EAGAIN: `assert(flushed_bytes_equal_encoded_frames)`; `test_transport` mở 8 client, partial frame/close giữa frame, gửi 2 HELLO trong một write và kiểm tra đúng id; client thứ 65 bị từ chối mà client cũ còn PING được. Output >262144 byte đóng riêng peer chậm.
+- [x] **2. Chạy đỏ** `make test NAME=net` và `make integration NAME=transport`, phải fail ở hành vi TCP chưa có, không chỉ timeout vô hạn; mọi test có timeout 3s.
+- [x] **3. Cài đặt** non-blocking sockets + poll, accept đến EAGAIN, retry EINTR, giữ offset partial write, bỏ SIGPIPE; connect kiểm tra SO_ERROR. Thêm CLI server --bind/--port/--db; cleanup fd/memory khi EOF/error/Ctrl+C. App tạo ConnId generation chống fd reuse. Heartbeat và auth chưa giả lập tại đây.
+- [x] **4. Chạy xanh** cả hai lệnh trên; `make sanitize NAME=net` pass ASan/UBSan. Native Client test dùng server thật và phải trả lỗi connect thay vì treo khi host không tồn tại.
 
 ### Task 3: SQLite và transaction trận — Sơn
 
@@ -166,10 +166,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** `Status store_open(Store **out,const char *path)`, `void store_close(Store *)`; `Status store_match_start(Store *,const MatchId *,const PlayerSpec players[4],Mode,bool ranked)`; `Status store_events(Store *,const MatchId *,const EventBatch *)`; `Status store_finalize(Store *,const MatchResult *,const ProfileDelta deltas[4])`; `Status store_export_match(Store *,const MatchId *,const char *path)`. Kết quả/events idempotent theo unique matchId và (matchId,seq); duplicate giống dữ liệu OK, khác dữ liệu INVALID_ACTION. Schema version=1, migration additive, không DROP tài khoản để reset test.
 
-- [ ] **1. Viết test** DB temp: `assert(store_finalize_twice_changes_elo_once()); assert(event_seq_unique()); assert(failed_transaction_keeps_old_balances()); assert(reopen_marks_active_aborted());` static helpers kiểm tra SQL trực tiếp từ test connection. Export đủ ordered history, không chứa password/token. Inject lỗi bằng trigger RAISE(ABORT) trong DB test, không thêm config lỗi production.
-- [ ] **2. Chạy đỏ** `make test NAME=store`: runner fail do repository chưa thực hiện transaction.
-- [ ] **3. Cài đặt** schema §6, prepared statements, foreign_keys ON, busy_timeout=100ms, startup recovery active→aborted; transaction toàn bộ finalize và log. STORAGE_ERROR không publish kết quả thành công. API profile/account/friend tiếp tục bổ sung ở task sở hữu nhưng SQL luôn ở store.c.
-- [ ] **4. Chạy xanh** `make test NAME=store` và `make sanitize NAME=store`, đóng/mở DB giữa test vẫn giữ account/log.
+- [x] **1. Viết test** DB temp: `assert(store_finalize_twice_changes_elo_once()); assert(event_seq_unique()); assert(failed_transaction_keeps_old_balances()); assert(reopen_marks_active_aborted());` static helpers kiểm tra SQL trực tiếp từ test connection. Export đủ ordered history, không chứa password/token. Inject lỗi bằng trigger RAISE(ABORT) trong DB test, không thêm config lỗi production.
+- [x] **2. Chạy đỏ** `make test NAME=store`: runner fail do repository chưa thực hiện transaction.
+- [x] **3. Cài đặt** schema §6, prepared statements, foreign_keys ON, busy_timeout=100ms, startup recovery active→aborted; transaction toàn bộ finalize và log. STORAGE_ERROR không publish kết quả thành công. API profile/account/friend tiếp tục bổ sung ở task sở hữu nhưng SQL luôn ở store.c.
+- [x] **4. Chạy xanh** `make test NAME=store` và `make sanitize NAME=store`, đóng/mở DB giữa test vẫn giữ account/log.
 
 ### Task 4: Account, session và auth worker — Sơn
 
@@ -177,10 +177,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** `Status accounts_handle(App *,ConnId,const Envelope *)`; `Status sessions_user(App *,ConnId,UserId *out)`; `Status sessions_resume(App *,ConnId,const char *token)`; `void sessions_disconnect(App *,ConnId)`; `Status auth_submit(AuthWorker *,ConnId,const AuthJob *)`, `void auth_drain(App *)`. AuthJob sao chép input, AuthResult giữ ConnId và kết quả hash/verify, không giữ pointer tới session. Store thêm `Status store_account_create(Store *,const AccountCreate *,UserId *)`, `Status store_account_get(Store *,const char *email,Account *)`; AccountCreate chứa email/hash/name/avatar, Account chứa ID/hash/profile/ELO; không serialize Account nguyên bản.
 
-- [ ] **1. Viết test** register/login đúng và sai, email trùng khác hoa thường, token giả/expired/logout, tên tiếng Việt 16 và 17 code point, avatar không có, query SQL injection; DB hash khác password. Integration chặn 9 auth job và PING kết nối khác vẫn trả trong 500ms; hoàn thành hash sau disconnect/fd reuse không cấp session cho user mới; repeated id không đổi dữ liệu.
-- [ ] **2. Chạy đỏ** `make test NAME=accounts` và `make integration NAME=auth`.
-- [ ] **3. Cài đặt** validation/rate limit/password/token ở spec §3; giới hạn auth mặc định 5/phút/IP, chỉnh bằng cờ CLI server `--auth-limit N` vì mọi integration test chạy từ `127.0.0.1` (test nhiều account truyền giá trị lớn, riêng test rate limit dùng mặc định và kiểm tra request thứ 6 trả RATE_LIMITED). Worker một thread queue 8, wake bằng pipe; clear password bằng sodium_memzero sau dùng. Không log request payload auth. LOGIN mới revoke token cũ và disconnect connection cũ, chuyển seat binding an toàn. REGISTER tạo account rồi yêu cầu LOGIN, không tự cấp token.
-- [ ] **4. Chạy xanh** hai lệnh trên; `make integration NAME=transport` không regression; kiểm tra shutdown join worker/đóng pipe và không callback tới connection chết.
+- [x] **1. Viết test** register/login đúng và sai, email trùng khác hoa thường, token giả/expired/logout, tên tiếng Việt 16 và 17 code point, avatar không có, query SQL injection; DB hash khác password. Integration chặn 9 auth job và PING kết nối khác vẫn trả trong 500ms; hoàn thành hash sau disconnect/fd reuse không cấp session cho user mới; repeated id không đổi dữ liệu.
+- [x] **2. Chạy đỏ** `make test NAME=accounts` và `make integration NAME=auth`.
+- [x] **3. Cài đặt** validation/rate limit/password/token ở spec §3; giới hạn auth mặc định 5/phút/IP, chỉnh bằng cờ CLI server `--auth-limit N` vì mọi integration test chạy từ `127.0.0.1` (test nhiều account truyền giá trị lớn, riêng test rate limit dùng mặc định và kiểm tra request thứ 6 trả RATE_LIMITED). Worker một thread queue 8, wake bằng pipe; clear password bằng sodium_memzero sau dùng. Không log request payload auth. LOGIN mới revoke token cũ và disconnect connection cũ, chuyển seat binding an toàn. REGISTER tạo account rồi yêu cầu LOGIN, không tự cấp token.
+- [x] **4. Chạy xanh** hai lệnh trên; `make integration NAME=transport` không regression; kiểm tra shutdown join worker/đóng pipe và không callback tới connection chết.
 
 ### Task 5: Phòng và party/invite có quyền host — Sơn
 
@@ -188,10 +188,10 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Interfaces:** `Status rooms_handle(App *,ConnId,const Envelope *)`; `Status rooms_start(App *,const RoomId *)`; `void rooms_disconnect(App *,UserId,uint64_t now_ms)`; `RoomId` string opaque. Produces `RoomStart`={roomId,mode,ranked,players[4]}, `Status matches_start(App *,const RoomStart *,MatchId *out)` declared for Task 9; test substitutes callback in Rooms constructor, not a fake production engine. `Status rooms_make_match(App *,Mode,const UserId users[4],MatchId *)` for queue Task 10. Party={mode,members[2]}, belongs to account state.
 
-- [ ] **1. Viết test** code length=6, collision retry, 5th join ROOM_FULL; nonhost kick/start/bot/mode FORBIDDEN; bot level đúng 3 lựa chọn; host leave chuyển ghế nhỏ nhất; invite accept sau 30s/room đầy/user busy bị từ chối; không cùng lúc hai phòng; party chỉ 2 và không ở solo mode.
-- [ ] **2. Chạy đỏ** `make test NAME=rooms`, `make integration NAME=rooms`.
-- [ ] **3. Cài đặt** 16 phòng, ghế/membership host, invite room/party accept/reject/expiry; ROOM_START không tự lấp ghế và chỉ giao RoomStart hợp lệ vào callback. Khi callback match start lỗi, giữ room cũ, không set in_match. ROOM_LEAVE trước trận khác MATCH_LEAVE.
-- [ ] **4. Chạy xanh** cả hai test; snapshot phòng không có token/email/password, hai người tranh ghế cuối chỉ một người thành công.
+- [x] **1. Viết test** code length=6, collision retry, 5th join ROOM_FULL; nonhost kick/start/bot/mode FORBIDDEN; bot level đúng 3 lựa chọn; host leave chuyển ghế nhỏ nhất; invite accept sau 30s/room đầy/user busy bị từ chối; không cùng lúc hai phòng; party chỉ 2 và không ở solo mode.
+- [x] **2. Chạy đỏ** `make test NAME=rooms`, `make integration NAME=rooms`.
+- [x] **3. Cài đặt** 16 phòng, ghế/membership host, invite room/party accept/reject/expiry; ROOM_START không tự lấp ghế và chỉ giao RoomStart hợp lệ vào callback. Khi callback match start lỗi, giữ room cũ, không set in_match. ROOM_LEAVE trước trận khác MATCH_LEAVE.
+- [x] **4. Chạy xanh** cả hai test; snapshot phòng không có token/email/password, hai người tranh ghế cuối chỉ một người thành công.
 
 ### Task 6: Bộ bài và lượt Classic thuần C — Bách
 
