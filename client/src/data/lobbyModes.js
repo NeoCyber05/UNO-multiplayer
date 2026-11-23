@@ -7,7 +7,7 @@ export const LOBBY_MODES = [
     desc: 'Đồng đội ngồi đối diện qua bàn, bài của nhau luôn hiện ra để phối hợp nước đi.',
     chip: 'XẾP HẠNG · ELO',
     ranked: true,
-    image: '/images/modes/2v2.png',
+    image: './images/modes/2v2.png',
     to: '/room/2v2',
   },
   {
@@ -16,7 +16,7 @@ export const LOBBY_MODES = [
     desc: 'UNO truyền thống: 4 người, mỗi người một mình, ai hết bài trước thắng.',
     chip: 'XẾP HẠNG · ELO',
     ranked: true,
-    image: '/images/modes/classic.png',
+    image: './images/modes/classic.png',
     to: '/matchmaking/classic',
   },
   {
@@ -25,7 +25,7 @@ export const LOBBY_MODES = [
     desc: 'Đồng đội ngồi ngay bên trái bạn, hai người nhìn thấy bài của nhau.',
     chip: 'XẾP HẠNG · ELO',
     ranked: true,
-    image: '/images/modes/side.png',
+    image: './images/modes/side.png',
     to: '/room/side',
   },
   {
@@ -34,14 +34,14 @@ export const LOBBY_MODES = [
     desc: 'Phòng riêng: mời bạn bè hoặc thêm bot, tự chọn luật chơi.',
     chip: 'KHÔNG TÍNH ELO',
     ranked: false,
-    image: '/images/modes/custom.png',
+    image: './images/modes/custom.png',
     to: '/custom',
   },
   {
     key: 'draft', title: 'UNO Draft',
     desc: '4 lá khởi đầu. 4 vòng chọn bài. Tự tạo lợi thế trước khi vào trận!',
     chip: 'XẾP HẠNG · ELO', ranked: true,
-    image: '/images/modes/draft.svg', to: '/matchmaking/draft',
+    image: './images/modes/draft.svg', to: '/matchmaking/draft',
   },
 ];
 

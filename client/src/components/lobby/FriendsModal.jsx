@@ -3,33 +3,26 @@ import Modal from '../Modal.jsx';
 import Avatar from '../Avatar.jsx';
 import { IconClose, IconPlus, IconUsers } from '../Icons.jsx';
 import { useSocial } from '../../context/SocialContext.jsx';
-
-const initialsOf = (name) => name.trim().slice(0, 2).toUpperCase() || '??';
-const TINTS = ['#4C86FF', '#35D399', '#FF5262', '#22C3D6', '#FFC94A'];
+import { useSession } from '../../net/session';
 
 export default function FriendsModal({ open, onClose, notify, onInvite }) {
   const { friends: list, sendFriendRequest } = useSocial();
+  const { request, connection } = useSession();
   const [addValue, setAddValue] = useState('');
 
   const online = list.filter((f) => f.online && !f.pending).length;
 
-  const addFriend = (e) => {
+  const addFriend = async (e) => {
     e.preventDefault();
-    const name = addValue.trim();
-    if (!name) return;
-    if (list.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
-      notify(`${name} đã là bạn bè`);
+    const tag = addValue.trim().toUpperCase();
+    if (!/^UNO#[0-9]+$/.test(tag)) return notify('Nhập tag dạng UNO#123');
+    try {
+      await sendFriendRequest({ tag });
+      notify(`Đã gửi lời mời kết bạn tới ${tag}`);
       setAddValue('');
-      return;
+    } catch (error) {
+      notify(error.message);
     }
-    sendFriendRequest({
-      id: `f-${Date.now()}`,
-      name,
-      initials: initialsOf(name),
-      tint: TINTS[list.length % TINTS.length],
-    });
-    notify(`Đã gửi lời mời kết bạn tới ${name}`);
-    setAddValue('');
   };
 
   const invite = (f) => {
@@ -47,12 +40,12 @@ export default function FriendsModal({ open, onClose, notify, onInvite }) {
       <form className="friends-add" onSubmit={addFriend}>
         <input
           className="input"
-          placeholder="Nhập tên hoặc tag để kết bạn"
+          placeholder="Nhập tag để kết bạn"
           value={addValue}
           onChange={(e) => setAddValue(e.target.value)}
-          aria-label="Tên hoặc tag bạn bè"
+          aria-label="Tag bạn bè"
         />
-        <button type="submit" className="btn btn--ghost" aria-label="Kết bạn">
+        <button type="submit" className="btn btn--ghost" aria-label="Kết bạn" disabled={connection !== 'connected'}>
           <IconPlus size={16} /> Kết bạn
         </button>
       </form>
@@ -72,6 +65,11 @@ export default function FriendsModal({ open, onClose, notify, onInvite }) {
             {f.online && !f.pending && (
               <button type="button" className="btn btn--sm btn--ghost" onClick={() => invite(f)}>Mời</button>
             )}
+            {f.requestId && f.incoming && [true, false].map((accept) => (
+              <button key={String(accept)} type="button" className="btn btn--sm btn--ghost" onClick={() => {
+                request('FRIEND_REPLY', { requestId: f.requestId, accept }).catch((error) => notify(error.message));
+              }}>{accept ? 'Chấp nhận' : 'Từ chối'}</button>
+            ))}
           </div>
         ))}
       </div>

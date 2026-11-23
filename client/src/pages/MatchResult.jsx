@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import Avatar from '../components/Avatar.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
 import { IconCards, IconCheck, IconCrown, IconMegaphone, IconPlay, IconPlus, IconSwords, IconTrophy } from '../components/Icons.jsx';
 import { useSocial } from '../context/SocialContext.jsx';
+import { useSession } from '../net/session';
+import { toMatchSummary } from '../net/view';
 import RankBadge from '../components/RankBadge.jsx';
 import { MODES } from '../game/constants';
 import useSettings from '../hooks/useSettings';
@@ -13,10 +15,11 @@ import './pages.css';
 
 const fmtTime = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
 
-/** Trang tổng kết sau mỗi ván (mọi chế độ). Dữ liệu lấy từ lastMatch trong SocialContext. */
 export default function MatchResult() {
   const navigate = useNavigate();
-  const { lastMatch: m, friendState, sendFriendRequest } = useSocial();
+  const { friendState, sendFriendRequest } = useSocial();
+  const { result } = useSession();
+  const m = useMemo(() => result ? toMatchSummary(result, result.viewerSeat) : null, [result]);
   const [toast, setToast] = useState(null);
   const notify = (text) => setToast({ id: Date.now(), text });
   const { settings } = useSettings();
@@ -29,9 +32,13 @@ export default function MatchResult() {
   if (!m) return <Navigate to="/lobby" replace />;
 
   const cfg = MODES[m.mode];
-  const addFriend = (p) => {
-    sendFriendRequest(p);
-    notify(`Đã gửi lời mời kết bạn tới ${p.name}`);
+  const addFriend = async (p) => {
+    try {
+      await sendFriendRequest(p);
+      notify(`Đã gửi lời mời kết bạn tới ${p.name}`);
+    } catch (error) {
+      notify(error.message);
+    }
   };
 
   const row = (p, rank) => (
@@ -87,7 +94,7 @@ export default function MatchResult() {
           </div>
         ) : (
           <section className="panel mr__solo">
-            {[...m.players].sort((a, b) => a.points - b.points || a.cardsLeft - b.cardsLeft).map((p, i) => row(p, i + 1))}
+            {[...m.players].sort((a, b) => Number(b.isWinner) - Number(a.isWinner)).map((p) => row(p, p.isWinner ? 1 : null))}
           </section>
         )}
 

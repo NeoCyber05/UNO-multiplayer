@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { IconGear, IconSmile } from '../components/Icons.jsx';
 import TableBackground from '../components/game/TableBackground.jsx';
 import PlayerBadge from '../components/game/PlayerBadge.jsx';
@@ -13,27 +13,23 @@ import QuickChat from '../components/game/QuickChat.jsx';
 import MatchClock from '../components/game/MatchClock.jsx';
 import SettingsModal from '../components/game/SettingsModal.jsx';
 import DraftSelection, { DraftTray } from '../components/game/DraftSelection.jsx';
-import { draftSeat } from '../game/draft';
 import { MODES, SEATS } from '../game/constants';
-import { useUnoGame } from '../game/useUnoGame';
-import { buildMatchSummary } from '../game/summary';
+import { useRemoteGame } from '../net/useRemoteGame';
 import useSettings from '../hooks/useSettings';
 import playTurnChime from '../hooks/playTurnChime';
 import playUno from '../hooks/playUno';
 import playAction from '../hooks/playAction';
 import playSfx from '../hooks/playSfx';
 import { ASSETS } from '../config/assets';
-import { useSocial } from '../context/SocialContext.jsx';
 import '../components/game/game.css';
 
 // Hết ván -> chờ chút cho người chơi thấy lá cuối rồi sang trang tổng kết
 const RESULT_DELAY_MS = 1500;
 
-function GameScreen({ modeKey, lineup, ranked }) {
-  const cfg = MODES[modeKey];
+function GameScreen({ game }) {
+  const cfg = MODES[game.mode];
   const navigate = useNavigate();
-  const { setLastMatch, applyElo } = useSocial();
-  const { state, me, isMyTurn, playableIds, canSayUno, turnKey, actions } = useUnoGame(modeKey, lineup);
+  const { state, me, isMyTurn, canAct, playableIds, canSayUno, turnKey, actions, connection, error, result } = game;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -58,7 +54,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
   }, [topCard?.id]);
 
   // Tổng số lá trên tay tăng -> có người rút bài (bỏ qua lúc draft chia bài)
-  const handTotal = state.players.reduce((n, p) => n + p.hand.length, 0);
+  const handTotal = state.players.reduce((n, p) => n + p.cardCount, 0);
   const lastHandTotal = useRef(handTotal);
   useEffect(() => {
     const grew = handTotal > lastHandTotal.current;
@@ -68,16 +64,10 @@ function GameScreen({ modeKey, lineup, ranked }) {
   }, [handTotal]);
 
   useEffect(() => {
-    if (!state.winner) return undefined;
-    const t = setTimeout(() => {
-      const summary = buildMatchSummary(state, { ranked });
-      setLastMatch(summary);
-      if (summary.eloDelta != null) applyElo(summary.eloDelta);
-      navigate('/result', { replace: true });
-    }, RESULT_DELAY_MS);
+    if (result?.matchId !== game.matchId) return undefined;
+    const t = setTimeout(() => navigate('/result', { replace: true }), RESULT_DELAY_MS);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.winner]);
+  }, [result, game.matchId, navigate]);
 
   const relationOf = (p) => {
     if (!cfg.teams || p.isHuman) return null;
@@ -93,7 +83,8 @@ function GameScreen({ modeKey, lineup, ranked }) {
       <TableBackground />
 
       {/* HUD */}
-      <MatchClock mode={cfg.label} startedAt={state.startedAt} stopped={!!state.winner} />
+      <MatchClock mode={cfg.label} receivedAt={state.receivedAt} durationMs={state.durationMs}
+        drafting={!!state.draft} stopped={!!state.winner} />
       <div className="hud-actions">
         <button type="button" className="hud-btn" onClick={() => setSettingsOpen(true)} aria-label="Cài đặt">
           <IconGear size={28} />
@@ -104,14 +95,16 @@ function GameScreen({ modeKey, lineup, ranked }) {
       {state.players.slice(1).map((p, k) => {
         const idx = k + 1;
         const pos = SEATS[idx];
-        const faceUp = cfg.teammateOpen && p.team === me.team;
+        const faceUp = p.handVisible;
         return (
           <div key={p.id} className={`seat seat--${pos}`}>
             <PlayerBadge
               player={p}
-              isTurn={state.draft ? draftSeat(state.draft) === idx : state.turn === idx && !state.winner}
+              isTurn={state.turn === idx && !state.winner}
               drafting={!!state.draft}
               turnKey={turnKey}
+              turnDeadline={state.localDeadline}
+              paused={state.paused}
               tone={toneOf(p, pos)}
               relation={relationOf(p)}
               bubble={state.bubbles[p.id]}
@@ -119,7 +112,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
               size={pos === 'top' ? 88 : 92}
               arrowSide={pos === 'top' ? 'left' : 'top'}
             />
-            {state.draft ? <DraftTray player={p} seat={idx} active={draftSeat(state.draft) === idx} /> : <div className={`seat__hand seat__hand--${pos}`} data-draw-seat={idx}>
+            {state.draft ? <DraftTray player={p} active={state.turn === idx} /> : <div className={`seat__hand seat__hand--${pos}`} data-draw-seat={idx}>
               <div className="fan-wrap">
                 <Fan
                   cards={p.hand}
@@ -139,16 +132,17 @@ function GameScreen({ modeKey, lineup, ranked }) {
         discard={state.discard}
         currentColor={state.currentColor}
         direction={state.direction}
-        deckCount={state.drawPile.length}
-        canDraw={isMyTurn && !state.hasDrawn && !state.pendingWild}
+        deckCount={state.drawCount}
+        canDraw={isMyTurn && canAct && !state.hasDrawn && !state.pendingWild}
         needsDraw={playableIds.size === 0}
         onDraw={actions.draw}
         turnSeat={state.winner ? null : SEATS[state.turn]}
       />}
 
-      {!state.draft && state.message && (
-        <div key={state.message.id} className="toast" role="status">
-          {state.message.text}
+      {(connection !== 'connected' || state.paused || error) && (
+        <div className="toast" role="status">
+          {connection !== 'connected' ? 'Đang mất kết nối với máy chủ' :
+            error || 'Trận tạm dừng vì lỗi lưu trữ'}
         </div>
       )}
 
@@ -166,7 +160,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
           </div>
         )}
         {isMyTurn && state.hasDrawn && (
-          <button type="button" className="btn btn--ghost btn--sm pass-btn" onClick={actions.pass}>
+          <button type="button" className="btn btn--ghost btn--sm pass-btn" disabled={!canAct} onClick={actions.pass}>
             Bỏ lượt
           </button>
         )}
@@ -185,9 +179,11 @@ function GameScreen({ modeKey, lineup, ranked }) {
           </div>
           <PlayerBadge
             player={me}
-            isTurn={state.draft ? draftSeat(state.draft) === 0 : isMyTurn}
+            isTurn={isMyTurn}
             drafting={!!state.draft}
             turnKey={turnKey}
+            turnDeadline={state.localDeadline}
+            paused={state.paused}
             tone="gold"
             bubble={state.bubbles[me.id]}
             bubbleSide="right"
@@ -197,7 +193,7 @@ function GameScreen({ modeKey, lineup, ranked }) {
         <MyHand
           cards={me.hand}
           playableIds={playableIds}
-          isMyTurn={isMyTurn && !state.pendingWild}
+          isMyTurn={isMyTurn && canAct && !state.draft && !state.pendingWild}
           drawnCardId={state.drawnCardId}
           onPlay={actions.play}
         />
@@ -205,24 +201,27 @@ function GameScreen({ modeKey, lineup, ranked }) {
 
       {!state.draft && <UnoButton
           active={canSayUno}
-          calls={me.stats.unoCalls}
+          calls={me.unoCalls ?? 0}
           onClick={() => {
             if (sfx) playUno(settings.sfxVolume);
             actions.sayUno();
           }}
         />}
-      {state.draft && <DraftSelection key={state.discard[0].id} state={state} onPick={actions.draftPick} paused={settingsOpen} />}
+      {state.draft && <DraftSelection state={state} onPick={actions.draftPick}
+        hidden={settingsOpen} canAct={canAct} />}
 
       {/* Hộp thoại */}
       <ColorPicker
-        open={state.pendingWild?.player === 0}
+        open={!!state.pendingWild}
         onPick={actions.chooseColor}
         onCancel={actions.cancelWild}
       />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onLeave={() => navigate('/lobby')}
+        onLeave={async () => {
+          if (state.winner || await actions.leave()) navigate('/lobby');
+        }}
         turnSound={settings.turnSound}
         onTurnSound={(v) => setSetting('turnSound', v)}
         music={settings.musicOn}
@@ -235,11 +234,11 @@ function GameScreen({ modeKey, lineup, ranked }) {
 }
 
 export default function GameTable() {
-  const { mode } = useParams();
-  const location = useLocation();
-  const modeKey = MODES[mode] ? mode : 'classic';
-  // Đội hình + ranked do Ghép trận / Phòng Custom truyền sang. Thiếu (F5) -> đội hình bot, không tính ELO.
-  const lineup = location.state?.lineup ?? null;
-  const ranked = !!lineup && !!location.state?.ranked;
-  return <GameScreen key={location.key} modeKey={modeKey} lineup={lineup} ranked={ranked} />;
+  const game = useRemoteGame();
+  if (!game.state) {
+    return <div className="screen" role="status">
+      {game.connection === 'unavailable' ? 'Mở UNO Desktop để chơi online.' : 'Đang chờ trạng thái trận từ máy chủ.'}
+    </div>;
+  }
+  return <GameScreen key={game.matchId} game={game} />;
 }

@@ -197,7 +197,7 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Files:** Create `server/game.c`, `server/game.h`, `tests/test_game.c`; Reference `client/src/game/{deck.js,rules.js,engine.js,match.test.js}`. Không sửa Makefile (wildcard Task 1). `game.h` định nghĩa `Card`, `Intent`, `Game`.
 
-**Interfaces:** `Status game_init(Game *g,Mode mode,const PlayerSpec players[4],uint64_t seed)`; `Status game_apply(Game *g,Seat actor,const Intent *intent,EventBatch *out)`; `Status game_timeout(Game *g,uint32_t expected_turn,EventBatch *out)`; `Status game_uno_penalty(Game *g,Seat actor,uint32_t watch_generation,EventBatch *out)`. Game lưu UNO watch per seat; hàm trả lỗi không mutate. Timing wall-clock nằm ngoài engine; seed chỉ dùng PRNG shuffle/test, không token.
+**Interfaces:** `Status game_init(Game *g,Mode mode,const PlayerSpec players[4],uint64_t seed)`; `Status game_apply(Game *g,Seat actor,const Intent *intent,EventBatch *out)`; `Status game_timeout(Game *g,uint32_t expected_turn,EventBatch *out)`; Game lưu hô UNO theo ghế trong lượt hiện tại. Nếu xuống một lá mà chưa hô, engine rút phạt ngay trong batch của PLAY. Hàm trả lỗi không mutate. Timing wall-clock nằm ngoài engine; seed chỉ dùng PRNG shuffle/test, không token.
 
 - [x] **1. Viết test** `assert(deck_count == 112); assert(unique_ids == 112); assert(hand_count(g,0) == 7);` cùng seed cùng deal; conservation 112 sau 1000 action; fixture Skip/Reverse/+2/+4/Discard All/draw-only-new-card/pass/reshuffle/deck cạn. PLAY sai actor/card/màu/turnNo trả lỗi và `memcmp` state trước/sau bằng nhau. Kiểm tra thắng lá cuối như spec.
 - [x] **2. Chạy đỏ** `make test NAME=game`.
@@ -230,18 +230,20 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Files:** Create `server/match.c`, `server/match.h`, `tests/test_match.c`, `tests/integration/test_match.py`; Modify `server/{app.c,rooms.c,accounts.c}`, `Makefile`.
 
-**Interfaces:** Produces matches_start Task 5; `Status matches_handle(App *,ConnId,const Envelope *,uint64_t now_ms)`; `void matches_tick(App *,uint64_t now_ms)`; `void matches_disconnect(App *,UserId,uint64_t now_ms)`; `Status matches_resume(App *,ConnId,UserId,uint64_t now_ms)`; `Status matches_finish(App *,const MatchId *,const MatchResult *)` bản đầu chỉ unranked, gọi store_finalize với zero ProfileDelta và ELO giữ nguyên; Task 10 mở rộng ranked, Task 11 thêm progress. Test clock injected qua now_ms, production CLOCK_MONOTONIC. Coordinator sở hữu Game/deadlines per-seat UNO/generation/bot/reconnect; wire snapshot có serverNowMs và deadline cùng miền thời gian.
+**Interfaces:** `matchesCreate` tạo một coordinator cho poll loop. `matchesStart` nhận đội hình từ phòng, ghi SQLite rồi gửi view theo ghế. `matchesHandle` nhận `UserId` đã xác thực từ session và trả `Status` cho dispatcher. `matchesTick` chạy trước request và mỗi vòng poll. `matchesConnected` nhận disconnect/logout hoặc login/RESUME đã xác thực. `matchesContains` kiểm tra account có ghế đang giữ hoặc đã MATCH_LEAVE nhưng trận chưa chốt. Coordinator gửi push qua callback `MatchPush`. `MatchEnded` báo mã phòng cho Sơn dọn membership sau khi chốt trận. Dùng chung CLOCK_MONOTONIC cho mọi callback. Task 9 giữ nguyên ELO và truyền NULL cho profile delta để giữ streak/peak hiện có. Task 10 mở rộng ranked, Task 11 nối `profileCompute`.
 
 > **Luật rớt mạng (Bách chốt 11/11):** rớt mạng không có bot đánh thay, không có hạn 60s. Timer lượt 20s chạy tiếp, hết giờ xử lý như timeout thường; vào lại lúc nào cũng lấy lại ghế khi trận còn chạy. Chỉ MATCH_LEAVE mới giao ghế cho bot.
 >
-> **Chờ Bách xác nhận trước khi viết test task này:** ân hạn UNO 3s là đề xuất của spec §4, ngược quyết định 25/10 (phạt UNO ngay). Nếu giữ quyết định cũ thì bỏ các mốc 2999/3000ms bên dưới, sửa spec cùng lúc.
+> **Bách chốt 23/11:** Phạt UNO ngay trong PLAY nếu chưa hô và tay bài còn đúng một lá. Không còn mốc ân hạn 3 giây.
 
-- [ ] **1. Viết test** thời gian 19999ms chưa phạt, 20000ms phạt; UNO 2999ms chưa phạt, 3000ms +2 đúng một lần; player khác đi không xóa watch; DRAW không reset deadline; callback old turn/match/watch không mutate. Disconnect: ghế không đổi sang bot, không sinh action nào trước 20000ms, tại 20000ms timeout y như người online; rớt mạng ở lượt người khác không ảnh hưởng timer của lượt đó. Resume sau 1s và sau 10 phút (fake clock) đều lấy lại đúng ghế + snapshot hiện tại; explicit leave không reclaim, ghế thành bot; không còn human kết nối→aborted đúng chính sách spec.
+- [ ] **1. Viết test** thời gian 19999ms chưa phạt, 20000ms phạt; PLAY không hô UNO rút +2 đúng một lần, PLAY đã hô không bị phạt; DRAW không reset deadline; request dùng turn hoặc match cũ không mutate. Disconnect: ghế không đổi sang bot, không sinh action nào trước 20000ms, tại 20000ms timeout y như người online; rớt mạng ở lượt người khác không ảnh hưởng timer của lượt đó. Resume sau 1s và sau 10 phút (fake clock) đều lấy lại đúng ghế + snapshot hiện tại; explicit leave không reclaim, ghế thành bot; không còn human kết nối→aborted đúng chính sách spec.
 - [ ] **2. Chạy đỏ** `make test NAME=match`, `make integration NAME=match` (4 account thật, phòng Classic thật, play/draw tới kết thúc có timeout 60s; ép state chỉ ở unit fixture, không thêm cheat opcode).
 - [ ] **3. Cài đặt** identity từ session không từ payload, bind actor đúng seat, stale turn/id reject; tick deadline trước input; clone Game→apply→persist EventBatch→publish. Storage lỗi pause match, không rút bài thêm ở mỗi tick; kết quả chờ finalize callback thành công. Heartbeat 5/15s, ghế người rớt mạng giữ đến hết trận (không timer offline), bot delay700ms chỉ cho ghế bot thật; timer scan tối đa16 match đủ dùng. RESUME gửi snapshot cá nhân, không history bài kín.
 - [ ] **4. Chạy xanh** hai test và `make integration NAME=rooms`; integration thêm gửi TIMEOUT/UNO_PENALTY giả → BAD_REQUEST, spoof actor bị từ chối, snapshot chính xác cho từng connection. Kiểm tra SIGTERM đóng sạch, startup sau crash active→aborted.
 
 ### Task 10: Matchmaking, ELO và finalize — Sơn
+
+**Điểm nối từ review của Task 9.** Khi nối dispatcher, trả opcode **ERROR** với `payload.code = BAD_REQUEST` cho request không được hỗ trợ. `matchesStart` hiện chỉ nhận unranked. Khi bật ranked, truyền cờ xuống store và tính ELO trong transaction chốt trận. Đưa thao tác aborted về store để ghi sự kiện và cập nhật trạng thái trong cùng transaction.
 
 **Files:** Create `server/queue.c`, `server/queue.h`, `tests/test_queue.c`, `tests/test_rating.c`, `tests/integration/test_ranking.py`; Modify `server/{app.c,store.c,store.h,match.c}`, `Makefile`.
 
@@ -256,11 +258,11 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 
 **Files:** Create `server/social.c`, `server/social.h`, `server/profile.c`, `server/profile.h`, `tests/test_social.c`, `tests/test_profile.c`, `tests/integration/test_social.py`; Modify `server/{app.c,store.c,store.h,match.c}`, `Makefile`.
 
-**Interfaces:** `Status social_handle(App *,ConnId,const Envelope *)`; `void social_presence(App *,UserId)`; `Status profile_handle(App *,ConnId,const Envelope *)`; implements `Status profile_compute(Store *,const MatchResult *,ProfileDelta out[4])` (pure read/compute; write chỉ store_finalize). Store thêm `Status store_profile_get(Store *,UserId,Profile *)`, `Status store_profile_update(Store *,UserId,const char *name,const char *avatar)` và API friend operations nội bộ social; Profile chứa public account fields/stats/modes/badges/history, tuyệt đối không có hash/email.
+**Interfaces:** `Status social_handle(App *,ConnId,const Envelope *)`; `void social_presence(App *,UserId)`; `Status profile_handle(App *,ConnId,const Envelope *)`; implements `Status profileCompute(Store *,const MatchResult *,ProfileDelta out[4])` (pure read/compute; write chỉ store_finalize). Store thêm `Status store_profile_get(Store *,UserId,Profile *)`, `Status store_profile_update(Store *,UserId,const char *name,const char *avatar)` và API friend operations nội bộ social; Profile chứa public account fields/stats/modes/badges/history, tuyệt đối không có hash/email.
 
 - [ ] **1. Viết test** request/accept/reject friend, self/repeat/reverse request bị từ chối, offline online idle in_match cập nhật; user không sửa hồ sơ người khác. Hai finalize giống matchId chỉ cộng stats một lần; streak thắng/thua và peakElo; các ngưỡng badge 1/100/10/50/300/50/500/1800 chính xác. PROFILE_GET user khác không lộ email/hash/token, pending request chỉ gửi đúng người.
 - [ ] **2. Chạy đỏ** `make test NAME=social`, `make test NAME=profile`, `make integration NAME=social`.
-- [ ] **3. Cài đặt** friends/presence theo spec; profile counters từ server log/result finalized, không nhận progress client. PROFILE_UPDATE qua store chung, broadcast public name/avatar cập nhật ở room/lobby; avatar ID whitelist và UTF-8 validation dùng chung accounts. Nối profile_compute vào matches_finish trước store_finalize để bỏ zero ProfileDelta của mốc Task 10; rating và progress cùng transaction, không backfill từ dữ liệu demo cũ.
+- [ ] **3. Cài đặt** friends/presence theo spec; profile counters từ server log/result finalized, không nhận progress client. PROFILE_UPDATE qua store chung, broadcast public name/avatar cập nhật ở room/lobby; avatar ID whitelist và UTF-8 validation dùng chung accounts. Nối profileCompute vào matches_finish trước store_finalize để bỏ zero ProfileDelta của mốc Task 10; rating và progress cùng transaction, không backfill từ dữ liệu demo cũ.
 - [ ] **4. Chạy xanh** ba test và `make integration NAME=ranking`; đăng nhập lại sau restart vẫn có friend/name/avatar/badges; STORAGE_ERROR không làm UI nhận profile thành công giả.
 
 ### Task 12: Desktop Ubuntu và bridge C thực — Sơn
@@ -286,6 +288,8 @@ Chỉ module của Bách dùng nên định nghĩa tại task sở hữu, sửa 
 - [ ] **4. Chạy xanh** lệnh test trên, `npm test`, `npm run build`; mở 4 instance desktop cùng phòng để kiểm tra vòng xoay/đội/bài úp, Wild, draft và kết quả thực. Browser dev không có bridge phải hiện thông báo cần desktop, không tự fallback thành ván bot giả.
 
 ### Task 14: UI account, phòng, sảnh và hồ sơ dùng API thật — Bách
+
+**Điểm nối phòng và tổ đội với Sơn.** Với lời mời party, lưu và gửi lại `mode` (`2v2` hoặc `side`) trên `INVITE` và `PARTY_STATE`. `ROOM_KICK` cần đẩy `ROOM_STATE` không còn account bị kick tới chính connection của account đó để UI đóng phòng. Client gọi `FRIEND_LIST` sau khi xác thực, nên phòng mở trực tiếp cần endpoint này hoạt động cùng các push từ social.
 
 **Files:** Modify `client/src/pages/{Login.jsx,Lobby.jsx,CustomRoom.jsx,TeamRoom.jsx,Matchmaking.jsx}`, `client/src/context/SocialContext.jsx`, `client/src/components/lobby/{ProfileModal.jsx,FriendsModal.jsx,LeaderboardModal.jsx}`, `client/src/data/{ranks.js,mockData.js}`, `client/src/net/session.jsx`; Create `client/src/net/session.test.js`.
 

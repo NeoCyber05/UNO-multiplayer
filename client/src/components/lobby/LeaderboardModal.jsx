@@ -3,18 +3,18 @@ import Modal from '../Modal.jsx';
 import Avatar from '../Avatar.jsx';
 import RankBadge from '../RankBadge.jsx';
 import { IconClose, IconTrophy } from '../Icons.jsx';
-import { LEADERBOARD } from '../../data/mockData';
+import { useSession } from '../../net/session';
 import { RANKS, rankOf } from '../../data/ranks';
-import { useSocial } from '../../context/SocialContext.jsx';
+import { asPerson, useSocial } from '../../context/SocialContext.jsx';
 
 export default function LeaderboardModal({ open, onClose }) {
   const { me } = useSocial();
+  const { leaderboard } = useSession();
   const [selected, setSelected] = useState(null);
   const tier = selected ?? rankOf(me.elo).key;
   const rank = RANKS.find(r => r.key === tier);
   const next = RANKS[RANKS.indexOf(rank) + 1];
-  const players = [...LEADERBOARD.filter(p => p.id !== me.id), me]
-    .filter(p => rankOf(p.elo).key === tier).sort((a, b) => b.elo - a.elo);
+  const players = leaderboard.map(asPerson).filter((player) => rankOf(player.elo).key === tier);
   return (
     <Modal open={open} onClose={onClose} label="Bảng xếp hạng" className="lobby-modal leaderboard">
       <div className="lobby-modal__head">

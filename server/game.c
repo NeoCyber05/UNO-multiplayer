@@ -106,8 +106,23 @@ bool game_playable(const Game *g, Seat actor, const Card *c) {
 }
 
 bool game_can_say_uno(const Game *g, Seat s) {
-    return g && s < 4 && g->phase == PLAYING && !g->watch[s].declared &&
-           (g->watch[s].active || (s == g->turn && g->hands[s].count == 2));
+    if (!g || s >= SEAT_COUNT || g->phase != PLAYING ||
+        s != g->turn || g->unoDeclared[s]) return false;
+
+    const Pile *hand = &g->hands[s];
+    if (hand->count < 2) return false;
+
+    // Discard All can also bring a larger hand down to one card.
+    int colorCounts[WILD_COLOR + 1] = {0};
+    for (int index = 0; index < hand->count; index++) {
+        colorCounts[hand->cards[index].color]++;
+    }
+    for (int index = 0; index < hand->count; index++) {
+        const Card *card = &hand->cards[index];
+        int removed = card->value == DISCARD_ALL ? colorCounts[card->color] : 1;
+        if (hand->count - removed == 1 && game_playable(g, s, card)) return true;
+    }
+    return false;
 }
 
 static void give(Game *g, Seat s, int count, EventBatch *out) {
@@ -122,7 +137,7 @@ static void give(Game *g, Seat s, int count, EventBatch *out) {
         }
         Card c = pop(&g->deck);
         push(&g->hands[s], c);
-        g->watch[s].active = g->watch[s].declared = false;
+        g->unoDeclared[s] = false;
         event(g,out,-1,"CARD_DRAWN","{\"seat\":%u,\"cardId\":\"%s\"}",(unsigned)s,c.id);
     }
 }
@@ -132,7 +147,7 @@ static Seat next(const Game *g, int steps) {
 }
 
 static void advance(Game *g, int steps, EventBatch *out) {
-    if (g->hands[g->turn].count > 1) g->watch[g->turn].declared = false;
+    g->unoDeclared[g->turn] = false;
     g->turn = next(g,steps);
     g->turnNo++;
     g->drawnCardId[0] = 0;
@@ -171,17 +186,17 @@ static void play(Game *g, Seat s, Card c, Color chosen, EventBatch *out) {
         g->phase = FINISHED;
         g->winnerSeat = s;
         g->winnerTeam = g->team[s];
-        for (int i=0; i<4; i++) g->watch[i].active = false;
         event(g,out,-1,"WINNER","{\"seat\":%u,\"team\":%d}",(unsigned)s,g->winnerTeam);
         return;
-    }
-    if (kept == 1 && !g->watch[s].declared) {
-        g->watch[s].active = true;
-        g->watch[s].generation++;
     }
     if (c.value == REVERSE) g->direction = -g->direction;
     bool attack = c.value == DRAW_TWO || c.value == WILD_FOUR;
     if (attack) give(g,next(g,1),c.value == DRAW_TWO ? 2 : 4,out);
+    if (kept == 1 && !g->unoDeclared[s]) {
+        event(g, out, -1, "UNO_PENALTY", "{\"seat\":%u,\"penalties\":%u}",
+              (unsigned)s, ++stats->penalties);
+        give(g, s, 2, out);
+    }
     advance(g,(attack || c.value == SKIP) ? 2 : 1,out);
 }
 
@@ -234,8 +249,7 @@ Status game_apply(Game *g, Seat s, const Intent *a, EventBatch *out) {
     if (a->kind == SAY_UNO) {
         if (!game_can_say_uno(g,s)) return INVALID_ACTION;
         g->revision++;
-        g->watch[s].declared = true;
-        g->watch[s].active = false;
+        g->unoDeclared[s] = true;
         event(g,out,s,"SAY_UNO","{\"unoCalls\":%u}",++g->stats[s].unoCalls);
         return OK;
     }
@@ -285,17 +299,5 @@ Status game_timeout(Game *g, uint32_t expected_turn, EventBatch *out) {
     event(g,out,-1,"TIMEOUT","{\"seat\":%u}",(unsigned)g->turn);
     if (!g->drawnCardId[0]) give(g,g->turn,1,out);
     advance(g,1,out);
-    return OK;
-}
-
-Status game_uno_penalty(Game *g, Seat s, uint32_t generation, EventBatch *out) {
-    if (!g || !out || s >= 4) return BAD_REQUEST;
-    out->count = 0;
-    if (g->phase != PLAYING || !g->watch[s].active ||
-        g->watch[s].generation != generation) return INVALID_ACTION;
-    g->revision++;
-    g->watch[s].active = false;
-    event(g,out,-1,"UNO_PENALTY","{\"seat\":%u,\"penalties\":%u}",(unsigned)s,++g->stats[s].penalties);
-    give(g,s,2,out);
     return OK;
 }

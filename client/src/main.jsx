@@ -1,17 +1,17 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import App from './App.jsx';
-import { SocialProvider } from './context/SocialContext.jsx';
+import { SessionProvider } from './net/session.jsx';
 import './styles/theme.css';
 import './styles/polish.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <SocialProvider>
+    <HashRouter>
+      <SessionProvider>
         <App />
-      </SocialProvider>
-    </BrowserRouter>
+      </SessionProvider>
+    </HashRouter>
   </React.StrictMode>,
 );

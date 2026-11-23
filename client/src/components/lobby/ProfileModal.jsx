@@ -16,7 +16,10 @@ import {
   IconTrophy,
   IconUser,
 } from '../Icons.jsx';
-import { MATCH_HISTORY, PROFILE, RANKS } from '../../data/mockData';
+import { RANKS } from '../../data/ranks';
+import { BADGES } from '../../data/mockData';
+import { MODES } from '../../game/constants';
+import { useSession } from '../../net/session';
 import RankBadge from '../RankBadge.jsx';
 import { AVATARS } from '../../data/avatars.jsx';
 import { useSocial } from '../../context/SocialContext.jsx';
@@ -38,13 +41,18 @@ function rankOf(elo) {
   return { cur, next, progress };
 }
 
-function Overview() {
-  const { stats, modes } = PROFILE;
+function Overview({ profile }) {
+  const { stats, modes = [] } = profile ?? {};
+  if (!stats) return <p className="muted">Chưa có dữ liệu hồ sơ.</p>;
   const tiles = [
     { label: 'Số trận', value: stats.matches },
     { label: 'Thắng', value: stats.wins },
     { label: 'Tỉ lệ thắng', value: `${pct(stats.wins, stats.matches)}%` },
-    { label: 'Chuỗi thắng', value: stats.streak, sub: `Cao nhất ${stats.bestStreak}` },
+    {
+      label: stats.streak < 0 ? 'Chuỗi thua' : 'Chuỗi thắng',
+      value: Math.abs(stats.streak),
+      sub: `Thắng liên tiếp cao nhất ${stats.bestStreak}`,
+    },
   ];
   return (
     <>
@@ -64,7 +72,7 @@ function Overview() {
           const rate = pct(m.wins, m.matches);
           return (
             <div key={m.key} className="pf-mode">
-              <span className="pf-mode__name">{m.title}</span>
+              <span className="pf-mode__name">{MODES[m.key]?.label ?? m.key}</span>
               <span className="pf-mode__bar"><i style={{ width: `${rate}%` }} /></span>
               <span className="pf-mode__rate display">{rate}%</span>
               <span className="pf-mode__count">{m.wins}/{m.matches} trận</span>
@@ -76,17 +84,18 @@ function Overview() {
   );
 }
 
-function History() {
+function History({ matches }) {
+  if (!matches.length) return <p className="muted">Chưa có lịch sử trận.</p>;
   return (
     <ol className="pf-history">
-      {MATCH_HISTORY.map((m) => (
-        <li key={m.id} className={`pf-match ${m.place === 1 ? 'is-win' : ''}`}>
-          <span className="pf-match__place display">#{m.place}</span>
+      {matches.map((m) => (
+        <li key={m.matchId} className={`pf-match ${m.won ? 'is-win' : ''}`}>
+          <span className="pf-match__place display">{m.won ? '#1' : '—'}</span>
           <span className="pf-match__info">
-            <b>{m.mode}</b>
+            <b>{MODES[m.mode]?.label ?? m.mode}</b>
             <small>{m.players} người · {m.when}</small>
           </span>
-          <span className="pf-match__result">{m.place === 1 ? 'THẮNG' : 'THUA'}</span>
+          <span className="pf-match__result">{m.won ? 'THẮNG' : 'THUA'}</span>
           <span className={`pf-match__delta display ${m.delta > 0 ? 'is-up' : m.delta < 0 ? 'is-down' : ''}`}>
             {m.delta == null ? '—' : `${m.delta > 0 ? '+' : ''}${m.delta}`}
           </span>
@@ -96,7 +105,7 @@ function History() {
   );
 }
 
-// PROFILE.badges[].icon -> icon; tier -> [sáng, tối] cho huy chương
+// BADGES[].icon -> icon; tier -> [sáng, tối] cho huy chương
 const BADGE_ICONS = {
   trophy: IconTrophy,
   flame: IconFlame,
@@ -137,8 +146,9 @@ function Medal({ icon, tier }) {
   );
 }
 
-function Badges() {
-  const list = PROFILE.badges;
+function Badges({ stats }) {
+  if (!stats) return <p className="muted">Chưa có dữ liệu thành tựu.</p>;
+  const list = BADGES.map((badge) => ({ ...badge, progress: stats[badge.stat] ?? 0 }));
   const done = list.filter((b) => b.progress >= b.goal).length;
   return (
     <>
@@ -174,6 +184,9 @@ export default function ProfileModal({ open, onClose, me }) {
   const [copied, setCopied] = useState(false);
   const { cur, next, progress } = rankOf(me.elo);
   const { updateProfile } = useSocial();
+  const { profile } = useSession();
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(me.name);
   const [picking, setPicking] = useState(false);
@@ -182,13 +195,25 @@ export default function ProfileModal({ open, onClose, me }) {
     setName(me.name);
     setEditing(true);
   };
-  const saveName = () => {
-    updateProfile({ name });
-    setEditing(false);
+  const save = async (patch) => {
+    if (saving) return false;
+    setSaving(true);
+    setError('');
+    try {
+      await updateProfile(patch);
+      return true;
+    } catch (error) {
+      setError(error.message);
+      return false;
+    } finally {
+      setSaving(false);
+    }
   };
-  const pickAvatar = (key) => {
-    updateProfile({ avatar: key });
-    setPicking(false);
+  const saveName = async () => {
+    if (await save({ name })) setEditing(false);
+  };
+  const pickAvatar = async (avatar) => {
+    if (await save({ avatar })) setPicking(false);
   };
   // Escape chỉ đóng popup/ô sửa, không đóng cả modal hồ sơ
   const escOnly = (close) => (e) => {
@@ -198,7 +223,7 @@ export default function ProfileModal({ open, onClose, me }) {
   };
 
   const copyTag = () => {
-    navigator.clipboard?.writeText(PROFILE.tag);
+    navigator.clipboard?.writeText(me.tag);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -233,6 +258,7 @@ export default function ProfileModal({ open, onClose, me }) {
                     role="radio"
                     aria-checked={me.avatar === a.key}
                     className={`pf-edit__av ${me.avatar === a.key ? 'is-on' : ''}`}
+                    disabled={saving}
                     onClick={() => pickAvatar(a.key)}
                   >
                     <Avatar person={{ name: a.key, avatar: a.key }} size={48} shape="square" />
@@ -245,10 +271,9 @@ export default function ProfileModal({ open, onClose, me }) {
             <input
               className="pf-edit__name display"
               value={name}
-              maxLength={16}
+              disabled={saving}
               autoFocus
               onChange={(e) => setName(e.target.value)}
-              onBlur={saveName}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') saveName();
                 escOnly(() => setEditing(false))(e);
@@ -261,7 +286,7 @@ export default function ProfileModal({ open, onClose, me }) {
             </button>
           )}
           <button type="button" className="pf-card__tag" onClick={copyTag} title="Sao chép ID">
-            {PROFILE.tag} {copied ? <IconCheck /> : <IconCopy size={13} />}
+            {me.tag} {copied ? <IconCheck /> : <IconCopy size={13} />}
           </button>
 
           <div className="pf-rank">
@@ -271,10 +296,7 @@ export default function ProfileModal({ open, onClose, me }) {
             <small>{next ? `Còn ${next.min - me.elo} ELO lên ${next.name}` : 'Bậc cao nhất'}</small>
           </div>
 
-          <div className="pf-card__foot">
-            <span><IconFlame size={15} /> Chuỗi {PROFILE.stats.streak} trận thắng</span>
-            <span>Tham gia {PROFILE.joined}</span>
-          </div>
+          {error && <p role="alert">{error}</p>}
         </aside>
 
         <section className="profile__main">
@@ -293,9 +315,9 @@ export default function ProfileModal({ open, onClose, me }) {
             ))}
           </div>
           <div key={tab} className="profile__panel">
-            {tab === 'overview' && <Overview />}
-            {tab === 'history' && <History />}
-            {tab === 'badges' && <Badges />}
+            {tab === 'overview' && <Overview profile={profile} />}
+            {tab === 'history' && <History matches={profile?.history ?? []} />}
+            {tab === 'badges' && <Badges stats={profile?.stats} />}
           </div>
         </section>
       </div>

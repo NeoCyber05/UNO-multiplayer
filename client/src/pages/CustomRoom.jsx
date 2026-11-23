@@ -1,18 +1,16 @@
-import { useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Avatar from '../components/Avatar.jsx';
 import Modal from '../components/Modal.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
 import { IconBack, IconBot, IconCheck, IconClose, IconCopy } from '../components/Icons.jsx';
-import { useSocial } from '../context/SocialContext.jsx';
+import { useSession } from '../net/session';
+import { asPerson, useSocial } from '../context/SocialContext.jsx';
 import { BOT_LEVELS } from '../data/mockData';
 import { LOBBY_MODES } from '../data/lobbyModes';
 import './pages.css';
 
-// shortcut: mã phòng minh họa cố định, thay bằng mã do server cấp khi có multiplayer.
-const ROOM_CODE = 'B7K2X9';
-
-// teams[i] = đội của ghế i ('A' = đội bạn). Khớp teammateSeat trong game/constants.js.
+// Đội được xác định theo ghế tuyệt đối trước khi xoay bàn về phía người xem.
 const RULES = [
   { key: 'classic', label: 'Classic', teams: null },
   { key: '2v2', label: '2 vs 2', teams: ['A', 'B', 'A', 'B'] },
@@ -22,83 +20,78 @@ const RULES = [
 const SEAT_POS = ['bottom', 'left', 'top', 'right'];
 
 const levelOf = (key) => BOT_LEVELS.find((l) => l.key === key) ?? BOT_LEVELS[1];
-const newBot = () => ({ kind: 'bot', level: 'normal' });
-const botPerson = (i, levelKey) => {
-  const lv = levelOf(levelKey);
-  return { id: `bot-${i}`, name: `Bot ${i}`, initials: 'BOT', tint: lv.tint, isBot: true, botLevel: lv.key };
-};
 
 export default function CustomRoom() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { me, friends } = useSocial();
-  const friendList = friends.filter((f) => !f.pending);
-  const [ruleKey, setRuleKey] = useState('classic');
-  const [seats, setSeats] = useState([{ kind: 'me', person: me }, null, null, null]);
+  const { room: roomSnapshot, request, connection } = useSession();
+  const friendList = friends.filter((friend) => !friend.pending);
+  const [draftMode, setDraftMode] = useState('classic');
   const [pickSeat, setPickSeat] = useState(null);
   const [joinOpen, setJoinOpen] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [toast, setToast] = useState(null);
+  const [pending, setPending] = useState(false);
 
-  const rule = RULES.find((r) => r.key === ruleKey);
+  const mySeatEntry = roomSnapshot?.seats.find((seat) => seat?.userId === me.id);
+  const room = mySeatEntry ? roomSnapshot : null;
+  const roomCode = room?.code;
+  const ruleKey = room?.mode ?? draftMode;
+  const rule = RULES.find((item) => item.key === ruleKey);
+  const mySeat = mySeatEntry?.seat;
+  const isHost = !!room && room.hostSeat === mySeat;
+  const available = connection === 'connected' && !pending;
+  const seats = SEAT_POS.map((_, index) => room ? room.seats[(index + mySeat) % SEAT_POS.length] : null);
   const filled = seats.filter(Boolean).length;
   const notify = (text) => setToast({ id: Date.now(), text });
-  const inRoom = (f) => seats.some((s) => s?.person?.id === f.id);
-  const placeAt = (i, occ) => setSeats((s) => s.map((x, k) => (k === i ? occ : x)));
+  const inRoom = (friend) => seats.some((seat) => seat?.userId === friend.id);
 
-  const clearSeat = (i) => {
-    placeAt(i, null);
-    if (pickSeat === i) setPickSeat(null);
-  };
-
-  const invite = (f) => {
-    const target = pickSeat != null && !seats[pickSeat] ? pickSeat : seats.findIndex((s) => !s);
-    if (target < 0) return notify('Phòng đã đủ người');
-    placeAt(target, { kind: 'friend', person: f });
-    setPickSeat(null);
-    notify(`${f.name} đã vào phòng`);
-  };
-
-  useEffect(() => {
-    const friendId = location.state?.inviteFriendId;
-    if (!friendId) return;
-    const friend = friendList.find((f) => f.id === friendId);
-    if (!friend) return;
-    setSeats((s) => {
-      if (s.some((occ) => occ?.person?.id === friend.id)) return s;
-      const target = s.findIndex((occ) => !occ);
-      if (target < 0) return s;
-      return s.map((occ, i) => (i === target ? { kind: 'friend', person: friend } : occ));
-    });
-    notify(`${friend.name} đã vào phòng`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const start = () => {
-    const lineup = seats.map((occ, i) => (occ.kind === 'bot' ? botPerson(i, occ.level) : occ.person));
-    navigate(`/game/${ruleKey}`, { state: { lineup, ranked: false } });
-  };
-
-  const fillBots = () => {
-    setSeats((s) => s.map((x) => x ?? newBot()));
-    setPickSeat(null);
-  };
-
-  const copyCode = async () => {
+  const run = async (operation) => {
+    if (!available) return false;
+    setPending(true);
     try {
-      await navigator.clipboard.writeText(ROOM_CODE);
-      notify('Đã sao chép mã phòng');
-    } catch {
-      notify(`Mã phòng: ${ROOM_CODE}`);
+      await operation();
+      return true;
+    } catch (error) {
+      notify(error.message);
+      return false;
+    } finally {
+      setPending(false);
     }
   };
-
-  const submitJoin = (e) => {
-    e.preventDefault();
-    if (joinCode.trim().length < 6) return notify('Mã phòng cần ít nhất 6 ký tự');
-    setJoinOpen(false);
-    notify(`Không tìm thấy phòng ${joinCode}`);
-    setJoinCode('');
+  const command = (type, payload) => run(() => request(type, payload));
+  const chooseMode = (mode) => room ? command('ROOM_MODE', { mode }) : setDraftMode(mode);
+  const back = async () => {
+    if (!room || await command('ROOM_LEAVE')) navigate('/lobby');
+  };
+  const invite = async (friend) => {
+    if (await command('INVITE_SEND', { userId: friend.id, kind: 'room' })) {
+      setPickSeat(null);
+      notify(`Đã gửi lời mời tới ${friend.name}`);
+    }
+  };
+  const fillBots = () => run(async () => {
+    for (let index = 0; index < seats.length; index++) {
+      if (!seats[index]) await request('ROOM_BOT', { seat: (index + mySeat) % seats.length, level: 'normal' });
+    }
+    setPickSeat(null);
+  });
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(roomCode);
+      notify('Đã sao chép mã phòng');
+    } catch {
+      notify(`Mã phòng: ${roomCode}`);
+    }
+  };
+  const submitJoin = async (event) => {
+    event.preventDefault();
+    const code = joinCode.trim();
+    if (!/^[A-Z0-9]{6}$/.test(code)) return notify('Mã phòng cần 6 ký tự A–Z hoặc 0–9');
+    if (await command('ROOM_JOIN', { code })) {
+      setJoinOpen(false);
+      setJoinCode('');
+    }
   };
 
   return (
@@ -106,19 +99,19 @@ export default function CustomRoom() {
       <MenuBackground />
 
       <header className="page-head">
-        <button type="button" className="icon-btn" onClick={() => navigate('/lobby')} aria-label="Quay lại">
+        <button type="button" className="icon-btn" onClick={back} aria-label="Quay lại">
           <IconBack />
         </button>
         <div style={{ flexGrow: 1 }}>
           <div className="display page-head__title">Phòng tùy chỉnh</div>
           <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>Mời bạn bè hoặc thêm bot · không tính ELO</div>
         </div>
-        <button type="button" className="btn btn--ghost" onClick={() => setJoinOpen(true)}>Nhập mã phòng</button>
-        <button type="button" className="room-code" onClick={copyCode} aria-label="Sao chép mã phòng">
+        {!room && <button type="button" className="btn btn--ghost" disabled={!available} onClick={() => setJoinOpen(true)}>Nhập mã phòng</button>}
+        {roomCode && <button type="button" className="room-code" onClick={copyCode} aria-label="Sao chép mã phòng">
           <span className="room-code__label">MÃ PHÒNG</span>
-          <b className="display">{ROOM_CODE}</b>
+          <b className="display">{roomCode}</b>
           <IconCopy />
-        </button>
+        </button>}
       </header>
 
       <div className="room">
@@ -130,7 +123,8 @@ export default function CustomRoom() {
                 type="button"
                 aria-pressed={r.key === ruleKey}
                 className={`rule-tab ${r.key === ruleKey ? 'is-on' : ''}`}
-                onClick={() => setRuleKey(r.key)}
+                disabled={!available || (!!room && !isHost)}
+                onClick={() => chooseMode(r.key)}
               >
                 <img className="rule-tab__art" src={LOBBY_MODES.find((m) => m.key === r.key)?.image} alt="" />
                 <b>{r.label}<span className="rule-tab__check" aria-hidden="true"><IconCheck /></span></b>
@@ -142,35 +136,39 @@ export default function CustomRoom() {
             <div className="room-table__felt"><span className="display">UNO</span></div>
             {SEAT_POS.map((pos, i) => {
               const occ = seats[i];
-              const team = rule.teams?.[i];
-              const person = occ?.kind === 'bot' ? botPerson(i, occ.level) : occ?.person ?? null;
-              const rel = team ? (team === 'A' ? 'is-team' : 'is-enemy') : '';
+              const absoluteSeat = room ? (i + mySeat) % seats.length : null;
+              const team = room ? rule.teams?.[absoluteSeat] : null;
+              const isMe = occ?.userId === me.id;
+              const mine = team === rule.teams?.[mySeat];
+              const person = occ ? asPerson(occ) : null;
+              const rel = team ? (mine ? 'is-team' : 'is-enemy') : '';
               return (
                 <div
                   key={pos}
                   className={`room-seat room-seat--${pos} ${occ ? '' : 'is-empty'} ${rel} ${pickSeat === i ? 'is-picking' : ''}`}
                 >
-                  {occ && occ.kind !== 'me' && (
-                    <button type="button" className="seat-remove" onClick={() => clearSeat(i)} aria-label="Bỏ khỏi ghế">
+                  {occ && !isMe && isHost && (
+                    <button type="button" className="seat-remove" disabled={!available} onClick={() => command('ROOM_KICK', { seat: absoluteSeat })} aria-label="Bỏ khỏi ghế">
                       <IconClose size={14} />
                     </button>
                   )}
                   <Avatar person={person} size={56} />
                   <div className="room-seat__name">
-                    {!occ ? 'Ô trống' : occ.kind === 'me' ? `${person.name} (Bạn)` : person.name}
+                    {!occ ? 'Ô trống' : isMe ? `${person.name} (Bạn)` : person.name}
                   </div>
-                  {occ?.kind === 'me' && <span className="chip seat-chip seat-chip--host">Chủ phòng</span>}
-                  {occ && occ.kind !== 'me' && team && (
-                    <span className={`chip seat-chip ${team === 'A' ? 'seat-chip--team' : 'seat-chip--enemy'}`}>
-                      {team === 'A' ? 'Đồng đội' : 'Đối thủ'}
+                  {occ && absoluteSeat === room?.hostSeat && <span className="chip seat-chip seat-chip--host">Chủ phòng</span>}
+                  {occ && !isMe && team && (
+                    <span className={`chip seat-chip ${mine ? 'seat-chip--team' : 'seat-chip--enemy'}`}>
+                      {mine ? 'Đồng đội' : 'Đối thủ'}
                     </span>
                   )}
-                  {occ?.kind === 'bot' && (
+                  {occ?.isBot && (
                     <select
                       className="seat-level"
-                      style={{ '--c': levelOf(occ.level).tint }}
-                      value={occ.level}
-                      onChange={(e) => placeAt(i, { ...occ, level: e.target.value })}
+                      style={{ '--c': levelOf(occ.botLevel).tint }}
+                      value={occ.botLevel}
+                      disabled={!isHost || !available}
+                      onChange={(e) => command('ROOM_BOT', { seat: absoluteSeat, level: e.target.value })}
                       aria-label={`Độ khó Bot ${i}`}
                     >
                       {BOT_LEVELS.map((l) => (
@@ -178,10 +176,10 @@ export default function CustomRoom() {
                       ))}
                     </select>
                   )}
-                  {!occ && (
+                  {!occ && isHost && (
                     <div className="seat-actions">
                       <button type="button" className="btn btn--sm btn--ghost" onClick={() => setPickSeat(i)}>Mời bạn</button>
-                      <button type="button" className="btn btn--sm btn--primary" onClick={() => placeAt(i, newBot())}>+ Bot</button>
+                      <button type="button" className="btn btn--sm btn--primary" disabled={!available} onClick={() => command('ROOM_BOT', { seat: absoluteSeat, level: 'normal' })}>+ Bot</button>
                     </div>
                   )}
                 </div>
@@ -218,7 +216,7 @@ export default function CustomRoom() {
                     <button
                       type="button"
                       className={`btn btn--sm ${here ? 'btn--outline' : 'btn--ghost'}`}
-                      disabled={!f.online || here}
+                      disabled={!room || !available || !f.online || here || filled === 4}
                       onClick={() => invite(f)}
                     >
                       {here ? 'Trong phòng' : 'Mời'}
@@ -231,18 +229,20 @@ export default function CustomRoom() {
 
           <div style={{ flexGrow: 1 }} />
 
-          <button type="button" className="btn btn--outline btn--block" disabled={filled === 4} onClick={fillBots}>
+          {!room && <button type="button" className="btn btn--primary btn--block"
+            disabled={!available} onClick={() => command('ROOM_CREATE', { mode: ruleKey })}>Tạo phòng</button>}
+          {isHost && <><button type="button" className="btn btn--outline btn--block" disabled={!available || filled === 4} onClick={fillBots}>
             <IconBot size={18} /> Thêm bot vào mọi ô trống
           </button>
           <button
             type="button"
             className="btn btn--primary btn--block"
-            disabled={filled < 4}
-            onClick={start}
+            disabled={!available || filled < 4}
+            onClick={() => command('ROOM_START')}
             title={filled < 4 ? 'Cần đủ 4 ghế' : undefined}
           >
             {filled < 4 ? `Bắt đầu (${filled}/4)` : 'Bắt đầu'}
-          </button>
+          </button></>}
         </div>
       </div>
 
@@ -251,7 +251,8 @@ export default function CustomRoom() {
           <div className="display" style={{ fontSize: 22, fontWeight: 600 }}>Nhập mã phòng</div>
           <input
             className="input join-form__input"
-            placeholder={`VD: ${ROOM_CODE}`}
+            placeholder="VD: B7K2X9"
+            maxLength={6}
             minLength={6}
             autoFocus
             value={joinCode}

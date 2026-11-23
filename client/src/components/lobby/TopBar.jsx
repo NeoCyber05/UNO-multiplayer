@@ -16,8 +16,6 @@ export default function TopBar({ me, muted, onToggleMute, onProfile, onSettings 
               <RankBadge elo={me.elo} size={32} /> {me.elo.toLocaleString('vi-VN')}
             </span>
           </span>
-          <span className="topbar__xp"><i style={{ width: `${me.xp}%` }} /></span>
-          <span className="topbar__lv">Cấp {me.level} · {me.xp}% XP</span>
         </span>
       </button>
 

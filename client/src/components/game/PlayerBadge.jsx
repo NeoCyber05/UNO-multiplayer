@@ -22,12 +22,21 @@ export default function PlayerBadge({
   size = 96,
   arrowSide = 'top',
   drafting = false,
+  turnDeadline,
+  paused,
 }) {
-  const count = player.hand.length;
+  const count = player.cardCount ?? player.hand.length;
+  const remaining = turnDeadline == null
+    ? TURN_SECONDS
+    : Math.max(0, Math.min(TURN_SECONDS, (turnDeadline - performance.now()) / 1000));
   return (
     <div className={`pbadge ${isTurn ? 'is-turn' : ''}`}>
       <div className="pbadge__avatar" style={{ width: size, height: size }}>
-        {isTurn && !drafting && <span key={turnKey} className="pbadge__timer" style={{ '--turn-dur': `${TURN_SECONDS}s` }} />}
+        {isTurn && !drafting && <span key={turnKey} className="pbadge__timer" style={{
+          '--turn-dur': `${TURN_SECONDS}s`,
+          animationDelay: `${remaining - TURN_SECONDS}s`,
+          animationPlayState: paused ? 'paused' : 'running',
+        }} />}
         {isTurn && (
           <span className={`turn-arrow turn-arrow--${arrowSide}`} aria-hidden="true">
             <span className="turn-arrow__tag">{drafting ? 'CHỌN' : 'LƯỢT'}</span>

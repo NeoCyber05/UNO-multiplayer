@@ -1,21 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import Avatar from '../components/Avatar.jsx';
 import MenuBackground from '../components/MenuBackground.jsx';
 import { IconBack, IconClose, IconPlay } from '../components/Icons.jsx';
-import { useSocial } from '../context/SocialContext.jsx';
+import { useSession } from '../net/session';
+import { asPerson, useSocial } from '../context/SocialContext.jsx';
 import { MODES, SEATS } from '../game/constants';
 import './pages.css';
 
 const TEAM_MODES = ['2v2', 'side'];
-const INVITE_REPLY_MS = 2000;
 const HINT = {
   '2v2': 'Đồng đội ngồi đối diện — bài của nhau luôn hiện ra với bạn',
   side: 'Đồng đội ngồi ngay bên trái bạn — hai người nhìn thấy bài của nhau',
 };
-
-// Giả lập: bạn đang trong trận thì từ chối lời mời. Thay bằng phản hồi socket khi có server.
-const isBusy = (f) => f.status?.includes('trong trận');
 
 /** Phòng tổ đội 2 vs 2 / Side to Side: mời 1 bạn làm đồng đội rồi đi ghép trận tìm đối thủ. */
 export default function TeamRoom() {
@@ -27,49 +24,44 @@ export default function TeamRoom() {
 function Room({ mode }) {
   const cfg = MODES[mode];
   const navigate = useNavigate();
-  const { me, friends, party, setParty } = useSocial();
-  const [pendingId, setPendingId] = useState(null);
+  const { me, friends } = useSocial();
+  const { party, request, receive, connection } = useSession();
+  const [pending, setPending] = useState(false);
   const [toast, setToast] = useState(null);
-  const timer = useRef(null);
-
-  const teammate = party.mode === mode ? party.teammate : null;
+  const teammateId = party?.members.find((member) => (member.userId ?? member) !== me.id);
+  const teammate = teammateId && (typeof teammateId === 'object'
+    ? asPerson(teammateId)
+    : friends.find((friend) => friend.id === teammateId) ??
+      asPerson({ userId: teammateId, name: `UNO#${teammateId}` }));
+  const isLeader = !party?.members.length || party.leaderId === me.id;
+  const connected = connection === 'connected';
   const notify = (text) => setToast({ id: Date.now(), text });
-
-  // Vào phòng của chế độ khác -> bỏ nhóm cũ
-  useEffect(() => {
-    if (party.mode !== mode) setParty({ mode, teammate: null });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
-
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const list = friends
-    .filter((f) => !f.pending)
+  const list = friends.filter((friend) => !friend.pending)
     .sort((a, b) => Number(b.online) - Number(a.online));
-  const onlineCount = list.filter((f) => f.online).length;
+  const onlineCount = list.filter((friend) => friend.online).length;
 
-  const invite = (f) => {
-    setPendingId(f.id);
-    timer.current = setTimeout(() => {
-      setPendingId(null);
-      if (isBusy(f)) {
-        notify(`${f.name} đang trong trận, chưa thể vào phòng`);
-        return;
+  const command = async (type, payload) => {
+    if (!connected || pending) return false;
+    setPending(true);
+    try {
+      const response = await request(type, payload);
+      if (type === 'QUEUE_JOIN') {
+        if (response?.queue) receive('QUEUE_STATE', response.queue);
+        navigate(`/matchmaking/${mode}`);
+      } else if (type === 'INVITE_SEND') {
+        notify('Đã gửi lời mời tổ đội');
       }
-      setParty({ mode, teammate: f });
-      notify(`${f.name} đã vào phòng`);
-    }, INVITE_REPLY_MS);
+      return true;
+    } catch (error) {
+      notify(error.message);
+      return false;
+    } finally {
+      setPending(false);
+    }
   };
-
-  const cancelInvite = () => {
-    clearTimeout(timer.current);
-    setPendingId(null);
-    notify('Đã huỷ lời mời');
-  };
-
-  const kick = () => {
-    notify(`${teammate.name} đã rời phòng`);
-    setParty({ mode, teammate: null });
+  const leave = () => command('PARTY_LEAVE');
+  const back = async () => {
+    if (!teammate || await leave()) navigate('/lobby');
   };
 
   const seatOf = (i) => {
@@ -78,30 +70,14 @@ function Room({ mode }) {
     return { kind: 'enemy', person: null };
   };
 
-  const friendButton = (f) => {
-    if (!f.online) return null;
-    if (teammate?.id === f.id) {
+  const friendButton = (friend) => {
+    if (!friend.online) return null;
+    if (teammate?.id === friend.id) {
       return <button type="button" className="btn btn--sm btn--outline" disabled>Trong phòng</button>;
     }
-    if (pendingId === f.id) {
-      return (
-        <button type="button" className="btn btn--sm btn--outline is-waiting" onClick={cancelInvite} title="Bấm để huỷ lời mời">
-          Đã mời…
-        </button>
-      );
-    }
-    const blocked = !!teammate || !!pendingId;
-    return (
-      <button
-        type="button"
-        className="btn btn--sm btn--ghost"
-        disabled={blocked}
-        onClick={() => invite(f)}
-        title={teammate ? 'Phòng đã đủ đồng đội' : pendingId ? 'Đang chờ phản hồi lời mời khác' : undefined}
-      >
-        Mời
-      </button>
-    );
+    return <button type="button" className="btn btn--sm btn--ghost"
+      disabled={!!teammate || !connected || pending}
+      onClick={() => command('INVITE_SEND', { userId: friend.id, kind: 'party', mode })}>Mời</button>;
   };
 
   return (
@@ -109,7 +85,7 @@ function Room({ mode }) {
       <MenuBackground />
 
       <header className="page-head">
-        <button type="button" className="icon-btn" onClick={() => navigate('/lobby')} aria-label="Quay lại">
+        <button type="button" className="icon-btn" onClick={back} aria-label="Quay lại">
           <IconBack />
         </button>
         <div style={{ flexGrow: 1 }}>
@@ -129,17 +105,17 @@ function Room({ mode }) {
               return (
                 <div key={pos} className={`room-seat room-seat--${pos} ${person ? '' : 'is-empty'} ${rel}`}>
                   {seat.kind === 'mate' && person && (
-                    <button type="button" className="seat-remove" onClick={kick} aria-label="Mời ra khỏi phòng">
+                    <button type="button" className="seat-remove" onClick={leave} disabled={pending || !connected} aria-label="Rời tổ đội">
                       <IconClose size={14} />
                     </button>
                   )}
                   <Avatar person={person} size={56} />
                   <div className="room-seat__name">
                     {seat.kind === 'me' && `${person.name} (Bạn)`}
-                    {seat.kind === 'mate' && (person ? person.name : pendingId ? 'Đang chờ phản hồi…' : 'Ghế đồng đội')}
+                    {seat.kind === 'mate' && (person ? person.name : 'Ghế đồng đội')}
                     {seat.kind === 'enemy' && 'Ghép trận sẽ tìm'}
                   </div>
-                  {seat.kind === 'me' && <span className="chip seat-chip seat-chip--host">Chủ phòng</span>}
+                  {seat.kind === 'me' && isLeader && <span className="chip seat-chip seat-chip--host">Chủ phòng</span>}
                   {seat.kind === 'mate' && (
                     <span className="chip seat-chip seat-chip--team">{person ? 'Đồng đội' : 'Mời bạn bè →'}</span>
                   )}
@@ -183,9 +159,8 @@ function Room({ mode }) {
           <button
             type="button"
             className="btn btn--primary btn--block"
-            disabled={!!pendingId}
-            onClick={() => navigate(`/matchmaking/${mode}`)}
-            title={pendingId ? 'Đang chờ phản hồi lời mời' : undefined}
+            disabled={!isLeader || pending || !connected}
+            onClick={() => command('QUEUE_JOIN', { mode })}
           >
             <IconPlay /> Tìm trận
           </button>

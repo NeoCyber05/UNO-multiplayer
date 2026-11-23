@@ -4,7 +4,7 @@ import { IconBook, IconClose } from '../Icons.jsx';
 const SECTIONS = [
   {
     title: 'Mục tiêu',
-    text: 'Đánh hết bài trên tay trước người khác. Khi còn 1 lá phải bấm UNO, quên hô sẽ bị phạt rút 2 lá.',
+    text: 'Đánh hết bài trên tay trước người khác. Hô UNO trước khi đánh xuống còn 1 lá. Quên hô sẽ rút phạt 2 lá ngay.',
   },
   {
     title: 'Lượt đánh',

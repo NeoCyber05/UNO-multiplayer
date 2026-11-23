@@ -56,6 +56,7 @@ static void effects(void) {
     }
     Game g = setup(DISCARD_ALL);
     g.hands[0].cards[g.hands[0].count++] = (Card){"c4", RED, DRAW_TWO};
+    assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == OK);
     assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK);
     assert(g.hands[0].count == 1 && g.stats[0].played == 2 && g.hands[1].count == 7);
     assert(g.discard.count == 3 && !strcmp(g.discard.cards[2].id,"c1"));
@@ -114,17 +115,30 @@ static void invalid_and_draw(void) {
 
 static void uno(void) {
     Game g = setup(ONE);
-    g.hands[1] = (Pile){.count=2,.cards={{"c5",RED,TWO},{"c6",BLUE,ONE}}};
     assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK);
-    uint32_t generation = g.watch[0].generation;
-    assert(act(&g,1,PLAY,"c5",NO_COLOR) == OK && g.watch[0].active && g.watch[1].active);
-    assert(act(&g,1,SAY_UNO,NULL,NO_COLOR) == OK && !g.watch[1].active && g.watch[0].active);
-    assert(game_uno_penalty(&g,0,generation,&events) == OK && g.hands[0].count == 3);
-    Game before = g;
-    assert(game_uno_penalty(&g,0,generation,&events) != OK && !memcmp(&before,&g,sizeof g));
+    assert(g.hands[0].count == 3 && g.stats[0].penalties == 1);
+    assert(!game_can_say_uno(&g,0));
     g = setup(ONE);
     assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == OK);
-    assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && !g.watch[0].active);
+    assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK);
+    assert(g.hands[0].count == 1 && g.stats[0].penalties == 0);
+
+    g = setup(ONE);
+    g.currentColor = GREEN;
+    assert(!game_can_say_uno(&g,0));
+    assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == INVALID_ACTION && g.stats[0].unoCalls == 0);
+
+    g = setup(DISCARD_ALL);
+    g.hands[0].cards[1] = (Card){"c2",RED,ONE};
+    strcpy(g.drawnCardId, "c1");
+    assert(!game_can_say_uno(&g,0));
+    assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && g.phase == FINISHED);
+
+    g = setup(DISCARD_ALL);
+    g.hands[0].cards[g.hands[0].count++] = (Card){"c5",RED,TWO};
+    assert(game_can_say_uno(&g,0));
+    assert(act(&g,0,SAY_UNO,NULL,NO_COLOR) == OK);
+    assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && g.hands[0].count == 1);
 
     for (int timeout=0; timeout<=1; timeout++) {
         g = setup(ONE);
@@ -136,7 +150,8 @@ static void uno(void) {
         else assert(act(&g,0,PASS,NULL,NO_COLOR) == OK);
         while (g.turn != 0) assert(game_timeout(&g,g.turnNo,&events) == OK);
         assert(game_can_say_uno(&g,0));
-        assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK && g.watch[0].active);
+        assert(act(&g,0,PLAY,"c1",NO_COLOR) == OK);
+        assert(g.hands[0].count == 3 && g.stats[0].penalties == 1);
     }
 }
 
@@ -163,5 +178,5 @@ int main(void) {
     effects();
     invalid_and_draw();
     uno();
-    puts("Classic rules, UNO watches and conservation passed");
+    puts("Classic rules, immediate UNO penalty and conservation passed");
 }

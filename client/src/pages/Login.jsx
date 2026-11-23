@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import UnoCard from '../components/card/UnoCard.jsx';
 import { IconArrowRight, IconCards, IconTrophy, IconUsers } from '../components/Icons.jsx';
 import { LOBBY_MODES } from '../data/lobbyModes';
 import { ASSETS } from '../config/assets';
+import { AVATARS } from '../data/avatars';
+import { useSession } from '../net/session';
+import { INVALID_DISPLAY_NAME, validDisplayName } from '../net/displayName';
 import './pages.css';
 
 const HERO_CARDS = [
@@ -14,17 +16,34 @@ const HERO_CARDS = [
 ];
 
 export default function Login() {
-  const navigate = useNavigate();
+  const { request, connection } = useSession();
   const [email, setEmail] = useState('');
   const [pass, setPass] = useState('');
   const [error, setError] = useState('');
+  const [registering, setRegistering] = useState(false);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (busy || connection !== 'connected') return;
     if (!/^\S+@\S+\.\S+$/.test(email)) return setError('Email không hợp lệ');
     if (pass.length < 6) return setError('Mật khẩu tối thiểu 6 ký tự');
+    if (registering && !validDisplayName(name)) return setError(INVALID_DISPLAY_NAME);
     setError('');
-    navigate('/lobby');
+    setBusy(true);
+    const credentials = { email: email.trim().toLowerCase(), password: pass };
+    try {
+      if (registering) {
+        await request('REGISTER', { ...credentials, name: name.trim(), avatar: AVATARS[0].key });
+        setRegistering(false);
+      }
+      await request('LOGIN', credentials);
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -65,10 +84,15 @@ export default function Login() {
         <form className="login__form" onSubmit={submit} noValidate>
           <div>
             <span className="eyebrow">SẴN SÀNG CHO VÁN TIẾP THEO?</span>
-            <h1 className="display login__title">Chào mừng trở lại.</h1>
+            <h1 className="display login__title">{registering ? 'Tạo tài khoản' : 'Chào mừng trở lại.'}</h1>
             <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>Vào sảnh chờ và tìm bạn chơi cùng</div>
           </div>
 
+          {registering && <div>
+            <label className="label" htmlFor="name">Tên hiển thị</label>
+            <input id="name" className="input" value={name}
+              onChange={(e) => setName(e.target.value)} autoComplete="nickname" />
+          </div>}
           <div>
             <label className="label" htmlFor="email">Email</label>
             <input
@@ -90,29 +114,27 @@ export default function Login() {
               placeholder="••••••••"
               value={pass}
               onChange={(e) => setPass(e.target.value)}
-              autoComplete="current-password"
+              autoComplete={registering ? 'new-password' : 'current-password'}
             />
           </div>
 
           <div className="login__row">
             <span className="login__error" role="alert">{error}</span>
-            <button type="button" className="link-btn">Quên mật khẩu?</button>
+            {connection !== 'connected' && <span role="status">
+              {connection === 'unavailable' ? 'Mở UNO Desktop để kết nối.' :
+                connection === 'connecting' ? 'Đang kết nối…' : 'Máy chủ chưa kết nối.'}
+            </span>}
           </div>
 
-          <button type="submit" className="btn btn--primary btn--block">Vào sảnh chơi <IconArrowRight /></button>
-
-          <div className="divider">hoặc</div>
-
-          <button type="button" className="btn btn--ghost btn--block" onClick={() => navigate('/lobby')}>
-            <span className="google-g">G</span>
-            Đăng nhập bằng Google
-          </button>
-          <button type="button" className="btn btn--outline btn--block" onClick={() => navigate('/lobby')}>
-            Chơi với tư cách khách
+          <button type="submit" className="btn btn--primary btn--block" disabled={busy || connection !== 'connected'}>
+            {registering ? 'Đăng ký' : 'Vào sảnh chơi'} <IconArrowRight />
           </button>
 
           <div className="muted" style={{ textAlign: 'center', fontSize: 13 }}>
-            Chưa có tài khoản? <button type="button" className="link-btn link-btn--yellow">Đăng ký miễn phí</button>
+            <button type="button" className="link-btn link-btn--yellow" disabled={busy}
+              onClick={() => { setRegistering(!registering); setError(''); }}>
+              {registering ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký'}
+            </button>
           </div>
         </form>
       </main>

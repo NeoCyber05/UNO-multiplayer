@@ -14,7 +14,7 @@ export default function DrawFlight({ players }) {
     const overlay = layer.current;
     const table = overlay.parentElement;
     players.forEach((player, seat) => {
-      const gained = player.hand.length - before[seat].hand.length;
+      const gained = player.cardCount - before[seat].cardCount;
       if (gained <= 0) return;
 
       const from = table.querySelector('.deck').getBoundingClientRect();

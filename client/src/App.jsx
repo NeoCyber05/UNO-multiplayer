@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import Stage from './components/Stage.jsx';
 import MusicPlayer from './components/MusicPlayer.jsx';
 import Login from './pages/Login.jsx';
@@ -8,13 +9,37 @@ import Matchmaking from './pages/Matchmaking.jsx';
 import GameTable from './pages/GameTable.jsx';
 import TeamRoom from './pages/TeamRoom.jsx';
 import MatchResult from './pages/MatchResult.jsx';
+import { useSession } from './net/session';
 
 export default function App() {
+  const { me, game, connection } = useSession();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const userId = me?.userId;
+  const matchId = game?.matchId;
+  const mode = game?.mode;
+  const routedMatch = useRef(null);
+  useEffect(() => {
+    if (!userId || !matchId) {
+      routedMatch.current = null;
+      return;
+    }
+    const routeKey = `${userId}:${matchId}`;
+    if (routeKey !== routedMatch.current) {
+      routedMatch.current = routeKey;
+      navigate(`/game/${mode}`);
+    }
+  }, [userId, matchId, mode, navigate]);
+
+  if (!me && pathname !== '/') return <Navigate to="/" replace />;
+
   return (
     <Stage>
       <MusicPlayer />
+      {me && connection !== 'connected' && !pathname.startsWith('/game/') &&
+        <div className="menu-toast" role="status">Đang mất kết nối với máy chủ</div>}
       <Routes>
-        <Route path="/" element={<Login />} />
+        <Route path="/" element={me ? <Navigate to={matchId ? `/game/${mode}` : '/lobby'} replace /> : <Login />} />
         <Route path="/lobby" element={<Lobby />} />
         <Route path="/custom" element={<CustomRoom />} />
         <Route path="/matchmaking/:mode" element={<Matchmaking />} />

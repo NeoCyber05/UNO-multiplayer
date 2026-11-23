@@ -34,7 +34,7 @@ typedef struct {
     uint32_t turnNo;
     int direction, winnerSeat, winnerTeam, team[SEAT_COUNT];
     char drawnCardId[5]; /* Empty until DRAW returns a playable card. */
-    struct { bool active, declared; uint32_t generation; } watch[SEAT_COUNT];
+    bool unoDeclared[SEAT_COUNT];
     PlayerStats stats[SEAT_COUNT];
     uint64_t rng, revision, eventSeq;
 } Game;
@@ -43,7 +43,6 @@ Status game_init(Game *g, Mode mode, const PlayerSpec players[4], uint64_t seed)
 Status game_apply(Game *g, Seat actor, const Intent *intent, EventBatch *out);
 Status game_timeout(Game *g, uint32_t expected_turn, EventBatch *out);
 Status game_draft_timeout(Game *g, uint32_t expected_pick, EventBatch *out);
-Status game_uno_penalty(Game *g, Seat actor, uint32_t watch_generation, EventBatch *out);
 /* card is borrowed from hands[actor]. */
 bool game_playable(const Game *g, Seat actor, const Card *card);
 bool game_can_say_uno(const Game *g, Seat actor);
