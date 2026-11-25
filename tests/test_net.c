@@ -4,7 +4,10 @@
 #include "server/app.h"
 #include <assert.h>
 #include <errno.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -234,6 +237,93 @@ static void test_client_connect_fail(void)
     assert(client == NULL);
 }
 
+static void test_client_resolve(void)
+{
+    ClientAddress address;
+    assert(client_resolve(NULL, 9090, &address) == BAD_REQUEST);
+    assert(client_resolve("127.0.0.1", 0, &address) == BAD_REQUEST);
+    assert(client_resolve("127.0.0.1", 9090, NULL) == BAD_REQUEST);
+
+    /* A numeric address resolves without DNS. */
+    assert(client_resolve("127.0.0.1", 9090, &address) == OK);
+    assert(address.length > 0);
+
+    assert(client_resolve("this.host.does.not.exist.invalid.local", 9090, &address) == NOT_FOUND);
+}
+
+/* Listening socket on an ephemeral loopback port; returns the fd. */
+static int open_listener(uint16_t *port_out)
+{
+    int listenFd = socket(AF_INET, SOCK_STREAM, 0);
+    assert(listenFd >= 0);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    assert(bind(listenFd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    assert(listen(listenFd, 4) == 0);
+    socklen_t length = sizeof(addr);
+    assert(getsockname(listenFd, (struct sockaddr *)&addr, &length) == 0);
+    *port_out = ntohs(addr.sin_port);
+    return listenFd;
+}
+
+/* Wait for a pending connect the way the GTK host does: writable or error. */
+static void wait_writable(int fd)
+{
+    struct pollfd pfd = {fd, POLLOUT, 0};
+    assert(poll(&pfd, 1, 2000) == 1);
+}
+
+static void test_client_connect_start_finish(void)
+{
+    int fd = -1;
+    bool inProgress = false;
+    Client *client = NULL;
+    assert(client_connect_start(NULL, &fd, &inProgress) == BAD_REQUEST);
+    assert(client_connect_finish(-1, &client) == BAD_REQUEST);
+    assert(client == NULL);
+
+    uint16_t port = 0;
+    int listenFd = open_listener(&port);
+    ClientAddress address;
+    assert(client_resolve("127.0.0.1", port, &address) == OK);
+
+    /* Success: the start never blocks; finish turns the fd into a Client. */
+    assert(client_connect_start(&address, &fd, &inProgress) == OK);
+    assert(fd >= 0);
+    assert((fcntl(fd, F_GETFL, 0) & O_NONBLOCK) != 0);
+    if (inProgress) {
+        wait_writable(fd);
+    }
+    assert(client_connect_finish(fd, &client) == OK);
+    assert(client != NULL);
+    assert(client_fd(client) == fd);
+    client_close(client);
+    client = NULL;
+
+    /* Refused: either start fails at once or finish reports SO_ERROR. */
+    close(listenFd);
+    Status started = client_connect_start(&address, &fd, &inProgress);
+    if (started == OK) {
+        assert(inProgress);
+        wait_writable(fd);
+        assert(client_connect_finish(fd, &client) != OK);
+        assert(client == NULL);
+    } else {
+        assert(started == BAD_REQUEST);
+    }
+
+    /* Abort closes a pending attempt's fd. */
+    listenFd = open_listener(&port);
+    assert(client_resolve("127.0.0.1", port, &address) == OK);
+    assert(client_connect_start(&address, &fd, &inProgress) == OK);
+    client_connect_abort(fd);
+    assert(fcntl(fd, F_GETFD) == -1 && errno == EBADF);
+    close(listenFd);
+}
+
 static void test_token_bucket_rate_limiter(void)
 {
     AppConnSlot slot;
@@ -275,6 +365,8 @@ int main(void)
     test_slow_consumer_threshold();
     test_conn_close_idempotent();
     test_client_connect_fail();
+    test_client_resolve();
+    test_client_connect_start_finish();
     puts("net: OK");
     return 0;
 }

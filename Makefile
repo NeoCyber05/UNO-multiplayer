@@ -8,7 +8,7 @@ GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
 endif
 CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium)
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
-LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread
+LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread -lm
 
 shared := $(wildcard shared/*.c)
 modules := $(filter-out server/main.c,$(wildcard server/*.c))
@@ -43,6 +43,7 @@ $(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(h
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
 $(BUILD)/tests/test_net: desktop/tcp_client.c
+$(BUILD)/tests/test_net_session: desktop/net_session.c
 
 $(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(headers) Makefile
 	mkdir -p $(@D)

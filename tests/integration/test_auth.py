@@ -8,6 +8,9 @@ import time
 import unittest
 from tests.integration.helpers import ServerProcess, WireClient
 
+# A replaced connection must reach EOF well within this; a timeout fails the test.
+PUSH_DRAIN_TIMEOUT_S = 2.0
+
 def is_error(resp, expected_code):
     if resp.get("type") == expected_code:
         return True
@@ -194,11 +197,15 @@ class TestAuth(unittest.TestCase):
             self.assertEqual(resp_b["type"], "OK")
             self.assertIn("token", resp_b["payload"])
 
-            # Client A socket should be closed by server (reads EOF)
+            # Client A socket should be closed by server (reads EOF). Pushes
+            # sent to A after its own LOGIN (e.g. FRIEND_STATE) may still be
+            # buffered ahead of the EOF, so skip whole frames until it arrives.
             time.sleep(0.1)
             try:
-                data = client_a.sock.recv(4096)
-                self.assertEqual(data, b"", f"Expected EOF on Client A socket, got {data}")
+                while True:
+                    env = client_a.recv_envelope(timeout=PUSH_DRAIN_TIMEOUT_S)
+                    self.assertEqual(env.get("id"), 0,
+                                     f"Expected only pushes before EOF, got {env}")
             except (ConnectionResetError, BrokenPipeError):
                 pass
             finally:

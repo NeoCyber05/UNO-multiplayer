@@ -80,6 +80,111 @@ Status client_connect(Client **out, const char *host, uint16_t port)
     return OK;
 }
 
+static Status lookup_first(const char *host, const char *service, int flags, ClientAddress *out)
+{
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = flags;
+
+    struct addrinfo *results = NULL;
+    if (getaddrinfo(host, service, &hints, &results) != 0 || results == NULL) {
+        return NOT_FOUND;
+    }
+    Status status = NOT_FOUND;
+    if (results->ai_addrlen <= sizeof(out->storage)) {
+        memset(out, 0, sizeof(*out));
+        memcpy(&out->storage, results->ai_addr, results->ai_addrlen);
+        out->length = results->ai_addrlen;
+        status = OK;
+    }
+    freeaddrinfo(results);
+    return status;
+}
+
+Status client_resolve(const char *host, uint16_t port, ClientAddress *out)
+{
+    if (!host || port == 0 || !out) return BAD_REQUEST;
+
+    char service[16];
+    snprintf(service, sizeof(service), "%u", port);
+
+    /* Numeric first: an IP from the command line must never touch DNS. */
+    if (lookup_first(host, service, AI_NUMERICHOST | AI_NUMERICSERV, out) == OK) {
+        return OK;
+    }
+    /* Only for host names, and only once per process (blocking lookup). */
+    return lookup_first(host, service, AI_NUMERICSERV | AI_ADDRCONFIG, out);
+}
+
+Status client_connect_start(const ClientAddress *address, int *fd_out, bool *in_progress)
+{
+    if (!address || !fd_out || !in_progress || address->length == 0) return BAD_REQUEST;
+    *fd_out = -1;
+    *in_progress = false;
+
+    const struct sockaddr *target = (const struct sockaddr *)&address->storage;
+    int fd = socket(target->sa_family, SOCK_STREAM, 0);
+    if (fd < 0) return BUSY;
+
+    /* Non-blocking before connect() so the call returns at once with
+     * EINPROGRESS instead of waiting for the handshake. */
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(fd);
+        return BUSY;
+    }
+
+    if (connect(fd, target, address->length) == 0) {
+        *fd_out = fd;
+        return OK;
+    }
+    /* EINTR on a non-blocking connect also continues in the background. */
+    if (errno == EINPROGRESS || errno == EINTR) {
+        *fd_out = fd;
+        *in_progress = true;
+        return OK;
+    }
+    close(fd);
+    return BAD_REQUEST;
+}
+
+Status client_connect_finish(int fd, Client **out)
+{
+    if (out) *out = NULL;
+    if (fd < 0 || !out) return BAD_REQUEST;
+
+    /* The pending connect's outcome is only visible through SO_ERROR. */
+    int sockError = 0;
+    socklen_t length = sizeof(sockError);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &sockError, &length) != 0 || sockError != 0) {
+        close(fd);
+        return BAD_REQUEST;
+    }
+
+    Client *client = calloc(1, sizeof(Client));
+    if (!client) {
+        close(fd);
+        return BUSY;
+    }
+    if (conn_init(&client->conn, fd, 0, 0) != OK) {
+        close(fd);
+        free(client);
+        return BAD_REQUEST;
+    }
+    client->connected = true;
+    *out = client;
+    return OK;
+}
+
+void client_connect_abort(int fd)
+{
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
 Status client_send(Client *client, const Envelope *e)
 {
     if (!client || !client->connected || client->conn.fd < 0 || !e) return BAD_REQUEST;

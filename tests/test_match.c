@@ -193,6 +193,104 @@ static void checkDraftAndResult(Matches *matches, RoomStart room, Capture *messa
     assert(!matchesContains(matches, 2));
 }
 
+enum {
+    RANKED_START_ELO = 1500,
+    RANKED_WIN_ELO = 1516,
+    RANKED_LOSS_ELO = 1484,
+    RANKED_MAX_STEPS = 4000,
+    LEAVER_SEAT = 3
+};
+
+static int queryInt(sqlite3 *db, const char *sql, int64_t key) {
+    sqlite3_stmt *query = NULL;
+    assert(sqlite3_prepare_v2(db, sql, -1, &query, NULL) == SQLITE_OK);
+    if (sqlite3_bind_parameter_count(query)) {
+        assert(sqlite3_bind_int64(query, 1, key) == SQLITE_OK);
+    }
+    assert(sqlite3_step(query) == SQLITE_ROW);
+    int value = sqlite3_column_int(query, 0);
+    sqlite3_finalize(query);
+    return value;
+}
+
+static void playClassicTurn(Matches *matches, const Capture *messages, UserId userId,
+                            const MatchId *matchId, uint64_t nowMs) {
+    json_object *view = messages->views[userId];
+    json_object *payload = json_object_new_object();
+    const char *type = "DRAW";
+    json_object_object_add(payload, "turnNo", json_object_new_int(number(view, "turnNo")));
+    json_object *legal = field(view, "legalCardIds");
+    if (json_object_get_boolean(field(view, "canSayUno"))) type = "SAY_UNO";
+    else if (json_object_array_length(legal)) {
+        type = "PLAY";
+        json_object *cardId = json_object_array_get_idx(legal, 0);
+        json_object *players = field(view, "players");
+        json_object *hand = field(json_object_array_get_idx(players, (int)userId - 1), "hand");
+        json_object_object_add(payload, "cardId", json_object_get(cardId));
+        for (size_t index = 0; index < json_object_array_length(hand); index++) {
+            json_object *card = json_object_array_get_idx(hand, index);
+            if (json_object_equal(cardId, field(card, "id")) &&
+                !strcmp(json_object_get_string(field(card, "color")), "wild")) {
+                json_object_object_add(payload, "color",
+                                       json_object_get(field(view, "currentColor")));
+            }
+        }
+    } else if (json_object_get_boolean(field(view, "canPass"))) type = "PASS";
+    assert(sendPayload(matches, userId, type, matchId, payload, nowMs) == OK);
+}
+
+static void test_ranked_room_with_bot_rejected(Matches *matches, sqlite3 *db, RoomStart room) {
+    int matchesBefore = queryInt(db, "SELECT count(*) FROM matches", 0);
+    room.ranked = true;
+    room.players[LEAVER_SEAT].userId = 0;
+    room.players[LEAVER_SEAT].isBot = true;
+    room.players[LEAVER_SEAT].botLevel = EASY;
+    MatchId matchId = {0};
+    assert(matchesStart(matches, &room, 900000, &matchId) == BAD_REQUEST);
+    assert(queryInt(db, "SELECT count(*) FROM matches", 0) == matchesBefore);
+    assert(!matchesContains(matches, 1));
+}
+
+static void test_ranked_finish_applies_elo(Matches *matches, sqlite3 *db, RoomStart room,
+                                           Capture *messages) {
+    room.mode = CLASSIC;
+    room.ranked = true;
+    randomState = 7;
+    MatchId matchId;
+    uint64_t nowMs = 1000000;
+    assert(matchesStart(matches, &room, nowMs, &matchId) == OK);
+    assert(queryInt(db, "SELECT ranked FROM matches ORDER BY rowid DESC LIMIT 1", 0) == 1);
+
+    // The leaver's seat is played by a bot but must still be rated as a human.
+    UserId leaver = room.players[LEAVER_SEAT].userId;
+    int turnNo = number(messages->views[1], "turnNo");
+    assert(send(matches, leaver, "MATCH_LEAVE", (const MatchId *)&matchId, turnNo, nowMs) == OK);
+
+    int resultsBefore = messages->results;
+    int finishedBefore = messages->finished;
+    for (int step = 0; step < RANKED_MAX_STEPS && messages->results == resultsBefore; step++) {
+        Seat turn = (Seat)number(messages->views[1], "turn");
+        if (turn != LEAVER_SEAT) {
+            playClassicTurn(matches, messages, room.players[turn].userId,
+                            (const MatchId *)&matchId, nowMs);
+        }
+        nowMs += 700;
+        matchesTick(matches, nowMs);
+    }
+    assert(messages->results > resultsBefore && messages->finished == finishedBefore + 1);
+
+    int winnerSeat = queryInt(db, "SELECT winner_seat FROM matches WHERE ranked = 1", 0);
+    assert(winnerSeat >= 0 && winnerSeat < 4);
+    for (Seat seat = 0; seat < 4; seat++) {
+        UserId userId = room.players[seat].userId;
+        int expected = seat == winnerSeat ? RANKED_WIN_ELO : RANKED_LOSS_ELO;
+        assert(queryInt(db, "SELECT elo FROM accounts WHERE id = ?", (int64_t)userId) == expected);
+        assert(queryInt(db, "SELECT elo_before FROM match_players WHERE seat = ? AND "
+                            "match_id = (SELECT match_id FROM matches WHERE ranked = 1)",
+                        seat) == RANKED_START_ELO);
+    }
+}
+
 int main(void) {
     assert(randombytes_set_implementation(&testRandom) == 0);
     Store *store = NULL;
@@ -274,6 +372,8 @@ int main(void) {
     assert(sqlite3_bind_int(query, 1, MATCH_FINALIZED) == SQLITE_OK);
     assert(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == 1);
     sqlite3_finalize(query);
+    test_ranked_room_with_bot_rejected(matches, db, room);
+    test_ranked_finish_applies_elo(matches, db, room, &messages);
 
     for (UserId userId = 1; userId <= 4; userId++) json_object_put(messages.views[userId]);
     matchesDestroy(matches);

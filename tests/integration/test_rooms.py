@@ -1,7 +1,15 @@
 import json
 import time
 import unittest
-from tests.integration.helpers import ServerProcess, WireClient
+from tests.integration.helpers import (
+    ServerProcess, WireClient, login_many, play_until_result
+)
+
+SEAT_COUNT = 4
+KICKED_SEAT = 1
+MATCH_TIMEOUT_S = 60
+PUSH_TIMEOUT_S = 3.0
+AUTH_LIMIT = 100
 
 def is_error(resp, expected_code):
     if resp.get("type") == expected_code:
@@ -17,6 +25,21 @@ def recv_until_type(client, expected_type, timeout=3.0):
         if env.get("type") == expected_type:
             return env
     raise TimeoutError(f"Timed out waiting for {expected_type}")
+
+def recv_until(client, expected_type, predicate, timeout=PUSH_TIMEOUT_S):
+    """Skip pushes of expected_type until one satisfies predicate."""
+    deadline = time.time() + timeout
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out waiting for matching {expected_type}")
+        env = client.recv_event(expected_type, timeout=remaining)
+        if predicate(env["payload"]):
+            return env
+
+def seat_user_ids(room_state):
+    return [seat["userId"] for seat in room_state["seats"]
+            if seat is not None and not seat["isBot"]]
 
 def register_and_login(server, email, name, avatar):
     client = WireClient("127.0.0.1", server.port)
@@ -171,7 +194,7 @@ class TestRooms(unittest.TestCase):
             client_c, uid_c = register_and_login(server, "p3@test.com", "Party3", "cat")
             try:
                 # A invites B to party
-                resp_inv = client_a.request("INVITE_SEND", {"userId": uid_b, "kind": "party"})
+                resp_inv = client_a.request("INVITE_SEND", {"userId": uid_b, "kind": "party", "mode": "2v2"})
                 self.assertEqual(resp_inv["type"], "OK")
                 inv_id = resp_inv["payload"]["inviteId"]
 
@@ -187,7 +210,7 @@ class TestRooms(unittest.TestCase):
                 self.assertEqual(len(pstate_a["payload"]["members"]), 2)
 
                 # Party is now full (max 2 members). Attempting to invite C to party fails
-                resp_inv_c = client_a.request("INVITE_SEND", {"userId": uid_c, "kind": "party"})
+                resp_inv_c = client_a.request("INVITE_SEND", {"userId": uid_c, "kind": "party", "mode": "2v2"})
                 self.assertTrue(is_error(resp_inv_c, "BUSY") or is_error(resp_inv_c, "ROOM_FULL") or is_error(resp_inv_c, "INVALID_ACTION"))
 
                 # Party leave
@@ -247,7 +270,7 @@ class TestRooms(unittest.TestCase):
             client_b, uid_b = register_and_login(server, "pb@test.com", "PartyB", "bear")
             try:
                 # A invites B to party
-                resp_inv = client_a.request("INVITE_SEND", {"userId": uid_b, "kind": "party"})
+                resp_inv = client_a.request("INVITE_SEND", {"userId": uid_b, "kind": "party", "mode": "2v2"})
                 self.assertEqual(resp_inv["type"], "OK")
                 inv_id = resp_inv["payload"]["inviteId"]
 
@@ -276,6 +299,229 @@ class TestRooms(unittest.TestCase):
             finally:
                 client_a.close()
                 client_b.close()
+
+    def test_kick_notifies_target(self):
+        with ServerProcess(auth_limit=50) as server:
+            host, uid_h = register_and_login(server, "kickhost@test.com", "KickHost", "fox")
+            guest, uid_g = register_and_login(server, "kicked@test.com", "Kicked", "bear")
+            try:
+                created = host.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(created["type"], "OK")
+                joined = guest.request("ROOM_JOIN", {"code": created["payload"]["roomId"]})
+                self.assertEqual(joined["payload"]["seat"], KICKED_SEAT)
+
+                kicked = host.request("ROOM_KICK", {"seat": KICKED_SEAT})
+                self.assertEqual(kicked["type"], "OK")
+
+                state = recv_until(guest, "ROOM_STATE",
+                                   lambda room: room["seats"][KICKED_SEAT] is None)
+                self.assertNotIn(uid_g, seat_user_ids(state["payload"]))
+                self.assertEqual(seat_user_ids(state["payload"]), [uid_h])
+            finally:
+                host.close()
+                guest.close()
+
+    def test_party_invite_keeps_mode(self):
+        with ServerProcess(auth_limit=50) as server:
+            client_a, uid_a = register_and_login(server, "sidea@test.com", "SideA", "fox")
+            client_b, uid_b = register_and_login(server, "sideb@test.com", "SideB", "bear")
+            client_c, uid_c = register_and_login(server, "sidec@test.com", "SideC", "cat")
+            try:
+                missing = client_a.request("INVITE_SEND", {"userId": uid_c, "kind": "party"})
+                self.assertTrue(is_error(missing, "BAD_REQUEST"), missing)
+                unknown = client_a.request("INVITE_SEND",
+                                           {"userId": uid_c, "kind": "party", "mode": "draft"})
+                self.assertTrue(is_error(unknown, "BAD_REQUEST"), unknown)
+
+                sent = client_a.request("INVITE_SEND",
+                                        {"userId": uid_b, "kind": "party", "mode": "side"})
+                self.assertEqual(sent["type"], "OK")
+                invite = recv_until_type(client_b, "INVITE")
+                self.assertEqual(invite["payload"]["mode"], "side")
+
+                reply = client_b.request("INVITE_REPLY",
+                                         {"inviteId": invite["payload"]["inviteId"],
+                                          "accept": True})
+                self.assertEqual(reply["type"], "OK")
+                for client in (client_a, client_b):
+                    party = client.recv_event("PARTY_STATE", timeout=PUSH_TIMEOUT_S)
+                    self.assertEqual(party["payload"]["mode"], "side")
+                    self.assertEqual(len(party["payload"]["members"]), 2)
+            finally:
+                client_a.close()
+                client_b.close()
+                client_c.close()
+
+    def test_room_closed_after_match(self):
+        with ServerProcess(auth_limit=100) as server:
+            clients = login_many(server, SEAT_COUNT)
+            host, guest = clients[0], clients[1]
+            try:
+                created = host.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(created["type"], "OK")
+                for client in clients[1:]:
+                    joined = client.request("ROOM_JOIN", {"code": created["payload"]["roomId"]})
+                    self.assertEqual(joined["type"], "OK")
+                started = host.request("ROOM_START", {})
+                self.assertEqual(started["type"], "OK")
+
+                # A seated player who walks out of the room is still reserved by the match.
+                left = guest.request("ROOM_LEAVE", {})
+                self.assertEqual(left["type"], "OK")
+                busy = guest.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertTrue(is_error(busy, "BUSY"), busy)
+
+                play_until_result(clients, timeout=MATCH_TIMEOUT_S)
+
+                again = host.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(again["type"], "OK", again)
+            finally:
+                for client in clients:
+                    client.close()
+
+    def test_relogin_receives_room_state(self):
+        with ServerProcess(auth_limit=50) as server:
+            host, uid_h = register_and_login(server, "rehost@test.com", "ReHost", "fox")
+            guest, uid_g = register_and_login(server, "reguest@test.com", "ReGuest", "bear")
+            fresh = WireClient("127.0.0.1", server.port)
+            try:
+                created = host.request("ROOM_CREATE", {"mode": "classic"})
+                joined = guest.request("ROOM_JOIN", {"code": created["payload"]["roomId"]})
+                self.assertEqual(joined["type"], "OK")
+
+                login = fresh.request("LOGIN", {"email": "reguest@test.com",
+                                                "password": "password123"})
+                self.assertEqual(login["type"], "OK")
+                state = fresh.recv_event("ROOM_STATE", timeout=PUSH_TIMEOUT_S)
+                self.assertEqual(state["payload"]["roomId"], created["payload"]["roomId"])
+                self.assertIn(uid_g, seat_user_ids(state["payload"]))
+            finally:
+                host.close()
+                guest.close()
+                fresh.close()
+
+
+def make_party(inviter, invitee, mode):
+    sent = inviter.request("INVITE_SEND", {
+        "userId": invitee.me["userId"], "kind": "party", "mode": mode
+    })
+    assert sent["type"] == "OK", sent
+    invite = invitee.recv_event("INVITE", timeout=PUSH_TIMEOUT_S)["payload"]
+    accepted = invitee.request("INVITE_REPLY", {"inviteId": invite["inviteId"], "accept": True})
+    assert accepted["type"] == "OK", accepted
+    for client in (inviter, invitee):
+        recv_until(client, "PARTY_STATE", lambda party: len(party["members"]) == 2)
+
+
+def close_all(clients):
+    for client in clients:
+        client.close()
+
+
+class TestSessionLeave(unittest.TestCase):
+    """Spec §5: a user who leaves (LOGOUT or another account on the socket)
+    outside a match drops queue, invites and room/party membership at once."""
+
+    def test_logout_leaves_waiting_room(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            host, guest = login_many(server, 2)
+            try:
+                created = host.request("ROOM_CREATE", {"mode": "classic"})
+                joined = guest.request("ROOM_JOIN", {"code": created["payload"]["roomId"]})
+                self.assertEqual(joined["type"], "OK", joined)
+                guest_id = guest.me["userId"]
+                recv_until(host, "ROOM_STATE", lambda room: guest_id in seat_user_ids(room))
+
+                self.assertEqual(guest.request("LOGOUT", {})["type"], "OK")
+                state = recv_until(host, "ROOM_STATE",
+                                   lambda room: guest_id not in seat_user_ids(room))
+                self.assertEqual(seat_user_ids(state["payload"]), [host.me["userId"]])
+            finally:
+                close_all([host, guest])
+
+    def test_logout_dissolves_party(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            leader, partner = login_many(server, 2)
+            try:
+                make_party(leader, partner, "2v2")
+                self.assertEqual(partner.request("LOGOUT", {})["type"], "OK")
+                dissolved = recv_until(leader, "PARTY_STATE",
+                                       lambda party: party["members"] == [])
+                self.assertEqual(dissolved["payload"]["leaderId"], "0")
+            finally:
+                close_all([leader, partner])
+
+    def test_logout_leaves_queue(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            leaver, stayer = login_many(server, 2)
+            try:
+                for client in (leaver, stayer):
+                    joined = client.request("QUEUE_JOIN", {"mode": "classic"})
+                    self.assertEqual(joined["type"], "OK", joined)
+                self.assertEqual(leaver.request("LOGOUT", {})["type"], "OK")
+                # Pushed before the LOGOUT reply, while the session still exists.
+                gone = recv_until(leaver, "QUEUE_STATE", lambda queue: not queue["active"])
+                self.assertEqual(gone["payload"]["mode"], "classic")
+                stayer_id = stayer.me["userId"]
+                remaining = recv_until(
+                    stayer, "QUEUE_STATE",
+                    lambda queue: queue["active"] and
+                    [player["userId"] for player in queue["players"]] == [stayer_id])
+                self.assertEqual(remaining["payload"]["mode"], "classic")
+            finally:
+                close_all([leaver, stayer])
+
+    def test_login_other_account_leaves_room(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            host, first, second = login_many(server, 3)
+            second.close()
+            try:
+                code = host.request("ROOM_CREATE", {"mode": "classic"})["payload"]["roomId"]
+                self.assertEqual(first.request("ROOM_JOIN", {"code": code})["type"], "OK")
+                first_id, second_id = first.me["userId"], second.me["userId"]
+                recv_until(host, "ROOM_STATE", lambda room: first_id in seat_user_ids(room))
+
+                switched = first.request("LOGIN", {"email": second.email,
+                                                   "password": second.password})
+                self.assertEqual(switched["type"], "OK", switched)
+                self.assertEqual(switched["payload"]["me"]["userId"], second_id)
+                recv_until(host, "ROOM_STATE", lambda room: first_id not in seat_user_ids(room))
+
+                # The socket now acts only as the second account.
+                self.assertEqual(first.request("ROOM_JOIN", {"code": code})["type"], "OK")
+                recv_until(host, "ROOM_STATE", lambda room: second_id in seat_user_ids(room))
+                first.close()
+                state = recv_until(host, "ROOM_STATE",
+                                   lambda room: second_id not in seat_user_ids(room))
+                self.assertEqual(seat_user_ids(state["payload"]), [host.me["userId"]])
+
+                # The replaced account was logged out, not left bound to the socket.
+                probe = WireClient("127.0.0.1", server.port)
+                try:
+                    resumed = probe.request("RESUME", {"token": first.token})
+                    self.assertTrue(is_error(resumed, "UNAUTHENTICATED"), resumed)
+                finally:
+                    probe.close()
+            finally:
+                close_all([host, first, second])
+
+    def test_resume_other_account_leaves_room(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            host, first, second = login_many(server, 3)
+            # Dropping the socket keeps the session, so its token can RESUME.
+            second.close()
+            try:
+                code = host.request("ROOM_CREATE", {"mode": "classic"})["payload"]["roomId"]
+                self.assertEqual(first.request("ROOM_JOIN", {"code": code})["type"], "OK")
+                first_id = first.me["userId"]
+                recv_until(host, "ROOM_STATE", lambda room: first_id in seat_user_ids(room))
+
+                resumed = first.request("RESUME", {"token": second.token})
+                self.assertEqual(resumed["type"], "OK", resumed)
+                self.assertEqual(resumed["payload"]["me"]["userId"], second.me["userId"])
+                recv_until(host, "ROOM_STATE", lambda room: first_id not in seat_user_ids(room))
+            finally:
+                close_all([host, first, second])
 
 if __name__ == "__main__":
     unittest.main()

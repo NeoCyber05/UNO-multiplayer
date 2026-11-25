@@ -3,5 +3,9 @@
   {"v":1,"id":1,"type":"OK","payload":{"serverTimeMs":123456}},
   {"v":1,"id":2147483647,"type":"PLAY","payload":{"matchId":"123e4567-e89b-12d3-a456-426614174000","turnNo":4,"cardId":"c112","color":"red"}},
   {"v":1,"id":2147483647,"type":"ERROR","payload":{"code":"NOT_YOUR_TURN","message":"Chưa đến lượt"}},
-  {"v":1,"id":0,"type":"LOBBY_STATE","payload":{"revision":1}}
+  {"v":1,"id":0,"type":"LOBBY_STATE","payload":{"revision":1}},
+  {"v":1,"id":3,"type":"OK","payload":{"me":{"userId":"7","tag":"UNO#7","name":"Son","avatar":"fox","elo":1000}}},
+  {"v":1,"id":4,"type":"INVITE_SEND","payload":{"userId":"8","kind":"party","mode":"2v2"}},
+  {"v":1,"id":0,"type":"QUEUE_STATE","payload":{"mode":"2v2","active":false,"matchId":"123e4567-e89b-12d3-a456-426614174000","revision":5}},
+  {"v":1,"id":0,"type":"FRIEND_STATE","payload":{"friends":[{"userId":"8","tag":"UNO#8","name":"Bach","avatar":"owl","elo":1012,"presence":"in_match","online":true,"pending":false,"incoming":false}]}}
 ]

@@ -884,7 +884,7 @@ static void test_upgrade_from_v1_database(void)
     s = NULL;
     assert(store_open(&s, db_path) == OK);
     db = store_get_db(s);
-    assert(db_query_int(db, "PRAGMA user_version;") == 2);
+    assert(db_query_int(db, "PRAGMA user_version;") == 3);
     assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'badge';") == 1);
     assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'key';") == 0);
 
@@ -942,8 +942,666 @@ static void test_account_create_is_atomic(void)
     cleanup_file(db_path);
 }
 
+enum {
+    ABORT_DURATION_MS = 45000,
+    ABORT_EVENT_SEQ = 7,
+    LEADERBOARD_ACCOUNTS = 22,
+    LEADERBOARD_TIE_ELO = 2000,
+    LEADERBOARD_BASE_ELO = 1000,
+    LEADERBOARD_ELO_STEP = 10,
+    RANKED_WINNER_ELO = 1516,
+    RANKED_LOSER_ELO = 1484
+};
+
+static MatchEvent abortEvent(void)
+{
+    MatchEvent event = {.seq = ABORT_EVENT_SEQ, .revision = ABORT_EVENT_SEQ, .actor = -1};
+    strncpy(event.type, "MATCH_ABORTED", sizeof(event.type) - 1);
+    strncpy(event.payload, "{}", sizeof(event.payload) - 1);
+    return event;
+}
+
+static int matchStatusOf(sqlite3 *db, const char *matchId)
+{
+    sqlite3_stmt *stmt = NULL;
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;",
+                              -1, &stmt, NULL) == SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, matchId, -1, SQLITE_STATIC);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    int status = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    return status;
+}
+
+static void test_abort_atomic_and_idempotent(void)
+{
+    const char *db_path = "/tmp/test_uno_store_abort.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    MatchId mid = "00000000-0000-0000-0000-000000000020";
+    PlayerSpec players[4] = {
+        {101, "Alice", "a1", EASY, false},
+        {0, "Bot1", "bot", EASY, true},
+        {0, "Bot2", "bot", EASY, true},
+        {0, "Bot3", "bot", EASY, true}
+    };
+    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, false) == OK);
+    MatchEvent event = abortEvent();
+
+    /* A failed event insert must not leave the match marked ABORTED. */
+    assert(sqlite3_exec(db,
+                        "CREATE TEMP TRIGGER fail_abort_event BEFORE INSERT ON match_events "
+                        "BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+                        NULL, NULL, NULL) == SQLITE_OK);
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == STORAGE_ERROR);
+    assert(matchStatusOf(db, mid) == MATCH_ACTIVE);
+    assert(db_query_int(db, "SELECT count(*) FROM match_events;") == 0);
+    assert(sqlite3_get_autocommit(db) != 0);
+    assert(sqlite3_exec(db, "DROP TRIGGER fail_abort_event;", NULL, NULL, NULL) == SQLITE_OK);
+
+    /* A retried abort after success is OK and writes nothing more. */
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(matchStatusOf(db, mid) == MATCH_ABORTED);
+    assert(db_query_int(db, "SELECT count(*) FROM match_events "
+                            "WHERE type = 'MATCH_ABORTED';") == 1);
+    assert(db_query_int(db, "SELECT duration_ms FROM matches;") == ABORT_DURATION_MS);
+
+    MatchId unknown = "99999999-9999-9999-9999-999999999998";
+    assert(store_abort(s, (const MatchId *)&unknown, &event, 0) == NOT_FOUND);
+
+    /* A finalized match cannot be turned into an aborted one. */
+    MatchId finished = "00000000-0000-0000-0000-000000000021";
+    assert(store_match_start(s, (const MatchId *)&finished, players, CLASSIC, false) == OK);
+    MatchResult res;
+    memset(&res, 0, sizeof(res));
+    strncpy(res.matchId, finished, sizeof(res.matchId) - 1);
+    res.status = MATCH_FINALIZED;
+    res.winnerSeat = 0;
+    res.winnerTeam = -1;
+    res.players[0].userId = 101;
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_abort(s, (const MatchId *)&finished, &event, 0) == INVALID_ACTION);
+    assert(matchStatusOf(db, finished) == MATCH_FINALIZED);
+    assert(sqlite3_get_autocommit(db) != 0);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_ranked_finalize_updates_elo_once(void)
+{
+    const char *db_path = "/tmp/test_uno_store_ranked.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+    strncpy(c.name, "Ranked", sizeof(c.name) - 1);
+    strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
+    UserId winner = 0, loser = 0;
+    strncpy(c.email, "winner@test.com", sizeof(c.email) - 1);
+    assert(store_account_create(s, &c, &winner) == OK);
+    strncpy(c.email, "loser@test.com", sizeof(c.email) - 1);
+    assert(store_account_create(s, &c, &loser) == OK);
+
+    MatchId mid = "00000000-0000-0000-0000-000000000022";
+    PlayerSpec players[4] = {
+        {winner, "Ranked", "fox", EASY, false},
+        {loser, "Ranked", "fox", EASY, false},
+        {0, "Bot1", "bot", EASY, true},
+        {0, "Bot2", "bot", EASY, true}
+    };
+    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(db_query_int(db, "SELECT ranked FROM matches;") == 1);
+
+    MatchResult res;
+    memset(&res, 0, sizeof(res));
+    strncpy(res.matchId, mid, sizeof(res.matchId) - 1);
+    res.mode = CLASSIC;
+    res.ranked = true;
+    res.status = MATCH_FINALIZED;
+    res.winnerSeat = 0;
+    res.winnerTeam = -1;
+    res.durationMs = 1000;
+    for (int i = 0; i < 4; i++) {
+        res.players[i].userId = players[i].userId;
+        res.players[i].team = -1;
+        res.players[i].eloBefore = 1500;
+        res.players[i].eloAfter = 1500;
+    }
+    res.players[0].eloAfter = RANKED_WINNER_ELO;
+    res.players[1].eloAfter = RANKED_LOSER_ELO;
+
+    Account account;
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(account.elo == RANKED_WINNER_ELO);
+    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(account.elo == RANKED_LOSER_ELO);
+
+    /* Replaying the same finalize (storage retry) must not apply ELO twice. */
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(account.elo == RANKED_WINNER_ELO);
+    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(account.elo == RANKED_LOSER_ELO);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_leaderboard_order(void)
+{
+    const char *db_path = "/tmp/test_uno_store_leaderboard.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    LeaderboardEntry entries[STORE_LEADERBOARD_MAX];
+    size_t count = 99;
+    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(count == 0);
+
+    UserId ids[LEADERBOARD_ACCOUNTS];
+    for (int i = 0; i < LEADERBOARD_ACCOUNTS; i++) {
+        AccountCreate c;
+        memset(&c, 0, sizeof(c));
+        snprintf(c.email, sizeof(c.email), "rank%d@test.com", i);
+        snprintf(c.name, sizeof(c.name), "Rank%d", i);
+        snprintf(c.avatar, sizeof(c.avatar), "av%d", i);
+        strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+        assert(store_account_create(s, &c, &ids[i]) == OK);
+
+        char sql[128];
+        snprintf(sql, sizeof(sql), "UPDATE accounts SET elo = %d WHERE id = %lld;",
+                 LEADERBOARD_BASE_ELO + i * LEADERBOARD_ELO_STEP, (long long)ids[i]);
+        assert(sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK);
+    }
+    /* Tie at the top: the later account is updated first, the lower id must still lead. */
+    char sql[128];
+    snprintf(sql, sizeof(sql), "UPDATE accounts SET elo = %d WHERE id IN (%lld, %lld);",
+             LEADERBOARD_TIE_ELO, (long long)ids[9], (long long)ids[4]);
+    assert(sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK);
+
+    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(count == STORE_LEADERBOARD_MAX);
+    assert(entries[0].userId == ids[4] && entries[0].elo == LEADERBOARD_TIE_ELO);
+    assert(entries[1].userId == ids[9] && entries[1].elo == LEADERBOARD_TIE_ELO);
+    assert(strcmp(entries[0].name, "Rank4") == 0);
+    assert(strcmp(entries[0].avatar, "av4") == 0);
+    assert(entries[2].userId == ids[LEADERBOARD_ACCOUNTS - 1]);
+    for (size_t i = 1; i < count; i++) {
+        assert(entries[i - 1].elo > entries[i].elo ||
+               (entries[i - 1].elo == entries[i].elo &&
+                entries[i - 1].userId < entries[i].userId));
+    }
+    /* The two lowest remaining ELOs (accounts 0 and 1) fall outside the top 20. */
+    for (size_t i = 0; i < count; i++) {
+        assert(entries[i].userId != ids[0] && entries[i].userId != ids[1]);
+    }
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+enum {
+    UNKNOWN_ACCOUNT_ID = 999,
+    PROFILE_ELO_BEFORE = 1500,
+    PROFILE_ELO_GAIN = 16,
+    PROFILE_DURATION_MS = 61000,
+    MS_PER_SECOND = 1000
+};
+
+static const char *INJECTION_NAME = "'; DROP TABLE accounts;--";
+
+static UserId createAccount(Store *s, const char *email, const char *name)
+{
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.email, email, sizeof(c.email) - 1);
+    strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+    strncpy(c.name, name, sizeof(c.name) - 1);
+    strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
+    UserId id = 0;
+    assert(store_account_create(s, &c, &id) == OK);
+    return id;
+}
+
+static const FriendRow *findFriend(const FriendRow *rows, size_t count, UserId id)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (rows[i].userId == id) return &rows[i];
+    }
+    return NULL;
+}
+
+static FriendLink linkOf(Store *s, UserId me, UserId other)
+{
+    FriendRow rows[STORE_FRIEND_MAX];
+    size_t count = 0;
+    assert(store_friend_list(s, me, rows, &count) == OK);
+    const FriendRow *row = findFriend(rows, count, other);
+    return row ? row->link : FRIEND_NONE;
+}
+
+static void test_friend_request_rules(void)
+{
+    const char *db_path = "/tmp/test_uno_store_friend_request.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    UserId bob = createAccount(s, "bob@test.com", "Bob");
+
+    assert(store_friend_request(s, alice, alice) == BAD_REQUEST);
+    assert(store_friend_request(s, alice, UNKNOWN_ACCOUNT_ID) == NOT_FOUND);
+
+    assert(store_friend_request(s, alice, bob) == OK);
+    assert(linkOf(s, alice, bob) == FRIEND_PENDING_OUT);
+    assert(linkOf(s, bob, alice) == FRIEND_PENDING_IN);
+
+    /* A second request in either direction is refused, not merged. */
+    assert(store_friend_request(s, alice, bob) == INVALID_ACTION);
+    assert(store_friend_request(s, bob, alice) == INVALID_ACTION);
+    assert(db_query_int(store_get_db(s), "SELECT count(*) FROM friends;") == 1);
+
+    /* The sender cannot answer its own request. */
+    assert(store_friend_reply(s, alice, bob, true) == NOT_FOUND);
+    assert(linkOf(s, alice, bob) == FRIEND_PENDING_OUT);
+
+    FriendRow rows[STORE_FRIEND_MAX];
+    size_t count = 0;
+    assert(store_friend_list(s, bob, rows, &count) == OK);
+    assert(count == 1);
+    assert(rows[0].userId == alice);
+    assert(strcmp(rows[0].name, "Alice") == 0);
+    assert(strcmp(rows[0].avatar, "fox") == 0);
+    assert(rows[0].elo == PROFILE_ELO_BEFORE);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_friend_reply_accept_and_reject(void)
+{
+    const char *db_path = "/tmp/test_uno_store_friend_reply.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    UserId bob = createAccount(s, "bob@test.com", "Bob");
+    UserId carol = createAccount(s, "carol@test.com", "Carol");
+
+    /* No pending request at all. */
+    assert(store_friend_reply(s, bob, alice, true) == NOT_FOUND);
+    assert(store_friend_reply(s, bob, alice, false) == NOT_FOUND);
+
+    assert(store_friend_request(s, alice, bob) == OK);
+    assert(store_friend_reply(s, bob, alice, true) == OK);
+    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
+    assert(linkOf(s, bob, alice) == FRIEND_ACCEPTED);
+    /* Already accepted: nothing pending to answer, and no new request. */
+    assert(store_friend_reply(s, bob, alice, false) == NOT_FOUND);
+    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
+    assert(store_friend_request(s, bob, alice) == INVALID_ACTION);
+
+    /* Reject removes the row, so the list is empty and a new request works. */
+    assert(store_friend_request(s, carol, alice) == OK);
+    assert(store_friend_reply(s, alice, carol, false) == OK);
+    FriendRow rows[STORE_FRIEND_MAX];
+    size_t count = 99;
+    assert(store_friend_list(s, carol, rows, &count) == OK);
+    assert(count == 0);
+    assert(linkOf(s, alice, carol) == FRIEND_NONE);
+    assert(store_friend_request(s, carol, alice) == OK);
+    assert(linkOf(s, alice, carol) == FRIEND_PENDING_IN);
+
+    /* Alice now sees one accepted friend and one incoming request. */
+    assert(store_friend_list(s, alice, rows, &count) == OK);
+    assert(count == 2);
+    assert(rows[0].userId == bob && rows[0].link == FRIEND_ACCEPTED);
+    assert(rows[1].userId == carol && rows[1].link == FRIEND_PENDING_IN);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+enum { FRIEND_FLOOD_EXTRA = 6 };
+
+static void test_friend_list_accepted_before_pending(void)
+{
+    const char *db_path = "/tmp/test_uno_store_friend_flood.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId me = createAccount(s, "me@test.com", "Me");
+    /* More pending requests than the list can hold, all from lower ids than
+     * the real friend, so ordering by id alone would push the friend out. */
+    size_t flood = STORE_FRIEND_MAX + FRIEND_FLOOD_EXTRA;
+    for (size_t i = 0; i < flood; i++) {
+        char email[64];
+        snprintf(email, sizeof(email), "spam%zu@test.com", i);
+        UserId spammer = createAccount(s, email, "Spam");
+        assert(store_friend_request(s, spammer, me) == OK);
+    }
+    UserId oldFriend = createAccount(s, "friend1@test.com", "Friend1");
+    UserId newFriend = createAccount(s, "friend2@test.com", "Friend2");
+    assert(store_friend_request(s, newFriend, me) == OK);
+    assert(store_friend_reply(s, me, newFriend, true) == OK);
+    assert(store_friend_request(s, me, oldFriend) == OK);
+    assert(store_friend_reply(s, oldFriend, me, true) == OK);
+
+    FriendRow rows[STORE_FRIEND_MAX];
+    size_t count = 0;
+    assert(store_friend_list(s, me, rows, &count) == OK);
+    assert(count == STORE_FRIEND_MAX);
+    /* Accepted rows come first, each group ordered by account id. */
+    assert(rows[0].userId == oldFriend && rows[0].link == FRIEND_ACCEPTED);
+    assert(rows[1].userId == newFriend && rows[1].link == FRIEND_ACCEPTED);
+    for (size_t i = 2; i < count; i++) {
+        assert(rows[i].link == FRIEND_PENDING_IN);
+        assert(i == 2 || rows[i].userId > rows[i - 1].userId);
+    }
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void startHumanMatch(Store *s, const char *matchId, Mode mode,
+                            const UserId humans[4])
+{
+    PlayerSpec players[4];
+    memset(players, 0, sizeof(players));
+    for (int i = 0; i < 4; i++) {
+        players[i].userId = humans[i];
+        players[i].isBot = humans[i] == 0;
+        snprintf(players[i].name, sizeof(players[i].name), "P%d", i);
+        strncpy(players[i].avatar, "fox", sizeof(players[i].avatar) - 1);
+    }
+    assert(store_match_start(s, (const MatchId *)matchId, players, mode,
+                             mode == CLASSIC) == OK);
+}
+
+static MatchResult finishedResult(const char *matchId, Mode mode, const UserId humans[4])
+{
+    MatchResult res;
+    memset(&res, 0, sizeof(res));
+    strncpy(res.matchId, matchId, sizeof(res.matchId) - 1);
+    res.mode = mode;
+    res.ranked = mode == CLASSIC;
+    res.status = MATCH_FINALIZED;
+    res.winnerSeat = -1;
+    res.winnerTeam = -1;
+    res.durationMs = PROFILE_DURATION_MS;
+    for (int i = 0; i < 4; i++) {
+        res.players[i].userId = humans[i];
+        res.players[i].team = -1;
+        res.players[i].eloBefore = PROFILE_ELO_BEFORE;
+        res.players[i].eloAfter = PROFILE_ELO_BEFORE;
+    }
+    return res;
+}
+
+static void test_profile_get_after_matches(void)
+{
+    const char *db_path = "/tmp/test_uno_store_profile.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    UserId bob = createAccount(s, "bob@test.com", "Bob");
+
+    Profile profile;
+    assert(store_profile_get(s, UNKNOWN_ACCOUNT_ID, &profile) == NOT_FOUND);
+    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(profile.userId == alice);
+    assert(profile.historyCount == 0);
+    assert(profile.badges == 0);
+
+    /* Ranked CLASSIC win for Alice at seat 0. */
+    const UserId classicSeats[4] = {alice, bob, 0, 0};
+    const char *rankedId = "00000000-0000-0000-0000-000000000030";
+    startHumanMatch(s, rankedId, CLASSIC, classicSeats);
+    MatchResult ranked = finishedResult(rankedId, CLASSIC, classicSeats);
+    ranked.winnerSeat = 0;
+    ranked.players[0].eloAfter = PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN;
+    ranked.players[1].eloAfter = PROFILE_ELO_BEFORE - PROFILE_ELO_GAIN;
+    ProfileDelta deltas[4];
+    memset(deltas, 0, sizeof(deltas));
+    deltas[0].add.matches = 1;
+    deltas[0].add.wins = 1;
+    deltas[0].streak = 1;
+    deltas[0].bestStreak = 1;
+    deltas[0].peakElo = PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN;
+    deltas[0].unlocked = BADGE_FIRST_WIN;
+    deltas[1].add.matches = 1;
+    deltas[1].streak = -1;
+    deltas[1].peakElo = PROFILE_ELO_BEFORE;
+    assert(store_finalize(s, &ranked, deltas) == OK);
+
+    /* Unranked TWO_V_TWO where Alice (seat 1, team 1) loses to team 0. */
+    const UserId teamSeats[4] = {bob, alice, 0, 0};
+    const char *teamId = "00000000-0000-0000-0000-000000000031";
+    startHumanMatch(s, teamId, TWO_V_TWO, teamSeats);
+    MatchResult team = finishedResult(teamId, TWO_V_TWO, teamSeats);
+    team.winnerSeat = 0;
+    team.winnerTeam = 0;
+    for (int i = 0; i < 4; i++) team.players[i].team = i % 2;
+    assert(store_finalize(s, &team, NULL) == OK);
+
+    /* An aborted and an active match never reach the profile. */
+    const char *abortedId = "00000000-0000-0000-0000-000000000032";
+    startHumanMatch(s, abortedId, DRAFT, classicSeats);
+    MatchEvent event = abortEvent();
+    assert(store_abort(s, (const MatchId *)abortedId, &event, 0) == OK);
+    startHumanMatch(s, "00000000-0000-0000-0000-000000000033", SIDE, classicSeats);
+
+    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(profile.userId == alice);
+    assert(strcmp(profile.name, "Alice") == 0);
+    assert(strcmp(profile.avatar, "fox") == 0);
+    assert(profile.elo == PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN);
+    assert(profile.stats.matches == 1 && profile.stats.wins == 1);
+    assert(profile.badges == BADGE_FIRST_WIN);
+    assert(profile.modes[CLASSIC].matches == 1 && profile.modes[CLASSIC].wins == 1);
+    assert(profile.modes[TWO_V_TWO].matches == 1 && profile.modes[TWO_V_TWO].wins == 0);
+    assert(profile.modes[SIDE].matches == 0 && profile.modes[DRAFT].matches == 0);
+
+    assert(profile.historyCount == 2);
+    /* Newest first: the team match was finalized after the ranked one. */
+    assert(strcmp(profile.history[0].matchId, teamId) == 0);
+    assert(profile.history[0].mode == TWO_V_TWO);
+    assert(!profile.history[0].won);
+    assert(profile.history[0].eloDelta == 0);
+    assert(strcmp(profile.history[1].matchId, rankedId) == 0);
+    assert(profile.history[1].mode == CLASSIC);
+    assert(profile.history[1].won);
+    assert(profile.history[1].eloDelta == PROFILE_ELO_GAIN);
+    assert(profile.history[1].endedAt > 0);
+
+    /* Bob: lost the ranked match, won the team match as team 0. */
+    assert(store_profile_get(s, bob, &profile) == OK);
+    assert(profile.modes[CLASSIC].matches == 1 && profile.modes[CLASSIC].wins == 0);
+    assert(profile.modes[TWO_V_TWO].wins == 1);
+    assert(profile.history[0].won);
+    assert(profile.history[1].eloDelta == -PROFILE_ELO_GAIN);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_profile_history_newest_twenty(void)
+{
+    const char *db_path = "/tmp/test_uno_store_history.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    const UserId seats[4] = {alice, 0, 0, 0};
+
+    const int total = STORE_HISTORY_MAX + 2;
+    for (int i = 0; i < total; i++) {
+        char matchId[37];
+        snprintf(matchId, sizeof(matchId), "00000000-0000-0000-0000-0000000001%02d", i);
+        startHumanMatch(s, matchId, DRAFT, seats);
+        MatchResult res = finishedResult(matchId, DRAFT, seats);
+        res.winnerSeat = 0;
+        assert(store_finalize(s, &res, NULL) == OK);
+    }
+
+    Profile profile;
+    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(profile.historyCount == STORE_HISTORY_MAX);
+    assert(profile.modes[DRAFT].matches == (uint32_t)total);
+    assert(profile.modes[DRAFT].wins == (uint32_t)total);
+    char newest[37];
+    snprintf(newest, sizeof(newest), "00000000-0000-0000-0000-0000000001%02d", total - 1);
+    assert(strcmp(profile.history[0].matchId, newest) == 0);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_profile_update_stores_text_verbatim(void)
+{
+    const char *db_path = "/tmp/test_uno_store_profile_update.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+
+    assert(store_profile_update(s, UNKNOWN_ACCOUNT_ID, "Ghost", "owl") == NOT_FOUND);
+    assert(store_profile_update(s, alice, NULL, "owl") == BAD_REQUEST);
+
+    assert(store_profile_update(s, alice, "Alicia", "owl") == OK);
+    Account account;
+    assert(store_account_get_by_id(s, alice, &account) == OK);
+    assert(strcmp(account.name, "Alicia") == 0);
+    assert(strcmp(account.avatar, "owl") == 0);
+    assert(strcmp(account.email, "alice@test.com") == 0);
+
+    assert(store_profile_update(s, alice, INJECTION_NAME, "owl") == OK);
+    assert(store_account_get_by_id(s, alice, &account) == OK);
+    assert(strcmp(account.name, INJECTION_NAME) == 0);
+    assert(db_query_int(store_get_db(s), "SELECT count(*) FROM accounts;") == 1);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_friend_and_profile_survive_reopen(void)
+{
+    const char *db_path = "/tmp/test_uno_store_social_reopen.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    UserId bob = createAccount(s, "bob@test.com", "Bob");
+    UserId carol = createAccount(s, "carol@test.com", "Carol");
+    assert(store_friend_request(s, alice, bob) == OK);
+    assert(store_friend_reply(s, bob, alice, true) == OK);
+    assert(store_friend_request(s, carol, alice) == OK);
+    assert(store_profile_update(s, alice, "Alicia", "owl") == OK);
+
+    const UserId seats[4] = {alice, bob, 0, 0};
+    const char *matchId = "00000000-0000-0000-0000-000000000040";
+    startHumanMatch(s, matchId, CLASSIC, seats);
+    MatchResult res = finishedResult(matchId, CLASSIC, seats);
+    res.winnerSeat = 0;
+    res.players[0].eloAfter = PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN;
+    assert(store_finalize(s, &res, NULL) == OK);
+    store_close(s);
+
+    s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
+    assert(linkOf(s, alice, carol) == FRIEND_PENDING_IN);
+    assert(linkOf(s, carol, alice) == FRIEND_PENDING_OUT);
+    Profile profile;
+    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(strcmp(profile.name, "Alicia") == 0);
+    assert(strcmp(profile.avatar, "owl") == 0);
+    assert(profile.historyCount == 1);
+    assert(profile.history[0].won);
+    assert(profile.history[0].eloDelta == PROFILE_ELO_GAIN);
+    assert(profile.modes[CLASSIC].wins == 1);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_upgrade_adds_match_end_time(void)
+{
+    const char *db_path = "/tmp/test_uno_store_upgrade_v2.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    const UserId seats[4] = {alice, 0, 0, 0};
+    const char *matchId = "00000000-0000-0000-0000-000000000050";
+    startHumanMatch(s, matchId, CLASSIC, seats);
+    MatchResult res = finishedResult(matchId, CLASSIC, seats);
+    res.winnerSeat = 0;
+    assert(store_finalize(s, &res, NULL) == OK);
+
+    /* Rebuild the v2 shape: matches had no end-time column. */
+    sqlite3 *db = store_get_db(s);
+    assert(sqlite3_exec(db,
+                        "ALTER TABLE matches DROP COLUMN ended_at;"
+                        "PRAGMA user_version = 2;",
+                        NULL, NULL, NULL) == SQLITE_OK);
+    int createdAt = db_query_int(db, "SELECT created_at FROM matches;");
+    store_close(s);
+
+    s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    db = store_get_db(s);
+    assert(db_query_int(db, "PRAGMA user_version;") == 3);
+    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('matches') "
+                            "WHERE name = 'ended_at';") == 1);
+
+    /* Old finalized rows get start + duration as their end time. */
+    Profile profile;
+    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(profile.historyCount == 1);
+    assert(profile.history[0].endedAt ==
+           (int64_t)createdAt + PROFILE_DURATION_MS / MS_PER_SECOND);
+    store_close(s);
+    cleanup_file(db_path);
+}
+
 int main(void)
 {
+    test_friend_request_rules();
+    test_friend_reply_accept_and_reject();
+    test_friend_list_accepted_before_pending();
+    test_profile_get_after_matches();
+    test_profile_history_newest_twenty();
+    test_profile_update_stores_text_verbatim();
+    test_friend_and_profile_survive_reopen();
+    test_upgrade_adds_match_end_time();
+    test_abort_atomic_and_idempotent();
+    test_ranked_finalize_updates_elo_once();
+    test_leaderboard_order();
     test_table_creation_and_migration();
     test_upgrade_from_v1_database();
     test_account_create_is_atomic();

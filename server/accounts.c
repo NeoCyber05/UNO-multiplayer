@@ -1,6 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 #include "accounts.h"
 #include "auth_worker.h"
+#include "match.h"
+#include "queue.h"
+#include "rooms.h"
+#include "social.h"
 #include "store.h"
 #include <ctype.h>
 #include <errno.h>
@@ -288,10 +292,32 @@ Status sessions_find_conn(App *app, UserId user_id, ConnId *out_conn)
     return NOT_FOUND;
 }
 
+enum {
+    TOKEN_HEX_LENGTH = 64,
+    /* Spec: a session token is valid for 24 hours after LOGIN. */
+    SESSION_TTL_MS = 24 * 3600 * 1000
+};
+
+/* The entry a RESUME token names, or NULL; an expired entry is forgotten. */
+static SessionEntry *find_live_token(Sessions *sessions, const char *token)
+{
+    if (!token || strlen(token) != TOKEN_HEX_LENGTH) return NULL;
+    for (size_t index = 0; index < MAX_SESSIONS; index++) {
+        SessionEntry *entry = &sessions->entries[index];
+        if (!entry->in_use || strcmp(entry->token, token) != 0) continue;
+        uint64_t now = get_now_ms();
+        if (now > entry->created_at_ms && now - entry->created_at_ms > SESSION_TTL_MS) {
+            memset(entry, 0, sizeof(*entry));
+            return NULL;
+        }
+        return entry;
+    }
+    return NULL;
+}
+
 Status sessions_resume(App *app, ConnId conn_id, const char *token)
 {
     if (!app || !app->sessions || !token) return BAD_REQUEST;
-    if (strlen(token) != 64) return UNAUTHENTICATED;
     if (conn_id.slot >= APP_MAX_CONNS) return UNAUTHENTICATED;
 
     AppConnSlot *slot = &app->slots[conn_id.slot];
@@ -299,22 +325,25 @@ Status sessions_resume(App *app, ConnId conn_id, const char *token)
         return UNAUTHENTICATED;
     }
 
-    Sessions *s = app->sessions;
-    for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (s->entries[i].in_use && strcmp(s->entries[i].token, token) == 0) {
-            uint64_t now = get_now_ms();
-            if (now > s->entries[i].created_at_ms && (now - s->entries[i].created_at_ms) > 24ULL * 3600ULL * 1000ULL) {
-                memset(&s->entries[i], 0, sizeof(s->entries[i]));
-                return UNAUTHENTICATED;
-            }
-            /* Found matching session. Reassign to new conn_id */
-            s->entries[i].conn_id = conn_id;
-            s->entries[i].connected = true;
-            return OK;
-        }
-    }
+    SessionEntry *entry = find_live_token(app->sessions, token);
+    if (!entry) return UNAUTHENTICATED;
+    /* Found matching session. Reassign to new conn_id */
+    entry->conn_id = conn_id;
+    entry->connected = true;
+    return OK;
+}
 
-    return UNAUTHENTICATED;
+/* One socket carries one account. Binding a different account takes the
+ * current one off the socket like a LOGOUT, so its seat, room and party are
+ * cleaned up now; otherwise both would share the socket and only one would
+ * be cleaned up when it closes. */
+static void release_other_account(App *app, ConnId conn, UserId incoming)
+{
+    UserId current = 0;
+    if (sessions_user(app, conn, &current) != OK || current == 0) return;
+    if (current == incoming) return;
+    app_user_leave(app, conn, current);
+    sessions_logout(app, conn);
 }
 
 void sessions_disconnect(App *app, ConnId conn_id)
@@ -520,6 +549,10 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
         }
 
         const char *token = json_object_get_string(j_token);
+        /* Look the token up first: an invalid one must not cost the socket
+         * the account it already carries. */
+        const SessionEntry *target = find_live_token(app->sessions, token);
+        if (target) release_other_account(app, conn_id, target->user_id);
         Status st = sessions_resume(app, conn_id, token);
         if (st == OK) {
             UserId uid = 0;
@@ -529,8 +562,9 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             memset(&acc, 0, sizeof(acc));
             store_account_get_by_id(app->store, uid, &acc);
 
+            /* The client already holds the token it just sent; echoing it adds
+             * nothing and only widens where the secret appears on the wire. */
             struct json_object *payload = json_object_new_object();
-            json_object_object_add(payload, "token", json_object_new_string(token));
 
             struct json_object *me = json_object_new_object();
             char uid_str[32], tag_str[32];
@@ -548,6 +582,15 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             conn_queue(&slot->conn, &resp);
             json_object_put(payload);
             conn_flush(&slot->conn);
+
+            /* After OK so the client sees the session before its GAME_STATE.
+             * NOT_FOUND just means the user is not in a match. */
+            (void)matchesConnected(app->matches, uid, true, app_now_ms());
+            /* Like LOGIN: the session moved to a socket that has seen no
+             * room, party or queue snapshot yet. */
+            rooms_sync_user(app, uid);
+            queue_sync_user(app, uid);
+            social_presence(app, uid);
         } else {
             accounts_send_error(app, conn_id.slot, e->id, "UNAUTHENTICATED", "Invalid or expired token");
         }
@@ -555,6 +598,14 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
     }
 
     if (strcmp(e->type, "LOGOUT") == 0) {
+        UserId uid = 0;
+        /* Spec §5: outside a match the user leaves queue, invites, party and
+         * waiting room at once. This runs while the session still maps
+         * conn -> user, so the leaver also gets the closing snapshots and
+         * friends see the account offline. */
+        if (sessions_user(app, conn_id, &uid) == OK && uid != 0) {
+            app_user_leave(app, conn_id, uid);
+        }
         sessions_logout(app, conn_id);
         struct json_object *payload = json_object_new_object();
         Envelope resp = {1, e->id, "OK", payload};
@@ -622,10 +673,16 @@ void auth_drain(App *app)
             }
         } else if (res.kind == AUTH_LOGIN) {
             if (res.status == OK) {
+                release_other_account(app, res.conn_id, res.user_id);
                 /* Disconnect any existing connection for this user */
                 ConnId old_conn;
                 if (sessions_find_conn(app, res.user_id, &old_conn) == OK) {
                     if (old_conn.slot != res.conn_id.slot && old_conn.slot < APP_MAX_CONNS) {
+                        /* Detach the session first so app_close_slot sees an
+                         * anonymous socket: the user is moving, not leaving, so
+                         * no offline presence (which aborts a match with no
+                         * other connected human) and no room/party exit. */
+                        sessions_disconnect(app, old_conn);
                         app_close_slot(app, old_conn.slot);
                     }
                 }
@@ -652,6 +709,17 @@ void auth_drain(App *app)
                 conn_queue(&slot->conn, &resp);
                 json_object_put(payload);
                 conn_flush(&slot->conn);
+
+                /* A re-login reclaims the seat. If the seat never went offline
+                 * the coordinator still sends this connection a fresh view.
+                 * NOT_FOUND just means the user is not in a match. */
+                (void)matchesConnected(app->matches, res.user_id, true, app_now_ms());
+                /* A re-login keeps room and party membership, but this socket has
+                 * never seen their snapshots. */
+                rooms_sync_user(app, res.user_id);
+                queue_sync_user(app, res.user_id);
+                /* Also hands this socket its first FRIEND_STATE. */
+                social_presence(app, res.user_id);
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "UNAUTHENTICATED", "Invalid email or password");
             }

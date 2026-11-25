@@ -379,6 +379,50 @@ static void test_seat_bounds_validation(void)
     rooms_destroy(rooms);
 }
 
+static void test_match_ended_frees_members(void)
+{
+    enum { HOST_ID = 401, FIRST_GUEST_ID = 402 };
+    App *app = calloc(1, sizeof(App));
+    assert(app != NULL);
+    Rooms *rooms = NULL;
+    assert(rooms_init(&rooms, app, NULL) == OK);
+    app->rooms = rooms;
+
+    char code[7] = {0};
+    assert(rooms_create(rooms, HOST_ID, "Host", "fox", CLASSIC, code) == OK);
+    for (int seat = 1; seat < ROOM_MAX_SEATS; seat++) {
+        Seat joinedSeat = 0;
+        UserId guestId = (UserId)(FIRST_GUEST_ID + seat - 1);
+        assert(rooms_join(rooms, guestId, "Guest", "bear", code, &joinedSeat) == OK);
+    }
+    Room *room = rooms_find_by_code(rooms, code);
+    assert(room != NULL);
+    /* A waiting room that reuses a finished match's code must survive. */
+    rooms_match_ended(app, code);
+    assert(rooms_find_by_user(rooms, HOST_ID) == room);
+    room->status = ROOM_STATUS_IN_MATCH;
+
+    /* Empty or unknown ids are ignored and leave the live room alone. */
+    rooms_match_ended(app, "");
+    rooms_match_ended(app, "ZZZZZZ");
+    assert(rooms_find_by_user(rooms, HOST_ID) == room);
+
+    rooms_match_ended(app, code);
+    assert(rooms_find_by_code(rooms, code) == NULL);
+    assert(rooms_find_by_user(rooms, HOST_ID) == NULL);
+    for (int seat = 1; seat < ROOM_MAX_SEATS; seat++) {
+        UserId guestId = (UserId)(FIRST_GUEST_ID + seat - 1);
+        assert(rooms_find_by_user(rooms, guestId) == NULL);
+    }
+
+    /* Released members may host again. */
+    char nextCode[7] = {0};
+    assert(rooms_create(rooms, HOST_ID, "Host", "fox", CLASSIC, nextCode) == OK);
+
+    rooms_destroy(rooms);
+    free(app);
+}
+
 int main(void)
 {
     test_room_code_generation();
@@ -392,6 +436,7 @@ int main(void)
     test_room_start_invariants();
     test_invite_30s_slot_reclamation();
     test_seat_bounds_validation();
+    test_match_ended_frees_members();
 
     printf("rooms: OK\n");
     return 0;

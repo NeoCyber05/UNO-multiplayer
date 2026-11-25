@@ -1,12 +1,25 @@
 #ifndef UNO_APP_H
 #define UNO_APP_H
 
+#include "server/rooms.h"
 #include "shared/contracts.h"
 #include "shared/net.h"
 
 enum {
-    APP_MAX_CONNS = 64
+    APP_MAX_CONNS = 64,
+    /* Spec: clients PING every 5 s; a connection silent for 15 s is dead. */
+    APP_DEFAULT_HEARTBEAT_MS = 15000,
+    /* Above the coordinator's 16 match slots, so a record is always free. */
+    APP_MATCH_RECORDS = 32
 };
+
+/* Humans seated in a running match. The end callback only carries the room id,
+ * so this is how the App knows whose presence to refresh afterwards. */
+typedef struct {
+    bool active;
+    char roomId[sizeof(((RoomStart *)0)->roomId)];
+    UserId users[ROOM_MAX_SEATS]; /* 0 for a bot seat */
+} AppMatchRecord;
 
 typedef struct {
     Conn conn;
@@ -15,6 +28,8 @@ typedef struct {
     char client_ip[64];
     uint64_t rate_last_ms;
     double rate_tokens;
+    int32_t last_request_id; /* request ids must strictly increase per connection */
+    uint64_t last_frame_ms;  /* monotonic time of the last accepted frame */
 } AppConnSlot;
 
 typedef struct AuthWorker AuthWorker;
@@ -36,13 +51,84 @@ struct App {
     Sessions *sessions;
     RateLimiter *rate_limiter;
     Rooms *rooms;
+    Queue *queue;
+    Matches *matches;
+    int heartbeat_ms;
+    AppMatchRecord match_records[APP_MATCH_RECORDS];
+    /* Set only while app_user_leave runs: its own presence push replaces the
+     * one a match abort would send for this user. */
+    UserId leaving_user;
 };
 
 Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_path, int auth_limit);
-int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_limit);
+/**
+ * @brief Run the server poll loop until SIGINT/SIGTERM.
+ * @param[in] bind_ip IPv4 address to listen on.
+ * @param[in] port TCP port, 0 for an ephemeral port printed as "PORT n".
+ * @param[in] db_path SQLite path or ":memory:".
+ * @param[in] auth_limit Auth requests allowed per IP per minute.
+ * @param[in] heartbeat_ms Idle time after which a connection is closed.
+ * @return 0 after a clean shutdown, 1 if startup failed.
+ */
+int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_limit,
+            int heartbeat_ms);
 void app_stop(App *app);
 void app_cleanup(App *app);
 void app_close_slot(App *app, int slot_idx);
+
+/**
+ * @brief Take a user off a connection: socket close, LOGOUT, or another
+ *        account binding the same socket.
+ *
+ * Spec §5: the match seat goes offline (aborting the match when no other
+ * human is connected), the queue entry and pending invites are dropped, the
+ * party dissolves and a waiting room loses the seat; a running match keeps
+ * the seat for RESUME or LOGIN. Pushes for those changes still reach the user
+ * because the session is detached (connected = false) only afterwards.
+ * Friends then get one presence update per user whose presence changed.
+ * The caller decides whether the detached session is also forgotten
+ * (sessions_logout) or kept for RESUME.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] conn Connection the user is leaving.
+ * @param[in] user Account bound to @p conn; 0 is ignored.
+ */
+void app_user_leave(App *app, ConnId conn, UserId user);
+
 bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms);
+
+/**
+ * @brief Read the clock shared by the poll loop, heartbeat and match timers.
+ * @return Milliseconds from CLOCK_MONOTONIC, immune to wall-clock jumps.
+ */
+uint64_t app_now_ms(void);
+
+/**
+ * @brief Queue and flush a server push (envelope id 0) to a user's live connection.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] user Account to notify.
+ * @param[in] type Push opcode, e.g. "GAME_STATE".
+ * @param[in] payload JSON object borrowed for the call; ownership stays with the caller.
+ * @return OK when queued, NOT_FOUND if the user has no connected session,
+ *         BAD_REQUEST on invalid arguments, or the conn_queue/conn_flush error.
+ */
+Status app_push(App *app, UserId user, const char *type, json_object *payload);
+
+/**
+ * @brief Answer a request with OK {} or ERROR {code, message} derived from a Status.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] conn Connection that sent the request; ignored if already closed.
+ * @param[in] id Request id echoed back to the client.
+ * @param[in] st OK sends an empty OK; any other value sends ERROR with status_code(st).
+ */
+void app_reply_status(App *app, ConnId conn, int32_t id, Status st);
+
+/**
+ * @brief Answer a request with OK and a result object.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] conn Connection that sent the request; ignored if already closed.
+ * @param[in] id Request id echoed back to the client.
+ * @param[in] payload JSON object borrowed for the call; ownership stays with the caller.
+ */
+void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload);
 
 #endif
