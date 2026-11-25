@@ -6,8 +6,7 @@ export const initialSession = {
 
 export const stateEvents = [
   'CONNECTION_STATE', 'SERVER_SHUTDOWN', 'ROOM_STATE', 'PARTY_STATE', 'QUEUE_STATE',
-  'GAME_STATE', 'MATCH_RESULT', 'GAME_CHAT', 'FRIEND_STATE', 'LEADERBOARD_STATE',
-  'PROFILE_STATE', 'LOBBY_STATE', 'INVITE',
+  'GAME_STATE', 'MATCH_RESULT', 'GAME_CHAT', 'FRIEND_STATE', 'PROFILE_STATE', 'INVITE',
 ];
 
 function newer(current, next, id) {
@@ -16,22 +15,29 @@ function newer(current, next, id) {
 
 export function sessionReducer(state, { type, payload, receivedAt }) {
   switch (type) {
-    case 'CONNECTION_STATE':
+    case 'CONNECTION_STATE': {
+      const { status } = payload;
+      const reset = status === 'reconnecting' || status === 'disconnected';
       return {
         ...state,
-        ...(payload.status === 'disconnected' && { room: null, queue: null, party: null, invites: [] }),
-        connection: payload.status,
+        ...(reset && { room: null, queue: null, party: null, invites: [], game: null, receivedAt: 0, chat: null }),
+        connection: status,
       };
+    }
     case 'SERVER_SHUTDOWN':
       return { ...state, connection: 'disconnected' };
     case 'AUTH_OK':
       return { ...state, me: payload, connection: 'connected' };
     case 'AUTH_CLEAR':
       return { ...initialSession, connection: state.connection };
-    case 'ROOM_STATE':
-      return !payload || newer(state.room, payload, 'roomId') ? { ...state, room: payload } : state;
+    case 'ROOM_STATE': {
+      if (payload && !newer(state.room, payload, 'roomId')) return state;
+      const seated = state.me && payload?.seats.some((seat) => seat?.userId === state.me.userId);
+      return { ...state, room: seated ? payload : null };
+    }
     case 'PARTY_STATE':
-      return !payload || newer(state.party, payload, 'partyId') ? { ...state, party: payload } : state;
+      if (payload && !newer(state.party, payload, 'partyId')) return state;
+      return { ...state, party: payload?.members.length ? payload : null };
     case 'QUEUE_STATE':
       return !payload || newer(state.queue, payload, 'mode') ? { ...state, queue: payload } : state;
     case 'GAME_STATE':
@@ -61,10 +67,6 @@ export function sessionReducer(state, { type, payload, receivedAt }) {
         ...state,
         profile: payload.userId === state.profile?.userId ? { ...state.profile, ...payload } : payload,
         me: payload.userId === state.me?.userId ? { ...state.me, ...payload } : state.me,
-      };
-    case 'LOBBY_STATE':
-      return {
-        ...state, friends: payload.friends ?? state.friends, leaderboard: payload.leaderboard ?? state.leaderboard,
       };
     case 'INVITE':
       return { ...state, invites: [...state.invites.filter((invite) => invite.inviteId !== payload.inviteId), payload] };

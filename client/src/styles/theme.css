@@ -229,7 +229,7 @@ img { user-select: none; }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.85); } }
 
 /* ---------- Toast (menu) ---------- */
-.menu-toast {
+.menu-toast, .connection-banner {
   position: absolute;
   left: 50%;
   bottom: 40px;
@@ -243,8 +243,9 @@ img { user-select: none; }
   font-weight: 700;
   font-size: 14px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
-  animation: toast-life 2.4s ease forwards;
 }
+.menu-toast { animation: toast-life 2.4s ease forwards; }
+.connection-banner { top: 24px; bottom: auto; }
 @keyframes toast-life {
   0% { opacity: 0; transform: translate(-50%, 16px); }
   10%, 85% { opacity: 1; transform: translate(-50%, 0); }

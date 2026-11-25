@@ -7,9 +7,10 @@ enum { PROFILE_SEAT_COUNT = 4 };
 
 /**
  * @brief Compute profile deltas without writing player stats.
- * @param store Repository used to read current profile stats.
- * @param result Completed result, or an aborted result with no changes to award.
- * @param out Receives one delta per seat on success.
+ * @param[in] store Repository used to read current profile stats.
+ * @param[in] result Completed result, or an aborted result with no changes to award.
+ *                   A seat without userId is a bot: the match then counts only `matches`.
+ * @param[out] out Receives one delta per seat on success.
  * @return OK on success, BAD_REQUEST for invalid inputs, or a repository error.
  *
  * The finalization transaction applies the deltas once per match.

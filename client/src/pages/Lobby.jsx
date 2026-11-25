@@ -73,7 +73,8 @@ export default function Lobby() {
       <h1 className="lobby__heading display">Chọn chế độ chơi</h1>
 
       <main className="lobby__stage" aria-label="Bộ bài chế độ chơi">
-        <ModeCarousel modes={LOBBY_MODES} active={active} onChange={setActive} onSelect={enter} keyboard={!modal} />
+        <ModeCarousel modes={LOBBY_MODES} active={active} onChange={setActive} onSelect={enter}
+          keyboard={!modal && connection === 'connected'} />
       </main>
 
       <div className="lobby__dots">

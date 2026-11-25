@@ -36,6 +36,11 @@ Status profileCompute(Store *store, const MatchResult *result,
     if (!store || !result || !out || result->status == MATCH_ACTIVE) return BAD_REQUEST;
     ProfileDelta deltas[PROFILE_SEAT_COUNT] = {0};
     bool teamMode = result->mode == TWO_V_TWO || result->mode == SIDE;
+    // Bot seats have no account; wins against bots must not farm streak or badges.
+    bool vsBots = false;
+    for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
+        if (!result->players[seat].userId) vsBots = true;
+    }
     if (result->status == MATCH_FINALIZED) {
         for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
             const PlayerResult *player = &result->players[seat];
@@ -44,23 +49,28 @@ Status profileCompute(Store *store, const MatchResult *result,
             Status status = store_profile_stats(store, player->userId, &before);
             if (status != OK) return status;
 
-            bool won = !player->left && (teamMode ? player->team == result->winnerTeam :
-                                                    seat == result->winnerSeat);
             ProfileStats after = before;
             after.matches = addCount(before.matches, 1);
-            after.wins = addCount(before.wins, won);
-            after.teamWins = addCount(before.teamWins, won && teamMode);
-            after.plus4 = addCount(before.plus4, player->stats.plus4);
-            after.unoCalls = addCount(before.unoCalls, player->stats.unoCalls);
-            if (won) {
-                after.streak = before.streak < 0 ? 1 :
-                    before.streak == INT32_MAX ? INT32_MAX : before.streak + 1;
-                if ((uint32_t)after.streak > before.bestStreak) after.bestStreak = (uint32_t)after.streak;
-            } else {
-                after.streak = before.streak > 0 ? -1 :
-                    before.streak == INT32_MIN ? INT32_MIN : before.streak - 1;
+            // streak/bestStreak/peakElo are written as absolute values, so a bot match keeps them as read.
+            if (!vsBots) {
+                bool won = !player->left && (teamMode ? player->team == result->winnerTeam :
+                                                        seat == result->winnerSeat);
+                after.wins = addCount(before.wins, won);
+                after.teamWins = addCount(before.teamWins, won && teamMode);
+                after.plus4 = addCount(before.plus4, player->stats.plus4);
+                after.unoCalls = addCount(before.unoCalls, player->stats.unoCalls);
+                if (won) {
+                    after.streak = before.streak < 0 ? 1 :
+                        before.streak == INT32_MAX ? INT32_MAX : before.streak + 1;
+                    if ((uint32_t)after.streak > before.bestStreak) {
+                        after.bestStreak = (uint32_t)after.streak;
+                    }
+                } else {
+                    after.streak = before.streak > 0 ? -1 :
+                        before.streak == INT32_MIN ? INT32_MIN : before.streak - 1;
+                }
+                if (player->eloAfter > before.peakElo) after.peakElo = player->eloAfter;
             }
-            if (player->eloAfter > before.peakElo) after.peakElo = player->eloAfter;
             deltas[seat] = (ProfileDelta){
                 .add = {
                     .matches = after.matches - before.matches,

@@ -16,7 +16,7 @@ export default function Matchmaking() {
   const { queue, request, receive, connection } = useSession();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const waiting = queue?.mode === cfg.key && queue.active !== false;
+  const waiting = queue?.mode === cfg.key && queue.active === true;
   const back = cfg.teams ? `/room/${cfg.key}` : '/lobby';
   const players = waiting ? queue.players ?? [] : [];
   const ready = players.filter(Boolean).length === 4;

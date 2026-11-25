@@ -120,7 +120,7 @@ export default function Login() {
 
           <div className="login__row">
             <span className="login__error" role="alert">{error}</span>
-            {connection !== 'connected' && <span role="status">
+            {connection !== 'connected' && connection !== 'reconnecting' && <span role="status">
               {connection === 'unavailable' ? 'Mở UNO Desktop để kết nối.' :
                 connection === 'connecting' ? 'Đang kết nối…' : 'Máy chủ chưa kết nối.'}
             </span>}

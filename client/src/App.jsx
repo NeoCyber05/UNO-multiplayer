@@ -16,6 +16,7 @@ export default function App() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const userId = me?.userId;
+  const reconnecting = connection === 'reconnecting';
   const matchId = game?.matchId;
   const mode = game?.mode;
   const routedMatch = useRef(null);
@@ -36,18 +37,23 @@ export default function App() {
   return (
     <Stage>
       <MusicPlayer />
-      {me && connection !== 'connected' && !pathname.startsWith('/game/') &&
-        <div className="menu-toast" role="status">Đang mất kết nối với máy chủ</div>}
-      <Routes>
-        <Route path="/" element={me ? <Navigate to={matchId ? `/game/${mode}` : '/lobby'} replace /> : <Login />} />
-        <Route path="/lobby" element={<Lobby />} />
-        <Route path="/custom" element={<CustomRoom />} />
-        <Route path="/matchmaking/:mode" element={<Matchmaking />} />
-        <Route path="/room/:mode" element={<TeamRoom />} />
-        <Route path="/game/:mode" element={<GameTable />} />
-        <Route path="/result" element={<MatchResult />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      {(reconnecting || (me && connection === 'disconnected')) && (
+        <div className="connection-banner" role="status">
+          {reconnecting ? 'Đang kết nối lại với máy chủ…' : 'Đã mất kết nối với máy chủ.'}
+        </div>
+      )}
+      <div inert={reconnecting ? '' : undefined}>
+        <Routes>
+          <Route path="/" element={me ? <Navigate to={matchId ? `/game/${mode}` : '/lobby'} replace /> : <Login />} />
+          <Route path="/lobby" element={<Lobby />} />
+          <Route path="/custom" element={<CustomRoom />} />
+          <Route path="/matchmaking/:mode" element={<Matchmaking />} />
+          <Route path="/room/:mode" element={<TeamRoom />} />
+          <Route path="/game/:mode" element={<GameTable />} />
+          <Route path="/result" element={<MatchResult />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
     </Stage>
   );
 }

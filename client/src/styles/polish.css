@@ -149,7 +149,7 @@ button svg { flex-shrink:0; }
 .lb-columns { display:grid; grid-template-columns:68px 1fr 70px; padding:0 17px; font-size:9px; letter-spacing:.1em; color:#8c9da9; }.lb-columns span:last-child { text-align:right; }
 .lb-list { min-height:50px; max-height:300px; gap:7px; }.lb-row { padding:11px 16px; background:#eef4f7; border:1px solid #e4edf1; border-radius:13px; gap:14px; }.lb-row__rank { width:34px; font-size:20px; color:#a1adb4; }.lb-row__name small { display:inline-block; margin-left:9px; font-size:9px; padding:3px 6px; background:#f5df9e; color:#9a7427; border-radius:5px; }.lb-row__elo { font-size:20px; min-width:55px; text-align:right; }.lb-row.is-me { background:#fff2ca; box-shadow:none; border-color:#e9c974; }
 .lb-foot { display:flex; align-items:center; gap:8px; border-top:1px solid var(--line); padding-top:12px; font-size:11px; color:#899aa6; }.lb-foot>b { margin-left:auto; color:#a7802e; }.lb-empty { text-align:center; padding:25px; font-size:13px; color:var(--text-faint); }
-.menu-toast { background:#fff9e6; color:#8d713c; border:1px solid #ead6a3; border-radius:13px; }
+.menu-toast, .connection-banner { background:#fff9e6; color:#8d713c; border:1px solid #ead6a3; border-radius:13px; }
 .qchat { background:#fffaf0; color:var(--text); border-color:#edcf92; }.cpick-modal__title { color:#9f7a2b; }
 .table-bg__rays,.table-bg__spot { animation:none; }.table-bg__spot { opacity:.25; }.hud-btn { border-radius:14px; }.hud-btn:hover { transform:none; filter:brightness(1.08); }
 

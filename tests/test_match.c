@@ -1,5 +1,6 @@
 #include "server/match.h"
 #include "server/game.h"
+#include "server/profile.h"
 #include "server/store.h"
 
 #include <assert.h>
@@ -251,8 +252,13 @@ static void test_ranked_room_with_bot_rejected(Matches *matches, sqlite3 *db, Ro
     assert(!matchesContains(matches, 1));
 }
 
-static void test_ranked_finish_applies_elo(Matches *matches, sqlite3 *db, RoomStart room,
+static void test_ranked_finish_applies_elo(Matches *matches, Store *store, RoomStart room,
                                            Capture *messages) {
+    sqlite3 *db = store_get_db(store);
+    ProfileStats before[PROFILE_SEAT_COUNT];
+    for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
+        assert(store_profile_stats(store, room.players[seat].userId, &before[seat]) == OK);
+    }
     room.mode = CLASSIC;
     room.ranked = true;
     randomState = 7;
@@ -281,13 +287,22 @@ static void test_ranked_finish_applies_elo(Matches *matches, sqlite3 *db, RoomSt
 
     int winnerSeat = queryInt(db, "SELECT winner_seat FROM matches WHERE ranked = 1", 0);
     assert(winnerSeat >= 0 && winnerSeat < 4);
-    for (Seat seat = 0; seat < 4; seat++) {
+    for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
         UserId userId = room.players[seat].userId;
         int expected = seat == winnerSeat ? RANKED_WIN_ELO : RANKED_LOSS_ELO;
         assert(queryInt(db, "SELECT elo FROM accounts WHERE id = ?", (int64_t)userId) == expected);
         assert(queryInt(db, "SELECT elo_before FROM match_players WHERE seat = ? AND "
                             "match_id = (SELECT match_id FROM matches WHERE ranked = 1)",
                         seat) == RANKED_START_ELO);
+        ProfileStats after;
+        assert(store_profile_stats(store, userId, &after) == OK);
+        bool won = seat == winnerSeat && seat != LEAVER_SEAT;
+        assert(after.matches == before[seat].matches + 1);
+        assert(after.wins == before[seat].wins + won);
+        int streak = before[seat].streak;
+        assert(after.streak == (won ? (streak < 0 ? 1 : streak + 1) :
+                                      (streak > 0 ? -1 : streak - 1)));
+        assert(after.peakElo == (expected > before[seat].peakElo ? expected : before[seat].peakElo));
     }
 }
 
@@ -373,7 +388,7 @@ int main(void) {
     assert(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == 1);
     sqlite3_finalize(query);
     test_ranked_room_with_bot_rejected(matches, db, room);
-    test_ranked_finish_applies_elo(matches, db, room, &messages);
+    test_ranked_finish_applies_elo(matches, store, room, &messages);
 
     for (UserId userId = 1; userId <= 4; userId++) json_object_put(messages.views[userId]);
     matchesDestroy(matches);

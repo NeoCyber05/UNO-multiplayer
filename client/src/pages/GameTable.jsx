@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { IconGear, IconSmile } from '../components/Icons.jsx';
 import TableBackground from '../components/game/TableBackground.jsx';
 import PlayerBadge from '../components/game/PlayerBadge.jsx';
@@ -14,6 +14,7 @@ import MatchClock from '../components/game/MatchClock.jsx';
 import SettingsModal from '../components/game/SettingsModal.jsx';
 import DraftSelection, { DraftTray } from '../components/game/DraftSelection.jsx';
 import { MODES, SEATS } from '../game/constants';
+import { useSession } from '../net/session';
 import { useRemoteGame } from '../net/useRemoteGame';
 import useSettings from '../hooks/useSettings';
 import playTurnChime from '../hooks/playTurnChime';
@@ -26,10 +27,11 @@ import '../components/game/game.css';
 // Hết ván -> chờ chút cho người chơi thấy lá cuối rồi sang trang tổng kết
 const RESULT_DELAY_MS = 1500;
 
-function GameScreen({ game }) {
+function GameScreen() {
+  const game = useRemoteGame();
   const cfg = MODES[game.mode];
   const navigate = useNavigate();
-  const { state, me, isMyTurn, canAct, playableIds, canSayUno, turnKey, actions, connection, error, result } = game;
+  const { state, me, isMyTurn, canAct, playableIds, canSayUno, turnKey, actions, error, result } = game;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -139,10 +141,9 @@ function GameScreen({ game }) {
         turnSeat={state.winner ? null : SEATS[state.turn]}
       />}
 
-      {(connection !== 'connected' || state.paused || error) && (
+      {(state.paused || error) && (
         <div className="toast" role="status">
-          {connection !== 'connected' ? 'Đang mất kết nối với máy chủ' :
-            error || 'Trận tạm dừng vì lỗi lưu trữ'}
+          {error || 'Trận tạm dừng vì lỗi lưu trữ'}
         </div>
       )}
 
@@ -234,11 +235,13 @@ function GameScreen({ game }) {
 }
 
 export default function GameTable() {
-  const game = useRemoteGame();
-  if (!game.state) {
-    return <div className="screen" role="status">
-      {game.connection === 'unavailable' ? 'Mở UNO Desktop để chơi online.' : 'Đang chờ trạng thái trận từ máy chủ.'}
+  const { game, connection } = useSession();
+  if (!game) {
+    return <div className="screen game-wait">
+      <p role="status">{connection === 'unavailable'
+        ? 'Mở UNO Desktop để chơi online.' : 'Đang chờ trạng thái trận từ máy chủ.'}</p>
+      {connection === 'connected' && <Link className="btn btn--outline" to="/lobby">Về sảnh</Link>}
     </div>;
   }
-  return <GameScreen key={game.matchId} game={game} />;
+  return <GameScreen key={game.matchId} />;
 }

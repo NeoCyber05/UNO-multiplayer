@@ -1,6 +1,7 @@
 #include "match.h"
 
 #include "bot.h"
+#include "profile.h"
 #include "rating.h"
 #include "store.h"
 
@@ -287,9 +288,15 @@ static Status pauseMatch(Matches *matches, Match *match, uint64_t nowMs) {
 
 static Status finishMatch(Matches *matches, Match *match, uint64_t nowMs) {
     bool aborted = match->result.status == MATCH_ABORTED;
-    // NULL preserves the existing profile streak and peak until Task 11.
-    Status status = aborted ? storeAbort(matches->store, match) :
-        store_finalize(matches->store, &match->result, NULL);
+    Status status;
+    if (aborted) {
+        status = storeAbort(matches->store, match);
+    } else {
+        // Single-threaded poll loop: stats read here cannot change before store_finalize commits.
+        ProfileDelta deltas[PROFILE_SEAT_COUNT];
+        status = profileCompute(matches->store, &match->result, deltas);
+        if (status == OK) status = store_finalize(matches->store, &match->result, deltas);
+    }
     if (status != OK) return pauseMatch(matches, match, nowMs);
 
     match->retryAt = 0;
