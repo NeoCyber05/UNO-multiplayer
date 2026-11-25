@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 400" width="1000" height="400" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#555"/>
+    </marker>
+
+    <!-- React -->
+    <symbol id="i-react" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="3" fill="#20232a"/>
+      <g fill="none" stroke="#61dafb" stroke-width="1.4">
+        <ellipse cx="16" cy="16" rx="12" ry="4.6"/>
+        <ellipse cx="16" cy="16" rx="12" ry="4.6" transform="rotate(60 16 16)"/>
+        <ellipse cx="16" cy="16" rx="12" ry="4.6" transform="rotate(120 16 16)"/>
+      </g>
+      <circle cx="16" cy="16" r="2.3" fill="#61dafb"/>
+    </symbol>
+
+
+    <!-- JavaScript -->
+    <symbol id="i-js" viewBox="0 0 32 32">
+      <rect width="32" height="32" fill="#f7df1e"/>
+      <text x="29" y="28" text-anchor="end" font-size="14" font-weight="bold" fill="#000">JS</text>
+    </symbol>
+
+    <!-- C language -->
+    <symbol id="i-c" viewBox="0 0 32 32">
+      <path d="M16 1 L29 8.5 L29 23.5 L16 31 L3 23.5 L3 8.5 Z" fill="#283593"/>
+      <path d="M16 1 L29 8.5 L29 23.5 L16 31 Z" fill="#00599c"/>
+      <text x="16" y="21.5" text-anchor="middle" font-size="15" font-weight="bold" fill="#fff">C</text>
+    </symbol>
+
+
+
+
+    <!-- OpenSSL -->
+    <symbol id="i-openssl" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="4" fill="#721412"/>
+      <rect x="10" y="14" width="12" height="10" rx="1.5" fill="#fff"/>
+      <path d="M12.5 14 V11 A3.5 3.5 0 0 1 19.5 11 V14" fill="none" stroke="#fff" stroke-width="2"/>
+      <circle cx="16" cy="19" r="1.4" fill="#721412"/>
+    </symbol>
+
+    <!-- SQLite -->
+    <symbol id="i-sqlite" viewBox="0 0 32 32">
+      <path d="M5 6 V26 A11 4 0 0 0 27 26 V6" fill="#0f80cc"/>
+      <ellipse cx="16" cy="6" rx="11" ry="4" fill="#5cb3e8"/>
+      <path d="M5 13 A11 4 0 0 0 27 13 M5 19.5 A11 4 0 0 0 27 19.5" fill="none" stroke="#fff" stroke-width="1" opacity="0.7"/>
+    </symbol>
+
+  </defs>
+
+  <rect width="1000" height="400" fill="#fff"/>
+
+  <!-- Client -->
+  <rect x="40" y="145" width="180" height="110" rx="6" fill="#d9ead3" stroke="#777"/>
+  <use href="#i-react" xlink:href="#i-react" x="48" y="153" width="28" height="28"/>
+  <text x="130" y="205" text-anchor="middle" font-size="20" font-weight="normal" fill="#222">Client</text>
+  <text x="130" y="227" text-anchor="middle" font-size="12" font-weight="normal" fill="#555">React UI</text>
+
+  <!-- Client ↔ Server -->
+  <line x1="222" y1="180" x2="328" y2="180" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text x="275" y="160" text-anchor="middle" font-size="13" font-weight="bold" fill="#222">HTTP</text>
+  <text x="275" y="172" text-anchor="middle" font-size="10.5" font-weight="normal" fill="#555">web · đăng nhập</text>
+  <line x1="222" y1="225" x2="328" y2="225" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text x="275" y="245" text-anchor="middle" font-size="13" font-weight="bold" fill="#222">WebSocket</text>
+  <text x="275" y="259" text-anchor="middle" font-size="10.5" font-weight="normal" fill="#555">sảnh · phòng · ván</text>
+
+  <!-- Server -->
+  <rect x="330" y="50" width="450" height="310" rx="6" fill="#cfe2f3" stroke="#777"/>
+  <use href="#i-c" xlink:href="#i-c" x="744" y="56" width="28" height="28"/>
+  <text x="555" y="82" text-anchor="middle" font-size="20" font-weight="normal" fill="#222">Server</text>
+  <rect x="350" y="100" width="260" height="240" rx="6" fill="#e8f1fa" stroke="#6a8caf" stroke-dasharray="5 3"/>
+  <text x="480" y="120" text-anchor="middle" font-size="12" font-weight="normal" fill="#555">Luồng chính (epoll)</text>
+  <rect x="365" y="132" width="230" height="33" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="480" y="153" text-anchor="middle" font-size="13" font-weight="normal" fill="#222">Kết nối HTTP · WebSocket</text>
+  <rect x="365" y="173" width="230" height="33" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="480" y="194" text-anchor="middle" font-size="13" font-weight="normal" fill="#222">Tài khoản &amp; Session</text>
+  <rect x="365" y="214" width="230" height="33" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="480" y="235" text-anchor="middle" font-size="13" font-weight="normal" fill="#222">Sảnh · Ghép trận · Phòng</text>
+  <rect x="365" y="255" width="230" height="33" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="480" y="276" text-anchor="middle" font-size="13" font-weight="normal" fill="#222">Ván chơi · Bot</text>
+  <rect x="365" y="296" width="230" height="33" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="480" y="317" text-anchor="middle" font-size="13" font-weight="normal" fill="#222">Bạn bè · Xếp hạng · Hồ sơ</text>
+  <rect x="650" y="100" width="110" height="240" rx="6" fill="#fff" stroke="#6a8caf"/>
+  <text x="705" y="215" text-anchor="middle" font-size="14" font-weight="bold" fill="#222">DB worker</text>
+  <text x="705" y="233" text-anchor="middle" font-size="11" font-weight="normal" fill="#555">(luồng phụ)</text>
+  <line x1="612" y1="220" x2="648" y2="220" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+  <!-- Database -->
+  <use href="#i-sqlite" xlink:href="#i-sqlite" x="850" y="170" width="70" height="70"/>
+  <text x="885" y="265" text-anchor="middle" font-size="16" font-weight="normal" fill="#222">SQLite</text>
+  <line x1="762" y1="205" x2="846" y2="205" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+</svg>

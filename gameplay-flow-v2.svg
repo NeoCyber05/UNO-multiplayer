@@ -1,0 +1,442 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" width="1440" height="900" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <!-- Soft Shadows -->
+    <filter id="shadow-sm" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+    <filter id="shadow-md" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <filter id="shadow-lg" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+
+    <!-- Gradients -->
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="header-grad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="server-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
+    </linearGradient>
+    <linearGradient id="red-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="blue-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="green-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="yellow-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="sqlite-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fef3c7"/>
+      <stop offset="100%" stop-color="#fde68a"/>
+    </linearGradient>
+
+    <!-- Markers for arrows -->
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1,2 L8,5 L1,8 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1,2 L8,5 L1,8 Z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1,2 L8,5 L1,8 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1,2 L8,5 L1,8 Z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="1440" height="900" fill="url(#bg-grad)"/>
+
+  <!-- Subtle Blueprint Grid Pattern -->
+  <g opacity="0.4" stroke="#cbd5e1" stroke-width="0.5" stroke-dasharray="4 8">
+    <line x1="40" y1="0" x2="40" y2="900"/>
+    <line x1="430" y1="0" x2="430" y2="900"/>
+    <line x1="910" y1="0" x2="910" y2="900"/>
+    <line x1="1400" y1="0" x2="1400" y2="900"/>
+  </g>
+
+  <!-- ================= TOP HEADER BANNER ================= -->
+  <g transform="translate(40, 24)">
+    <rect width="1360" height="74" rx="14" fill="url(#header-grad)" filter="url(#shadow-md)"/>
+    
+    <!-- Title & Subtitle -->
+    <circle cx="36" cy="37" r="18" fill="#3b82f6" fill-opacity="0.2" stroke="#60a5fa" stroke-width="1.5"/>
+    <path d="M28,37 L34,43 L45,30" fill="none" stroke="#60a5fa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <text x="68" y="34" font-size="20" font-weight="700" fill="#ffffff" letter-spacing="0.3">UNO Multiplayer — Kiến Trúc Luồng Đánh Bài &amp; Đồng Bộ Trạng Thái</text>
+    <text x="68" y="55" font-size="13" font-weight="400" fill="#94a3b8">Chu trình một lượt đánh: Authoritative Server · Fog of War (Ẩn bài chống hack) · Zero-Disk I/O trong ván đấu</text>
+
+    <!-- Top Badges -->
+    <g transform="translate(980, 22)">
+      <rect width="165" height="30" rx="15" fill="#1e1b4b" stroke="#4338ca" stroke-width="1"/>
+      <circle cx="15" cy="15" r="4" fill="#818cf8"/>
+      <text x="26" y="19" font-size="11.5" font-weight="600" fill="#c7d2fe">Reactor Pattern (epoll)</text>
+    </g>
+    <g transform="translate(1160, 22)">
+      <rect width="180" height="30" rx="15" fill="#064e3b" stroke="#059669" stroke-width="1"/>
+      <circle cx="15" cy="15" r="4" fill="#34d399"/>
+      <text x="26" y="19" font-size="11.5" font-weight="600" fill="#a7f3d0">Authoritative Server</text>
+    </g>
+  </g>
+
+  <!-- ================= COLUMN 1: CLIENT P1 (LEFT) ================= -->
+  <g transform="translate(40, 118)">
+    <!-- Container -->
+    <rect width="360" height="745" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow-md)"/>
+    
+    <!-- Header Card -->
+    <path d="M1.5,15.5 Q1.5,1.5 15.5,1.5 L344.5,1.5 Q358.5,1.5 358.5,15.5 L358.5,56 L1.5,56 Z" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+    <circle cx="28" cy="28" r="8" fill="#ef4444"/>
+    <text x="44" y="33" font-size="15" font-weight="700" fill="#1e3a8a">1. Client P1 (Đang Tới Lượt)</text>
+    <rect x="250" y="16" width="94" height="24" rx="12" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+    <text x="297" y="32" font-size="11" font-weight="600" fill="#1d4ed8" text-anchor="middle">ACTIVE TURN</text>
+
+    <!-- Mini Table Representation -->
+    <g transform="translate(20, 75)">
+      <rect width="320" height="255" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="160" y="24" font-size="12" font-weight="600" fill="#64748b" text-anchor="middle">GIAO DIỆN BÀN CHƠI TẠI CLIENT P1</text>
+      
+      <!-- Center Table Oval -->
+      <ellipse cx="160" cy="135" rx="120" ry="60" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="2"/>
+      <ellipse cx="160" cy="135" rx="104" ry="48" fill="#f1f5f9"/>
+
+      <!-- Players around table -->
+      <!-- P3 (Top) -->
+      <circle cx="160" cy="55" r="14" fill="#64748b"/>
+      <text x="160" y="59" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle">P3</text>
+      <text x="160" y="38" font-size="10.5" fill="#475569" text-anchor="middle">P3 (5 lá ẩn)</text>
+
+      <!-- P4 (Left) -->
+      <circle cx="65" cy="135" r="14" fill="#64748b"/>
+      <text x="65" y="139" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle">P4</text>
+      <text x="65" y="163" font-size="10.5" fill="#475569" text-anchor="middle">P4 (4 lá)</text>
+
+      <!-- P2 (Right) -->
+      <circle cx="255" cy="135" r="14" fill="#64748b"/>
+      <text x="255" y="139" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle">P2</text>
+      <text x="255" y="163" font-size="10.5" fill="#475569" text-anchor="middle">P2 (7 lá)</text>
+
+      <!-- P1 (Bottom - Active) -->
+      <circle cx="160" cy="205" r="16" fill="#ef4444" stroke="#fee2e2" stroke-width="3"/>
+      <text x="160" y="209" font-size="11" font-weight="800" fill="#ffffff" text-anchor="middle">P1</text>
+      <text x="160" y="235" font-size="11.5" font-weight="700" fill="#dc2626" text-anchor="middle">P1 (Bạn - Lượt của bạn)</text>
+
+      <!-- Cards on Table Center (Discard pile: Yellow 5, Draw pile) -->
+      <rect x="135" y="117" width="22" height="34" rx="3" fill="url(#yellow-card)" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="146" cy="134" rx="6" ry="11" fill="#ffffff" opacity="0.9" transform="rotate(25 146 134)"/>
+      <text x="146" y="138" font-size="11" font-weight="800" fill="#d97706" text-anchor="middle">5</text>
+      
+      <!-- Draw pile -->
+      <rect x="165" y="117" width="22" height="34" rx="3" fill="#1e293b" stroke="#ffffff" stroke-width="1.5"/>
+      <text x="176" y="138" font-size="9" font-weight="700" fill="#cbd5e1" text-anchor="middle">UNO</text>
+    </g>
+
+    <!-- Player Hand Cards -->
+    <g transform="translate(20, 345)">
+      <text x="0" y="15" font-size="12" font-weight="700" fill="#334155">BÀI TRÊN TAY P1 (Thấy rõ lá bài của mình):</text>
+      
+      <!-- Hand Cards Fan -->
+      <!-- Card 1: Blue 3 -->
+      <rect x="10" y="28" width="36" height="54" rx="4" fill="url(#blue-card)" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="28" cy="55" rx="9" ry="16" fill="#ffffff" transform="rotate(20 28 55)"/>
+      <text x="28" y="60" font-size="15" font-weight="800" fill="#2563eb" text-anchor="middle">3</text>
+
+      <!-- Card 2: Green Skip -->
+      <rect x="56" y="28" width="36" height="54" rx="4" fill="url(#green-card)" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="74" cy="55" rx="9" ry="16" fill="#ffffff" transform="rotate(20 74 55)"/>
+      <text x="74" y="60" font-size="13" font-weight="800" fill="#059669" text-anchor="middle">⊘</text>
+
+      <!-- Card 3: SELECTED CARD (Red 7) - Highlighted Lifted -->
+      <g transform="translate(110, 16)" filter="url(#shadow-md)">
+        <rect x="-4" y="-4" width="46" height="66" rx="6" fill="#fee2e2" stroke="#ef4444" stroke-width="2"/>
+        <rect x="0" y="0" width="38" height="58" rx="4" fill="url(#red-card)" stroke="#ffffff" stroke-width="1.5"/>
+        <ellipse cx="19" cy="29" rx="10" ry="18" fill="#ffffff" transform="rotate(20 19 29)"/>
+        <text x="19" y="35" font-size="17" font-weight="900" fill="#dc2626" text-anchor="middle">7</text>
+        <!-- Selection Pin -->
+        <rect x="-2" y="66" width="42" height="18" rx="9" fill="#ef4444"/>
+        <text x="19" y="79" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle">CHỌN</text>
+      </g>
+
+      <!-- Card 4: Yellow 9 -->
+      <rect x="174" y="28" width="36" height="54" rx="4" fill="url(#yellow-card)" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="192" cy="55" rx="9" ry="16" fill="#ffffff" transform="rotate(20 192 55)"/>
+      <text x="192" y="60" font-size="15" font-weight="800" fill="#d97706" text-anchor="middle">9</text>
+
+      <!-- Card 5: Wild Draw 4 -->
+      <rect x="220" y="28" width="36" height="54" rx="4" fill="#0f172a" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="238" cy="55" rx="9" ry="16" fill="#38bdf8" transform="rotate(20 238 55)"/>
+      <text x="238" y="59" font-size="11" font-weight="900" fill="#ffffff" text-anchor="middle">+4</text>
+
+      <!-- Card 6: Blue 2 -->
+      <rect x="266" y="28" width="36" height="54" rx="4" fill="url(#blue-card)" stroke="#ffffff" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <ellipse cx="284" cy="55" rx="9" ry="16" fill="#ffffff" transform="rotate(20 284 55)"/>
+      <text x="284" y="60" font-size="15" font-weight="800" fill="#2563eb" text-anchor="middle">2</text>
+    </g>
+
+    <!-- Dispatch Action Box -->
+    <g transform="translate(20, 480)">
+      <rect width="320" height="235" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+      <text x="16" y="25" font-size="12" font-weight="700" fill="#1e293b">Ý ĐỊNH HÀNH ĐỘNG (USER INTENT):</text>
+      <text x="16" y="44" font-size="11" fill="#64748b">Client không tự ý sửa bàn cờ, chỉ gửi lệnh:</text>
+
+      <!-- Code block -->
+      <rect x="14" y="56" width="292" height="96" rx="8" fill="#0f172a"/>
+      <g font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace" font-size="11" fill="#e2e8f0">
+        <text x="26" y="78"><tspan fill="#38bdf8">OPCODE</tspan>: <tspan fill="#facc15">0x21</tspan> (C2S_PLAY_CARD)</text>
+        <text x="26" y="97"><tspan fill="#94a3b8">turn_seq</tspan>: <tspan fill="#a7f3d0">14</tspan></text>
+        <text x="26" y="116"><tspan fill="#94a3b8">card_id</tspan>:  <tspan fill="#f87171">"RED_7"</tspan></text>
+        <text x="26" y="135"><tspan fill="#94a3b8">declared_color</tspan>: <tspan fill="#94a3b8">null</tspan></text>
+      </g>
+
+      <!-- Pessimistic UI note -->
+      <rect x="14" y="162" width="292" height="60" rx="6" fill="#fef2f2" stroke="#fecaca"/>
+      <text x="24" y="180" font-size="11" font-weight="700" fill="#991b1b">Pessimistic UI Protection:</text>
+      <text x="24" y="196" font-size="10.5" fill="#b91c1c">Khóa bàn cờ, đợi Server phản hồi mới gỡ lá</text>
+      <text x="24" y="210" font-size="10.5" fill="#b91c1c">bài ra để chống Desync &amp; Click tặc (double click).</text>
+    </g>
+  </g>
+
+  <!-- ================= ACTION ARROW (CLIENT -> SERVER) ================= -->
+  <g transform="translate(400, 390)">
+    <path d="M5,0 L50,0" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <rect x="-8" y="-30" width="76" height="22" rx="4" fill="#dbeafe" stroke="#bfdbfe"/>
+    <text x="30" y="-15" font-size="10.5" font-weight="700" fill="#1d4ed8" text-anchor="middle">WebSocket</text>
+  </g>
+
+  <!-- ================= COLUMN 2: AUTHORITATIVE SERVER (CENTER) ================= -->
+  <g transform="translate(460, 118)">
+    <!-- Container -->
+    <rect width="450" height="745" rx="14" fill="url(#server-grad)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow-lg)"/>
+    
+    <!-- Header Card -->
+    <path d="M1.5,15.5 Q1.5,1.5 15.5,1.5 L434.5,1.5 Q448.5,1.5 448.5,15.5 L448.5,56 L1.5,56 Z" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+    <circle cx="28" cy="28" r="8" fill="#3b82f6"/>
+    <text x="44" y="33" font-size="15" font-weight="700" fill="#0f172a">2. Máy Chủ Trung Tâm (Authoritative Server)</text>
+    <rect x="330" y="16" width="105" height="24" rx="12" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1"/>
+    <text x="382" y="32" font-size="11" font-weight="600" fill="#334155" text-anchor="middle">Linux C11 Core</text>
+
+    <!-- Sub-Box 1: Network & Protocol Layer -->
+    <g transform="translate(20, 72)">
+      <rect width="410" height="88" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      <rect x="12" y="10" width="135" height="20" rx="4" fill="#eff6ff"/>
+      <text x="18" y="24" font-size="11" font-weight="700" fill="#1d4ed8">TẦNG MẠNG &amp; GIAO THỨC</text>
+      <text x="18" y="48" font-size="11.5" font-weight="600" fill="#1e293b">• WebSocket RFC 6455 Frame Parser</text>
+      <text x="18" y="66" font-size="11" fill="#475569">• Tách Header nhị phân (12 byte) &amp; Xác thực Session Token P1</text>
+      <text x="18" y="82" font-size="10.5" fill="#64748b">• Non-blocking socket (epoll reactor) · Không nghẽn I/O</text>
+    </g>
+
+    <!-- Internal Dispatch Arrow -->
+    <g transform="translate(160, 165)">
+      <line x1="0" y1="0" x2="0" y2="28" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+      <text x="8" y="18" font-size="10" font-weight="600" fill="#2563eb">Dispatch Action</text>
+    </g>
+    <g transform="translate(290, 193)">
+      <line x1="0" y1="0" x2="0" y2="-28" stroke="#059669" stroke-width="2.5" marker-end="url(#arrow-emerald)"/>
+      <text x="8" y="-12" font-size="10" font-weight="600" fill="#059669">Filtered Views</text>
+    </g>
+
+    <!-- Sub-Box 2: Game Logic Core (Pure In-Memory) -->
+    <g transform="translate(20, 200)">
+      <rect width="410" height="268" rx="10" fill="#f8fafc" stroke="#818cf8" stroke-width="1.8" filter="url(#shadow-sm)"/>
+      
+      <rect x="12" y="10" width="210" height="22" rx="4" fill="#ede9fe"/>
+      <text x="18" y="25" font-size="11.5" font-weight="700" fill="#5b21b6">GAME ENGINE (IN-MEMORY LOGIC)</text>
+
+      <!-- Step 1: Validation -->
+      <g transform="translate(16, 42)">
+        <rect width="378" height="60" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+        <circle cx="16" cy="18" r="9" fill="#3b82f6"/>
+        <text x="16" y="22" font-size="10.5" font-weight="700" fill="#ffffff" text-anchor="middle">A</text>
+        <text x="32" y="20" font-size="12" font-weight="700" fill="#1e293b">Thẩm định nước đi (Validation Guard)</text>
+        <text x="32" y="36" font-size="11" fill="#475569">✔ Đúng lượt P1?  ✔ P1 có lá "RED_7"?  ✔ Khớp màu/số?</text>
+        <text x="32" y="50" font-size="10" fill="#dc2626">Sai ➔ Gửi REJECT_ACTION về P1, giữ nguyên bàn cờ.</text>
+      </g>
+
+      <!-- Step 2: State Mutation -->
+      <g transform="translate(16, 110)">
+        <rect width="378" height="62" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+        <circle cx="16" cy="18" r="9" fill="#10b981"/>
+        <text x="16" y="22" font-size="10.5" font-weight="700" fill="#ffffff" text-anchor="middle">B</text>
+        <text x="32" y="20" font-size="12" font-weight="700" fill="#1e293b">Cập nhật Game State (RAM Mutation)</text>
+        <text x="32" y="36" font-size="11" fill="#475569">• Trừ lá "RED_7" khỏi tay P1 (tay P1 còn 6 lá)</text>
+        <text x="32" y="50" font-size="11" fill="#475569">• Đổi lá trên cùng bàn cờ ➔ Đỏ 7 • Chuyển lượt sang P2</text>
+      </g>
+
+      <!-- Step 3: Fog of War Projection -->
+      <g transform="translate(16, 180)">
+        <rect width="378" height="74" rx="6" fill="#ecfdf5" stroke="#a7f3d0"/>
+        <circle cx="16" cy="18" r="9" fill="#059669"/>
+        <text x="16" y="22" font-size="10.5" font-weight="700" fill="#ffffff" text-anchor="middle">C</text>
+        <text x="32" y="20" font-size="12" font-weight="700" fill="#065f46">Fog of War Projection (view_build)</text>
+        <text x="32" y="36" font-size="11" fill="#047857">Tạo 4 bản snapshot độc lập tương ứng với 4 ghế:</text>
+        <text x="32" y="51" font-size="10.5" font-weight="600" fill="#047857">• Giấu lá bài đối thủ ➔ Thay bằng "card_count"</text>
+        <text x="32" y="66" font-size="10.5" font-weight="600" fill="#047857">• Chống lộ packet dù người chơi cố tình soi DevTools</text>
+      </g>
+    </g>
+
+    <!-- Sub-Box 3: Server Timer Management -->
+    <g transform="translate(20, 480)">
+      <rect width="410" height="92" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="12" y="10" width="170" height="20" rx="4" fill="#f1f5f9"/>
+      <text x="18" y="24" font-size="11" font-weight="700" fill="#334155">SERVER TIMER MIN-HEAP</text>
+      <text x="18" y="48" font-size="11.5" fill="#334155">• Turn Timeout: Hủy timer P1, kích hoạt timer <tspan font-weight="700" fill="#059669">20s của P2</tspan></text>
+      <text x="18" y="66" font-size="11" fill="#64748b">• Chống Timer "ma" bằng Generation Guard (turn_no: 15)</text>
+      <text x="18" y="82" font-size="10.5" fill="#64748b">• Nếu P2 AFK/treo máy ➔ Server tự động rút bài / Bot đánh thay</text>
+    </g>
+
+    <!-- Sub-Box 4: Database / Persistence (Bottom) -->
+    <g transform="translate(20, 590)">
+      <!-- Connecting dashed line -->
+      <line x1="205" y1="-18" x2="205" y2="8" stroke="#d97706" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-amber)"/>
+      <rect x="110" y="-14" width="190" height="18" rx="4" fill="#fef3c7" stroke="#fde68a"/>
+      <text x="205" y="-1" font-size="9.5" font-weight="700" fill="#92400e" text-anchor="middle">KHÔNG GHI ĐĨA TỪNG NƯỚC ĐI</text>
+
+      <rect width="410" height="135" rx="8" fill="url(#sqlite-grad)" stroke="#f59e0b" stroke-width="1.5" filter="url(#shadow-sm)"/>
+      
+      <!-- Cylinder Icon -->
+      <g transform="translate(18, 16)">
+        <path d="M0,10 V38 A18,6 0 0 0 36,38 V10" fill="#f59e0b" opacity="0.3"/>
+        <ellipse cx="18" cy="10" rx="18" ry="6" fill="#f59e0b"/>
+        <ellipse cx="18" cy="24" rx="18" ry="6" fill="none" stroke="#d97706" stroke-width="1.5"/>
+        <ellipse cx="18" cy="38" rx="18" ry="6" fill="none" stroke="#d97706" stroke-width="1.5"/>
+      </g>
+
+      <text x="68" y="32" font-size="13" font-weight="800" fill="#78350f">SQLite Database (Async Worker Thread)</text>
+      <text x="68" y="49" font-size="11" font-weight="600" fill="#92400e">Nguyên tắc: Zero-Disk I/O Latency trong vòng lặp ván đấu</text>
+
+      <rect x="18" y="65" width="374" height="58" rx="6" fill="#ffffff" fill-opacity="0.8" stroke="#fcd34d"/>
+      <text x="28" y="83" font-size="11" fill="#78350f">• Trận đấu diễn ra 100% trên bộ nhớ RAM (In-Memory Game State).</text>
+      <text x="28" y="100" font-size="11" fill="#78350f">• <tspan font-weight="700">Chỉ ghi vào SQLite khi kết thúc ván:</tspan> Cập nhật ELO, lưu lịch sử ván</text>
+      <text x="28" y="114" font-size="10.5" fill="#92400e">  đấu thông qua hàng đợi job queue + eventfd, không block luồng mạng.</text>
+    </g>
+  </g>
+
+  <!-- ================= BROADCAST ARROW (SERVER -> CLIENTS) ================= -->
+  <g transform="translate(910, 390)">
+    <path d="M5,0 L50,0" fill="none" stroke="#059669" stroke-width="3" marker-end="url(#arrow-emerald)"/>
+    <rect x="-10" y="-30" width="80" height="22" rx="4" fill="#d1fae5" stroke="#a7f3d0"/>
+    <text x="30" y="-15" font-size="10.5" font-weight="700" fill="#065f46" text-anchor="middle">Broadcast</text>
+  </g>
+
+  <!-- ================= COLUMN 3: BROADCAST / 4 CLIENT VIEWS (RIGHT) ================= -->
+  <g transform="translate(970, 118)">
+    <!-- Container -->
+    <rect width="430" height="745" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow-md)"/>
+    
+    <!-- Header Card -->
+    <path d="M1.5,15.5 Q1.5,1.5 15.5,1.5 L414.5,1.5 Q428.5,1.5 428.5,15.5 L428.5,56 L1.5,56 Z" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1"/>
+    <circle cx="28" cy="28" r="8" fill="#10b981"/>
+    <text x="44" y="33" font-size="15" font-weight="700" fill="#065f46">3. Đồng Bộ Trạng Thái Riêng (Per-Player State)</text>
+
+    <!-- Client P2 (Next Turn - Highlighted Card) -->
+    <g transform="translate(18, 70)" filter="url(#shadow-sm)">
+      <rect width="394" height="145" rx="8" fill="#f0fdf4" stroke="#10b981" stroke-width="1.8"/>
+      
+      <!-- Badge -->
+      <rect x="12" y="10" width="160" height="24" rx="12" fill="#10b981"/>
+      <text x="92" y="26" font-size="11.5" font-weight="800" fill="#ffffff" text-anchor="middle">CLIENT P2 (ĐẾN LƯỢT)</text>
+      
+      <text x="180" y="26" font-size="11" font-weight="700" fill="#047857">Nhận: Thấy rõ bài P2 + Nút đánh sáng</text>
+
+      <!-- JSON Payload -->
+      <rect x="12" y="42" width="370" height="92" rx="6" fill="#0f172a"/>
+      <g font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace" font-size="10.5" fill="#cbd5e1">
+        <text x="22" y="60"><tspan fill="#38bdf8">turn</tspan>: <tspan fill="#4ade80">"P2"</tspan> <tspan fill="#64748b">// Bạn đang tới lượt đánh!</tspan></text>
+        <text x="22" y="77"><tspan fill="#38bdf8">top_card</tspan>: { color: <tspan fill="#f87171">"RED"</tspan>, value: <tspan fill="#f87171">"7"</tspan> } <tspan fill="#64748b">// P1 vừa đánh</tspan></text>
+        <text x="22" y="94"><tspan fill="#38bdf8">hand</tspan>: [ <tspan fill="#facc15">"YELLOW_7"</tspan>, <tspan fill="#f87171">"RED_SKIP"</tspan>, <tspan fill="#60a5fa">"BLUE_2"</tspan>, ... ] <tspan fill="#4ade80">(bài P2)</tspan></text>
+        <text x="22" y="111"><tspan fill="#38bdf8">opponents</tspan>: { P1: <tspan fill="#fbbf24">6 lá</tspan>, P3: <tspan fill="#94a3b8">5 lá</tspan>, P4: <tspan fill="#94a3b8">4 lá</tspan> } <tspan fill="#f87171">// Ẩn giá trị</tspan></text>
+      </g>
+    </g>
+
+    <!-- Client P1 (Just Played) -->
+    <g transform="translate(18, 226)">
+      <rect width="394" height="120" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <rect x="12" y="10" width="140" height="22" rx="11" fill="#e2e8f0"/>
+      <text x="82" y="25" font-size="11" font-weight="700" fill="#334155" text-anchor="middle">CLIENT P1 (VỪA ĐÁNH)</text>
+      <text x="160" y="25" font-size="11" fill="#64748b">Cập nhật: Mất lá 7 Đỏ, tay còn 6 lá</text>
+
+      <rect x="12" y="38" width="370" height="72" rx="6" fill="#0f172a"/>
+      <g font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace" font-size="10.5" fill="#cbd5e1">
+        <text x="22" y="56"><tspan fill="#38bdf8">turn</tspan>: <tspan fill="#94a3b8">"P2"</tspan> | <tspan fill="#38bdf8">top_card</tspan>: <tspan fill="#f87171">"RED_7"</tspan></text>
+        <text x="22" y="74"><tspan fill="#38bdf8">hand</tspan>: [ <tspan fill="#60a5fa">"BLUE_3"</tspan>, <tspan fill="#4ade80">"GREEN_SKIP"</tspan>, ... ] <tspan fill="#4ade80">(đã trừ lá 7)</tspan></text>
+        <text x="22" y="92"><tspan fill="#38bdf8">opponents</tspan>: { P2: <tspan fill="#94a3b8">7 lá</tspan>, P3: <tspan fill="#94a3b8">5 lá</tspan>, P4: <tspan fill="#94a3b8">4 lá</tspan> }</text>
+      </g>
+    </g>
+
+    <!-- Client P3 & P4 (Other Opponents) -->
+    <g transform="translate(18, 356)">
+      <rect width="394" height="120" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <rect x="12" y="10" width="165" height="22" rx="11" fill="#e2e8f0"/>
+      <text x="94" y="25" font-size="11" font-weight="700" fill="#334155" text-anchor="middle">CLIENT P3 &amp; P4 (ĐỐI THỦ)</text>
+      <text x="185" y="25" font-size="11" fill="#64748b">Chỉ thấy P1 giảm từ 7 ➔ 6 lá</text>
+
+      <rect x="12" y="38" width="370" height="72" rx="6" fill="#0f172a"/>
+      <g font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace" font-size="10.5" fill="#cbd5e1">
+        <text x="22" y="56"><tspan fill="#38bdf8">turn</tspan>: <tspan fill="#94a3b8">"P2"</tspan> | <tspan fill="#38bdf8">top_card</tspan>: <tspan fill="#f87171">"RED_7"</tspan></text>
+        <text x="22" y="74"><tspan fill="#38bdf8">hand</tspan>: [ ... bài riêng của P3/P4 ... ]</text>
+        <text x="22" y="92"><tspan fill="#38bdf8">opponents</tspan>: { P1: <tspan fill="#fbbf24">6 lá</tspan> (giấu giá trị lá bài còn lại) }</text>
+      </g>
+    </g>
+
+    <!-- Visual Summary of Updated Board -->
+    <g transform="translate(18, 488)">
+      <rect width="394" height="235" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+      <text x="16" y="24" font-size="12" font-weight="700" fill="#0f172a">KẾT QUẢ HIỂN THỊ ĐỒNG BỘ TRÊN TẤT CẢ CLIENT:</text>
+      
+      <!-- Mini Board Graphic -->
+      <ellipse cx="197" cy="115" rx="140" ry="60" fill="#e2e8f0" stroke="#cbd5e1"/>
+      <ellipse cx="197" cy="115" rx="122" ry="48" fill="#f1f5f9"/>
+
+      <!-- Table Players with active indicator on P2 -->
+      <!-- P1 (Bottom) -->
+      <circle cx="197" cy="180" r="13" fill="#64748b"/>
+      <text x="197" y="184" font-size="9" font-weight="700" fill="#ffffff" text-anchor="middle">P1</text>
+      <text x="197" y="202" font-size="10" fill="#475569" text-anchor="middle">P1 (còn 6 lá)</text>
+
+      <!-- P3 (Top) -->
+      <circle cx="197" cy="50" r="13" fill="#64748b"/>
+      <text x="197" y="54" font-size="9" font-weight="700" fill="#ffffff" text-anchor="middle">P3</text>
+      <text x="197" y="35" font-size="10" fill="#475569" text-anchor="middle">P3 (5 lá)</text>
+
+      <!-- P4 (Left) -->
+      <circle cx="95" cy="115" r="13" fill="#64748b"/>
+      <text x="95" y="119" font-size="9" font-weight="700" fill="#ffffff" text-anchor="middle">P4</text>
+      <text x="95" y="140" font-size="10" fill="#475569" text-anchor="middle">P4 (4 lá)</text>
+
+      <!-- P2 (Right - Active Highlight) -->
+      <circle cx="300" cy="115" r="16" fill="#10b981" stroke="#dcfce7" stroke-width="4"/>
+      <text x="300" y="119" font-size="10" font-weight="800" fill="#ffffff" text-anchor="middle">P2</text>
+      <text x="300" y="142" font-size="10.5" font-weight="700" fill="#047857" text-anchor="middle">P2 (Lượt Kế)</text>
+
+      <!-- New Discard Card on Center: RED 7 -->
+      <g transform="translate(182, 98)" filter="url(#shadow-sm)">
+        <rect x="0" y="0" width="26" height="38" rx="3" fill="url(#red-card)" stroke="#ffffff" stroke-width="1.5"/>
+        <ellipse cx="13" cy="19" rx="7" ry="12" fill="#ffffff" transform="rotate(25 13 19)"/>
+        <text x="13" y="23" font-size="12" font-weight="900" fill="#dc2626" text-anchor="middle">7</text>
+      </g>
+      <text x="197" y="152" font-size="10" font-weight="700" fill="#dc2626" text-anchor="middle">Lá 7 Đỏ đã lên bàn</text>
+      
+      <!-- Footer Note -->
+      <rect x="12" y="206" width="370" height="20" rx="4" fill="#eff6ff"/>
+      <text x="197" y="220" font-size="10" font-weight="600" fill="#1e40af" text-anchor="middle">Tất cả client hoàn toàn đồng bộ, không ai biết bài tẩy của ai.</text>
+    </g>
+  </g>
+</svg>

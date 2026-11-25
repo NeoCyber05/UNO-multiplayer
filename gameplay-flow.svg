@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1290 450" width="1290" height="450" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+    <!-- person: head + shoulders, origin = center -->
+    <g id="p">
+      <circle cx="0" cy="-12" r="11"/>
+      <path d="M-19,20 Q-19,2 0,2 Q19,2 19,20 Z"/>
+    </g>
+    <!-- small UNO card (face colour set by fill on use) -->
+    <g id="card">
+      <rect x="-8" y="-12" width="16" height="24" rx="2.5" stroke="#333" stroke-width="1"/>
+      <ellipse cx="0" cy="0" rx="5" ry="8.5" fill="#fff" transform="rotate(25)"/>
+    </g>
+    <g id="table">
+      <rect x="-58" y="-19" width="116" height="38" rx="19" fill="#d9d9d9" stroke="#444" stroke-width="1.5"/>
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="#f3f3f3" stroke="#888"/>
+    </g>
+  </defs>
+
+  <rect y="40" width="1290" height="450" fill="#fff"/>
+
+  <!-- ===== Left: P1 plays a card ===== -->
+  <text x="165" y="70" font-size="16" text-anchor="middle">Người chơi P1 đánh 1 lá bài</text>
+  <g fill="#1f4e79">
+    <use href="#p" x="165" y="128"/>
+    <use href="#p" x="248" y="176"/>
+    <use href="#p" x="165" y="226"/>
+  </g>
+  <use href="#p" x="82" y="176" fill="#c9a57b"/>
+  <use href="#table" x="165" y="182"/>
+  <use href="#card" x="146" y="182" fill="#1e88e5"/>
+  <use href="#card" x="165" y="182" fill="#43a047"/>
+  <use href="#card" x="184" y="182" fill="#fbc02d"/>
+  <!-- card being played, highlighted -->
+  <rect x="113" y="164" width="22" height="34" fill="none" stroke="#c62828" stroke-width="2"/>
+  <use href="#card" x="124" y="181" fill="#e53935"/>
+  <text x="124" y="185" font-size="10" font-weight="bold" fill="#e53935" text-anchor="middle">7</text>
+  <text x="38" y="148" font-size="12" text-anchor="middle">P1</text>
+
+  <text x="305" y="128" font-size="12">P1 gửi lệnh</text>
+  <text x="305" y="151" font-size="13" font-weight="bold">PLAY_CARD(</text>
+  <use href="#card" x="397" y="146" fill="#e53935"/>
+  <text x="397" y="150" font-size="10" font-weight="bold" fill="#e53935" text-anchor="middle">7</text>
+  <text x="409" y="151" font-size="13" font-weight="bold">)</text>
+
+  <!-- ===== Center: Server ===== -->
+  <rect x="470" y="85" width="340" height="295" fill="#cfe2f3" stroke="#6d9eeb" stroke-width="1.5"/>
+  <text x="640" y="115" font-size="20" font-weight="bold" text-anchor="middle">Server</text>
+
+  <rect x="485" y="130" width="310" height="70" fill="#efefef" stroke="#666"/>
+  <text x="640" y="171" font-size="16" font-weight="bold" text-anchor="middle">WebSocket</text>
+
+  <rect x="485" y="255" width="310" height="110" fill="#d0e0e3" stroke="#666"/>
+  <text x="640" y="315" font-size="16" font-weight="bold" text-anchor="middle">Game logic</text>
+
+  <g stroke="#555" stroke-width="1.2" fill="none">
+    <line x1="290" y1="165" x2="485" y2="165" marker-end="url(#arr)"/>
+    <line x1="600" y1="200" x2="600" y2="255" marker-end="url(#arr)"/>
+    <line x1="680" y1="255" x2="680" y2="200" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ===== SQLite: only at game end (ELO), via DB worker thread ===== -->
+  <line x1="640" y1="365" x2="640" y2="414" stroke="#555" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+  <path d="M595,425 V465 A45,9 0 0 0 685,465 V425" fill="#fff2cc" stroke="#b7950b" stroke-width="1.5"/>
+  <ellipse cx="640" cy="425" rx="45" ry="9" fill="#fff2cc" stroke="#b7950b" stroke-width="1.5"/>
+  <text x="640" y="455" font-size="15" font-weight="bold" text-anchor="middle">SQLite</text>
+
+  <!-- ===== Right: clients receive per-player state ===== -->
+  <g stroke="#555" stroke-width="1.2" fill="none">
+    <polyline points="795,165 840,165"/>
+    <line x1="840" y1="165" x2="840" y2="370"/>
+    <line x1="840" y1="200" x2="1124" y2="200" marker-end="url(#arr)"/>
+    <line x1="840" y1="255" x2="1044" y2="255" marker-end="url(#arr)"/>
+    <line x1="840" y1="318" x2="1126" y2="318" marker-end="url(#arr)"/>
+    <polyline points="840,370 1233,370 1233,280" marker-end="url(#arr)"/>
+  </g>
+  <g font-size="11.5" fill="#222">
+    <text x="852" y="192">{turn: <tspan font-weight="bold">P2</tspan>, hand: [bài P2], …}</text>
+    <text x="852" y="247">{turn: P2, hand: [bài P1], …}</text>
+    <text x="852" y="310">{turn: P2, hand: [bài P4], …}</text>
+    <text x="852" y="362">{turn: P2, hand: [bài P3], …}</text>
+  </g>
+
+  <text x="1150" y="70" font-size="16" text-anchor="middle">Mỗi client nhận GAME_STATE</text>
+  <text x="1150" y="90" font-size="16" text-anchor="middle">riêng và cập nhật giao diện</text>
+  <use href="#p" x="1150" y="206" fill="#c9a57b"/>
+  <g fill="#1f4e79">
+    <use href="#p" x="1067" y="254"/>
+    <use href="#p" x="1233" y="254"/>
+    <use href="#p" x="1150" y="304"/>
+  </g>
+  <use href="#table" x="1150" y="260"/>
+  <use href="#card" x="1131" y="260" fill="#1e88e5"/>
+  <use href="#card" x="1150" y="260" fill="#43a047"/>
+  <use href="#card" x="1169" y="260" fill="#fbc02d"/>
+  <use href="#card" x="1113" y="260" fill="#e53935"/>
+  <text x="1113" y="264" font-size="10" font-weight="bold" fill="#e53935" text-anchor="middle">7</text>
+  <text x="1178" y="190" font-size="12">P2 (lượt kế)</text>
+</svg>

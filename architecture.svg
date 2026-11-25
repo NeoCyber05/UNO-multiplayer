@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 660" width="1000" height="660" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#555"/>
+    </marker>
+
+    <!-- React -->
+    <symbol id="i-react" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="3" fill="#20232a"/>
+      <g fill="none" stroke="#61dafb" stroke-width="1.4">
+        <ellipse cx="16" cy="16" rx="12" ry="4.6"/>
+        <ellipse cx="16" cy="16" rx="12" ry="4.6" transform="rotate(60 16 16)"/>
+        <ellipse cx="16" cy="16" rx="12" ry="4.6" transform="rotate(120 16 16)"/>
+      </g>
+      <circle cx="16" cy="16" r="2.3" fill="#61dafb"/>
+    </symbol>
+
+
+    <!-- JavaScript -->
+    <symbol id="i-js" viewBox="0 0 32 32">
+      <rect width="32" height="32" fill="#f7df1e"/>
+      <text x="29" y="28" text-anchor="end" font-size="14" font-weight="bold" fill="#000">JS</text>
+    </symbol>
+
+    <!-- C language -->
+    <symbol id="i-c" viewBox="0 0 32 32">
+      <path d="M16 1 L29 8.5 L29 23.5 L16 31 L3 23.5 L3 8.5 Z" fill="#283593"/>
+      <path d="M16 1 L29 8.5 L29 23.5 L16 31 Z" fill="#00599c"/>
+      <text x="16" y="21.5" text-anchor="middle" font-size="15" font-weight="bold" fill="#fff">C</text>
+    </symbol>
+
+
+
+
+    <!-- OpenSSL -->
+    <symbol id="i-openssl" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="4" fill="#721412"/>
+      <rect x="10" y="14" width="12" height="10" rx="1.5" fill="#fff"/>
+      <path d="M12.5 14 V11 A3.5 3.5 0 0 1 19.5 11 V14" fill="none" stroke="#fff" stroke-width="2"/>
+      <circle cx="16" cy="19" r="1.4" fill="#721412"/>
+    </symbol>
+
+    <!-- SQLite -->
+    <symbol id="i-sqlite" viewBox="0 0 32 32">
+      <path d="M5 6 V26 A11 4 0 0 0 27 26 V6" fill="#0f80cc"/>
+      <ellipse cx="16" cy="6" rx="11" ry="4" fill="#5cb3e8"/>
+      <path d="M5 13 A11 4 0 0 0 27 13 M5 19.5 A11 4 0 0 0 27 19.5" fill="none" stroke="#fff" stroke-width="1" opacity="0.7"/>
+    </symbol>
+
+    <!-- Client box: React UI -->
+    <g id="client">
+      <rect width="170" height="84" fill="#d9ead3" stroke="#777"/>
+      <text x="85" y="49" text-anchor="middle" font-size="18" fill="#222">Client</text>
+      <use href="#i-react" xlink:href="#i-react" x="7" y="7" width="26" height="26"/>
+      <use href="#i-js" xlink:href="#i-js" x="137" y="51" width="26" height="26"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="660" fill="#fff"/>
+
+  <!-- ===== Server ===== -->
+  <rect x="380" y="220" width="240" height="140" fill="#cfe2f3" stroke="#777"/>
+  <text x="500" y="285" text-anchor="middle" font-size="20" fill="#222">Server</text>
+  <text x="500" y="305" text-anchor="middle" font-size="11" fill="#555">C11 · epoll reactor · authoritative</text>
+  <use href="#i-c" xlink:href="#i-c" x="586" y="226" width="28" height="28"/>
+  <use href="#i-openssl" xlink:href="#i-openssl" x="386" y="326" width="28" height="28"/>
+  <use href="#i-sqlite" xlink:href="#i-sqlite" x="586" y="326" width="28" height="28"/>
+
+  <!-- ===== Clients ===== -->
+  <use href="#client" xlink:href="#client" x="415" y="60"/>
+  <use href="#client" xlink:href="#client" x="415" y="456"/>
+  <use href="#client" xlink:href="#client" x="120" y="248"/>
+  <use href="#client" xlink:href="#client" x="710" y="248"/>
+
+  <g stroke="#555" stroke-width="1.3" marker-end="url(#arrow)">
+    <!-- top: push up / play down -->
+    <line x1="478" y1="220" x2="478" y2="146"/>
+    <line x1="522" y1="144" x2="522" y2="218"/>
+    <!-- bottom: play up / push down -->
+    <line x1="478" y1="456" x2="478" y2="362"/>
+    <line x1="522" y1="360" x2="522" y2="454"/>
+    <!-- left: play right / push left -->
+    <line x1="290" y1="274" x2="378" y2="274"/>
+    <line x1="380" y1="306" x2="292" y2="306"/>
+    <!-- right: push right / play left -->
+    <line x1="620" y1="274" x2="708" y2="274"/>
+    <line x1="710" y1="306" x2="622" y2="306"/>
+  </g>
+
+  <g font-size="13" fill="#222">
+    <!-- top -->
+    <text x="470" y="176" text-anchor="end">push</text>
+    <text x="470" y="192" text-anchor="end">GAME_STATE</text>
+    <text x="530" y="184">play / draw</text>
+    <!-- bottom -->
+    <text x="470" y="412" text-anchor="end">play / draw</text>
+    <text x="530" y="404">push</text>
+    <text x="530" y="420">GAME_STATE</text>
+    <!-- left -->
+    <text x="334" y="266" text-anchor="middle">play / draw</text>
+    <text x="334" y="324" text-anchor="middle">push</text>
+    <text x="334" y="340" text-anchor="middle">GAME_STATE</text>
+    <!-- right -->
+    <text x="664" y="250" text-anchor="middle">push</text>
+    <text x="664" y="266" text-anchor="middle">GAME_STATE</text>
+    <text x="664" y="324" text-anchor="middle">play / draw</text>
+  </g>
+
+  <text x="500" y="642" text-anchor="middle" font-size="12" fill="#555">Mọi mũi tên = kết nối WebSocket, gói tin nhị phân UNOP/1</text>
+
+  <!-- ===== Legend ===== -->
+  <g font-size="13" fill="#1a73a8" text-decoration="underline">
+    <use href="#i-react" xlink:href="#i-react" x="120" y="572" width="20" height="20"/>
+    <text x="150" y="587">React</text>
+    <use href="#i-js" xlink:href="#i-js" x="120" y="604" width="20" height="20"/>
+    <text x="150" y="619">JavaScript</text>
+
+    <use href="#i-c" xlink:href="#i-c" x="420" y="572" width="20" height="20"/>
+    <text x="450" y="587">C11</text>
+    <use href="#i-sqlite" xlink:href="#i-sqlite" x="420" y="604" width="20" height="20"/>
+    <text x="450" y="619">SQLite</text>
+
+    <use href="#i-openssl" xlink:href="#i-openssl" x="720" y="572" width="20" height="20"/>
+    <text x="750" y="587">OpenSSL</text>
+  </g>
+</svg>
