@@ -10,6 +10,8 @@
 static char g_assets_dir[512] = "./client/dist";
 static BridgeDoneCallback g_done_cb = NULL;
 static void *g_done_ctx = NULL;
+static BridgeDisconnectCallback g_disconnect_cb = NULL;
+static void *g_disconnect_ctx = NULL;
 static bool g_scheme_registered = false;
 
 void bridge_set_assets_dir(const char *assets_dir)
@@ -29,6 +31,19 @@ void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx)
 {
     g_done_cb = cb;
     g_done_ctx = ctx;
+}
+
+void bridge_set_disconnect_callback(BridgeDisconnectCallback cb, void *ctx)
+{
+    g_disconnect_cb = cb;
+    g_disconnect_ctx = ctx;
+}
+
+/* A send can fail because the frame is unusable (connection still fine) or
+ * because the socket broke; only the latter makes the client unusable. */
+static bool client_is_broken(const Client *client)
+{
+    return !client->connected || client->conn.fd < 0 || client->conn.closing;
 }
 
 static bool is_whitelisted_type(const char *type)
@@ -168,8 +183,13 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *json_str
     if (client != NULL) {
         s = client_send(client, &env);
     }
-
     json_object_put(root);
+
+    /* Report a broken link now instead of one heartbeat later. The callback
+     * may free @p client, so it is not touched afterwards. */
+    if (s != OK && client != NULL && client_is_broken(client) && g_disconnect_cb) {
+        g_disconnect_cb(g_disconnect_ctx);
+    }
     return s;
 }
 
@@ -411,10 +431,11 @@ static void on_script_message_uno(WebKitUserContentManager *manager,
     /* Without a positive id JS has nothing to match an answer against. */
     if (s == OK || jsId <= 0) return;
 
-    /* BUSY while not connected (or still resuming) is the reconnect case:
-     * the request is dropped, never queued, so it cannot be replayed later. */
+    /* Not connected (or still resuming, or the send just broke the link) is
+     * the reconnect case: the request is dropped, never queued, so it cannot
+     * be replayed later. */
     const char *code = status_code(s);
-    if (s == BUSY && ns_state(state->session) != NS_CONNECTED) {
+    if (ns_state(state->session) != NS_CONNECTED) {
         code = "DISCONNECTED";
     }
     emit_request_error(state->web_view, jsId, code);

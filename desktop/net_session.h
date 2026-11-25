@@ -37,10 +37,11 @@ void ns_destroy(NetSession *s);
  * @brief Record that a new TCP connection is up.
  *
  * Wire ids restart at 1 because the server enforces strictly increasing ids
- * per connection; pending requests of the old connection are forgotten and
- * the reconnect backoff is reset. State becomes NS_RESUMING when a token is
+ * per connection; pending requests of the old connection are forgotten.
+ * State becomes NS_RESUMING when a token is
  * held (the host must then send RESUME via ns_internal), otherwise
- * NS_CONNECTED.
+ * NS_CONNECTED. The reconnect backoff is reset only on NS_CONNECTED; while
+ * resuming it is kept until the RESUME answer (see ns_incoming).
  * @param[in,out] s Session; NULL is ignored.
  */
 void ns_on_connected(NetSession *s);
@@ -95,6 +96,7 @@ int32_t ns_internal(NetSession *s, const char *type);
  * LOGOUT OK clears it. A response to a native request or an unknown id is
  * dropped. A RESUME OK moves to NS_CONNECTED; a RESUME failure also moves to
  * NS_CONNECTED but clears the token, because the server no longer knows it.
+ * Either answer resets the reconnect backoff.
  * @param[in,out] s Session.
  * @param[in] e Received envelope; not retained.
  * @param[out] js_id JS id to emit with (0 for pushes and dropped frames).
@@ -128,7 +130,8 @@ const char *ns_token(const NetSession *s);
  * @brief Delay before the next reconnect attempt.
  *
  * Doubles on each call so a down server is not hammered, capped so the user
- * is not left waiting long once it is back; ns_on_connected resets it.
+ * is not left waiting long once it is back. It resets when the session
+ * reaches NS_CONNECTED (connect without a token, or a RESUME answer).
  * @param[in,out] s Session.
  * @return 1000, 2000, 4000, 8000, 8000, ... milliseconds; 0 when @p s is NULL.
  */

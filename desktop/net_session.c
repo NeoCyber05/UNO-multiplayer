@@ -142,6 +142,8 @@ static json_object *finish_resume(NetSession *session, const Envelope *e)
         clear_token(session);
     }
     session->state = NS_CONNECTED;
+    /* Any RESUME answer proves the server is really serving us. */
+    session->backoffMs = 0;
     return resume_conn_state(e, resumed);
 }
 
@@ -186,9 +188,13 @@ void ns_on_connected(NetSession *s)
         return;
     }
     s->lastWireId = NO_WIRE_ID;
-    s->backoffMs = 0;
     clear_pending(s);
     s->state = s->hasToken ? NS_RESUMING : NS_CONNECTED;
+    /* While resuming the backoff is kept: a server that accepts and then
+     * drops us before answering must not be retried every second. */
+    if (s->state == NS_CONNECTED) {
+        s->backoffMs = 0;
+    }
 }
 
 void ns_on_disconnected(NetSession *s)

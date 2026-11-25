@@ -297,6 +297,37 @@ static void test_backoff_sequence(void)
     ns_destroy(session);
 }
 
+static void test_backoff_kept_until_resumed(void)
+{
+    NetSession *session = ns_create();
+    ns_on_connected(session);
+    login_with_token(session);
+    ns_on_disconnected(session);
+    assert(ns_next_backoff_ms(session) == 1000);
+    assert(ns_next_backoff_ms(session) == 2000);
+
+    /* A server that accepts and then closes before answering RESUME must
+     * not reset the backoff, or it would be retried every second. */
+    ns_on_connected(session);
+    assert(ns_state(session) == NS_RESUMING);
+    ns_on_disconnected(session);
+    assert(ns_next_backoff_ms(session) == 4000);
+
+    /* Once RESUME is answered the session is usable again: start over. */
+    ns_on_connected(session);
+    int32_t resumeId = ns_internal(session, "RESUME");
+    assert(resumeId > 0);
+    Envelope okResponse = make_envelope(resumeId, "OK", NULL);
+    json_object *connState = NULL;
+    assert(ns_incoming(session, &okResponse, NULL, &connState) == NS_DROP);
+    json_object_put(connState);
+    assert(ns_state(session) == NS_CONNECTED);
+    ns_on_disconnected(session);
+    assert(ns_next_backoff_ms(session) == 1000);
+
+    ns_destroy(session);
+}
+
 static void test_wire_ids_reset_per_connection(void)
 {
     NetSession *session = ns_create();
@@ -336,6 +367,7 @@ int main(void)
     test_resume_flow();
     test_internal_ping_dropped();
     test_backoff_sequence();
+    test_backoff_kept_until_resumed();
     test_wire_ids_reset_per_connection();
     ns_destroy(NULL);
     puts("net_session: OK");

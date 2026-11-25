@@ -2,7 +2,10 @@
 #include "desktop/net_session.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* A session that accepts JS requests, as after connecting without a token. */
 static NetSession *connected_session(void)
@@ -110,6 +113,46 @@ static void test_dispatch_while_disconnected(void)
     assert(bridge_dispatch(session, NULL, hello, strlen(hello), &jsId) == BUSY);
     assert(jsId == 9);
 
+    ns_destroy(session);
+}
+
+static int g_disconnect_reports = 0;
+
+static void count_disconnect(void *ctx)
+{
+    (void)ctx;
+    g_disconnect_reports++;
+}
+
+static void test_send_failure_reports_disconnect(void)
+{
+    /* A client whose peer is gone: the send fails with EPIPE. */
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    Client *client = calloc(1, sizeof(*client));
+    assert(client != NULL);
+    assert(conn_init(&client->conn, fds[0], 0, 0) == OK);
+    client->connected = true;
+    assert(close(fds[1]) == 0);
+
+    NetSession *session = connected_session();
+    bridge_set_disconnect_callback(count_disconnect, NULL);
+    g_disconnect_reports = 0;
+
+    /* The host must hear about it now, not one heartbeat later. */
+    int32_t jsId = -1;
+    const char *hello = "{\"v\": 1, \"id\": 3, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, client, hello, strlen(hello), &jsId) != OK);
+    assert(jsId == 3);
+    assert(g_disconnect_reports == 1);
+
+    /* A request rejected before sending is not a connection problem. */
+    const char *unknown = "{\"v\": 1, \"id\": 4, \"type\": \"NOPE\", \"payload\": {}}";
+    assert(bridge_dispatch(session, client, unknown, strlen(unknown), &jsId) == BAD_REQUEST);
+    assert(g_disconnect_reports == 1);
+
+    bridge_set_disconnect_callback(NULL, NULL);
+    client_close(client);
     ns_destroy(session);
 }
 
@@ -253,6 +296,7 @@ int main(void)
     test_js_resume_blocked();
     test_dispatch_while_disconnected();
     test_dispatch_while_resuming();
+    test_send_failure_reports_disconnect();
     test_bridge_opcode_whitelist();
     test_bridge_emit_strips_token();
     test_scheme_path_traversal();

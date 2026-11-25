@@ -46,7 +46,7 @@ sudo ufw status
 build/uno-desktop --host <IP LAN> --port 9090 --assets ./client/dist
 ```
 
-Ví dụ `build/uno-desktop --host 192.168.1.20 --port 9090 --assets ./client/dist`. Nếu server chưa bật, cửa sổ vẫn mở và desktop thử nối lại (1 s, 2 s, 4 s, 8 s, 8 s, ...). Trạng thái được in ra stderr, ví dụ:
+Ví dụ `build/uno-desktop --host 192.168.1.20 --port 9090 --assets ./client/dist`. Nên dùng IP: tên máy chỉ được phân giải một lần lúc khởi động (nếu không phân giải được, desktop báo `cannot resolve` và thoát). Nếu server chưa bật, cửa sổ vẫn mở và desktop thử nối lại (1 s, 2 s, 4 s, 8 s, 8 s, ...). Trạng thái được in ra stderr, ví dụ:
 
 ```
 desktop: connected to 192.168.1.20:9090
@@ -80,6 +80,8 @@ Desktop chạy trong WSL cần WSLg (Windows 11) để hiện cửa sổ.
    - Các máy khác: ghế B hiện `connected:false` rồi trở lại `true`.
    - Nếu mạng mất mà TCP chưa báo lỗi, desktop tự coi là mất kết nối sau 15 giây không nhận được gì (log `connection lost (heartbeat timeout)`).
 3. Tắt server (Ctrl+C): mọi desktop hiện `reconnecting` và vẫn mở. Bật lại server: desktop nối lại, `RESUME` bị từ chối nên UI nhận `CONNECTION_STATE` `connected` với `sessionExpired:true` và quay về màn đăng nhập.
-4. Đóng cửa sổ desktop khi đang `reconnecting`: chương trình thoát, không treo (chậm tối đa khoảng 3 giây nếu đúng lúc đang chờ `connect` tới một IP không phản hồi).
+4. Đóng cửa sổ desktop khi đang `reconnecting`: chương trình thoát ngay, không treo. `connect` chạy non-blocking nên UI không bao giờ bị đứng; mỗi lần thử tới một IP không phản hồi bị hủy sau 3 giây rồi chờ backoff.
+
+Chẩn đoán: thêm `--loop-probe` để desktop in ra stderr mỗi khi vòng lặp GTK bị đứng quá 500 ms (`main loop stalled for N ms`) và độ trễ lớn nhất lúc thoát (`loop probe max gap N ms`).
 
 Trong lúc chưa nối lại (hoặc đang `RESUME`), mọi yêu cầu từ UI bị trả ngay `ERROR` với `code:"DISCONNECTED"`; desktop không xếp hàng hay gửi lại yêu cầu cũ.

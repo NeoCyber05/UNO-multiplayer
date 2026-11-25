@@ -10,10 +10,23 @@
 #include <stddef.h>
 
 typedef void (*BridgeDoneCallback)(void *ctx);
+typedef void (*BridgeDisconnectCallback)(void *ctx);
 
 void bridge_set_assets_dir(const char *assets_dir);
 const char *bridge_get_assets_dir(void);
 void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx);
+
+/**
+ * @brief Set who is told when sending a JS request broke the connection.
+ *
+ * Called from bridge_dispatch after client_send fails and the client can no
+ * longer be used (peer gone, write error, output buffer overflow), so the
+ * host can tear down and reconnect at once. The callback may close and free
+ * the client. A frame that merely fails to encode does not trigger it.
+ * @param[in] cb Callback, or NULL to disable.
+ * @param[in] ctx Passed to @p cb unchanged.
+ */
+void bridge_set_disconnect_callback(BridgeDisconnectCallback cb, void *ctx);
 
 /**
  * @brief Register the uno:// scheme and the "uno" script message handler.
@@ -50,7 +63,9 @@ Status bridge_init(WebKitWebView *web_view, NetSession *session, Client **client
  *         BAD_REQUEST when the message is malformed, its type is not allowed
  *         from JS, its id is not positive, or @p session is NULL;
  *         BUSY when the session is not connected (or resuming) or has no free
- *         request slot; any other Status is a send failure from client_send.
+ *         request slot; any other Status is a send failure from client_send
+ *         (if it broke the link, the disconnect callback has already run and
+ *         @p client may have been freed).
  */
 Status bridge_dispatch(NetSession *session, Client *client, const char *json_str, size_t len,
                        int32_t *js_id_out);
