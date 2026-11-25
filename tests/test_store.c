@@ -942,8 +942,224 @@ static void test_account_create_is_atomic(void)
     cleanup_file(db_path);
 }
 
+enum {
+    ABORT_DURATION_MS = 45000,
+    ABORT_EVENT_SEQ = 7,
+    LEADERBOARD_ACCOUNTS = 22,
+    LEADERBOARD_TIE_ELO = 2000,
+    LEADERBOARD_BASE_ELO = 1000,
+    LEADERBOARD_ELO_STEP = 10,
+    RANKED_WINNER_ELO = 1516,
+    RANKED_LOSER_ELO = 1484
+};
+
+static MatchEvent abortEvent(void)
+{
+    MatchEvent event = {.seq = ABORT_EVENT_SEQ, .revision = ABORT_EVENT_SEQ, .actor = -1};
+    strncpy(event.type, "MATCH_ABORTED", sizeof(event.type) - 1);
+    strncpy(event.payload, "{}", sizeof(event.payload) - 1);
+    return event;
+}
+
+static int matchStatusOf(sqlite3 *db, const char *matchId)
+{
+    sqlite3_stmt *stmt = NULL;
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;",
+                              -1, &stmt, NULL) == SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, matchId, -1, SQLITE_STATIC);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    int status = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    return status;
+}
+
+static void test_abort_atomic_and_idempotent(void)
+{
+    const char *db_path = "/tmp/test_uno_store_abort.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    MatchId mid = "00000000-0000-0000-0000-000000000020";
+    PlayerSpec players[4] = {
+        {101, "Alice", "a1", EASY, false},
+        {0, "Bot1", "bot", EASY, true},
+        {0, "Bot2", "bot", EASY, true},
+        {0, "Bot3", "bot", EASY, true}
+    };
+    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, false) == OK);
+    MatchEvent event = abortEvent();
+
+    /* A failed event insert must not leave the match marked ABORTED. */
+    assert(sqlite3_exec(db,
+                        "CREATE TEMP TRIGGER fail_abort_event BEFORE INSERT ON match_events "
+                        "BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+                        NULL, NULL, NULL) == SQLITE_OK);
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == STORAGE_ERROR);
+    assert(matchStatusOf(db, mid) == MATCH_ACTIVE);
+    assert(db_query_int(db, "SELECT count(*) FROM match_events;") == 0);
+    assert(sqlite3_get_autocommit(db) != 0);
+    assert(sqlite3_exec(db, "DROP TRIGGER fail_abort_event;", NULL, NULL, NULL) == SQLITE_OK);
+
+    /* A retried abort after success is OK and writes nothing more. */
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(matchStatusOf(db, mid) == MATCH_ABORTED);
+    assert(db_query_int(db, "SELECT count(*) FROM match_events "
+                            "WHERE type = 'MATCH_ABORTED';") == 1);
+    assert(db_query_int(db, "SELECT duration_ms FROM matches;") == ABORT_DURATION_MS);
+
+    MatchId unknown = "99999999-9999-9999-9999-999999999998";
+    assert(store_abort(s, (const MatchId *)&unknown, &event, 0) == NOT_FOUND);
+
+    /* A finalized match cannot be turned into an aborted one. */
+    MatchId finished = "00000000-0000-0000-0000-000000000021";
+    assert(store_match_start(s, (const MatchId *)&finished, players, CLASSIC, false) == OK);
+    MatchResult res;
+    memset(&res, 0, sizeof(res));
+    strncpy(res.matchId, finished, sizeof(res.matchId) - 1);
+    res.status = MATCH_FINALIZED;
+    res.winnerSeat = 0;
+    res.winnerTeam = -1;
+    res.players[0].userId = 101;
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_abort(s, (const MatchId *)&finished, &event, 0) == INVALID_ACTION);
+    assert(matchStatusOf(db, finished) == MATCH_FINALIZED);
+    assert(sqlite3_get_autocommit(db) != 0);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_ranked_finalize_updates_elo_once(void)
+{
+    const char *db_path = "/tmp/test_uno_store_ranked.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    AccountCreate c;
+    memset(&c, 0, sizeof(c));
+    strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+    strncpy(c.name, "Ranked", sizeof(c.name) - 1);
+    strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
+    UserId winner = 0, loser = 0;
+    strncpy(c.email, "winner@test.com", sizeof(c.email) - 1);
+    assert(store_account_create(s, &c, &winner) == OK);
+    strncpy(c.email, "loser@test.com", sizeof(c.email) - 1);
+    assert(store_account_create(s, &c, &loser) == OK);
+
+    MatchId mid = "00000000-0000-0000-0000-000000000022";
+    PlayerSpec players[4] = {
+        {winner, "Ranked", "fox", EASY, false},
+        {loser, "Ranked", "fox", EASY, false},
+        {0, "Bot1", "bot", EASY, true},
+        {0, "Bot2", "bot", EASY, true}
+    };
+    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(db_query_int(db, "SELECT ranked FROM matches;") == 1);
+
+    MatchResult res;
+    memset(&res, 0, sizeof(res));
+    strncpy(res.matchId, mid, sizeof(res.matchId) - 1);
+    res.mode = CLASSIC;
+    res.ranked = true;
+    res.status = MATCH_FINALIZED;
+    res.winnerSeat = 0;
+    res.winnerTeam = -1;
+    res.durationMs = 1000;
+    for (int i = 0; i < 4; i++) {
+        res.players[i].userId = players[i].userId;
+        res.players[i].team = -1;
+        res.players[i].eloBefore = 1500;
+        res.players[i].eloAfter = 1500;
+    }
+    res.players[0].eloAfter = RANKED_WINNER_ELO;
+    res.players[1].eloAfter = RANKED_LOSER_ELO;
+
+    Account account;
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(account.elo == RANKED_WINNER_ELO);
+    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(account.elo == RANKED_LOSER_ELO);
+
+    /* Replaying the same finalize (storage retry) must not apply ELO twice. */
+    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(account.elo == RANKED_WINNER_ELO);
+    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(account.elo == RANKED_LOSER_ELO);
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
+static void test_leaderboard_order(void)
+{
+    const char *db_path = "/tmp/test_uno_store_leaderboard.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    sqlite3 *db = store_get_db(s);
+
+    LeaderboardEntry entries[STORE_LEADERBOARD_MAX];
+    size_t count = 99;
+    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(count == 0);
+
+    UserId ids[LEADERBOARD_ACCOUNTS];
+    for (int i = 0; i < LEADERBOARD_ACCOUNTS; i++) {
+        AccountCreate c;
+        memset(&c, 0, sizeof(c));
+        snprintf(c.email, sizeof(c.email), "rank%d@test.com", i);
+        snprintf(c.name, sizeof(c.name), "Rank%d", i);
+        snprintf(c.avatar, sizeof(c.avatar), "av%d", i);
+        strncpy(c.hash, "hash", sizeof(c.hash) - 1);
+        assert(store_account_create(s, &c, &ids[i]) == OK);
+
+        char sql[128];
+        snprintf(sql, sizeof(sql), "UPDATE accounts SET elo = %d WHERE id = %lld;",
+                 LEADERBOARD_BASE_ELO + i * LEADERBOARD_ELO_STEP, (long long)ids[i]);
+        assert(sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK);
+    }
+    /* Tie at the top: the later account is updated first, the lower id must still lead. */
+    char sql[128];
+    snprintf(sql, sizeof(sql), "UPDATE accounts SET elo = %d WHERE id IN (%lld, %lld);",
+             LEADERBOARD_TIE_ELO, (long long)ids[9], (long long)ids[4]);
+    assert(sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK);
+
+    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(count == STORE_LEADERBOARD_MAX);
+    assert(entries[0].userId == ids[4] && entries[0].elo == LEADERBOARD_TIE_ELO);
+    assert(entries[1].userId == ids[9] && entries[1].elo == LEADERBOARD_TIE_ELO);
+    assert(strcmp(entries[0].name, "Rank4") == 0);
+    assert(strcmp(entries[0].avatar, "av4") == 0);
+    assert(entries[2].userId == ids[LEADERBOARD_ACCOUNTS - 1]);
+    for (size_t i = 1; i < count; i++) {
+        assert(entries[i - 1].elo > entries[i].elo ||
+               (entries[i - 1].elo == entries[i].elo &&
+                entries[i - 1].userId < entries[i].userId));
+    }
+    /* The two lowest remaining ELOs (accounts 0 and 1) fall outside the top 20. */
+    for (size_t i = 0; i < count; i++) {
+        assert(entries[i].userId != ids[0] && entries[i].userId != ids[1]);
+    }
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
 int main(void)
 {
+    test_abort_atomic_and_idempotent();
+    test_ranked_finalize_updates_elo_once();
+    test_leaderboard_order();
     test_table_creation_and_migration();
     test_upgrade_from_v1_database();
     test_account_create_is_atomic();

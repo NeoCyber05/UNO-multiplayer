@@ -1,6 +1,7 @@
 #include "match.h"
 
 #include "bot.h"
+#include "rating.h"
 #include "store.h"
 
 #include <inttypes.h>
@@ -140,7 +141,7 @@ static void generateId(MatchId *out) {
 
 Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
                     MatchId *outMatchId) {
-    if (!matches || !room || !outMatchId || room->ranked) return BAD_REQUEST;
+    if (!matches || !room || !outMatchId) return BAD_REQUEST;
     Match *slot = NULL;
     for (int index = 0; index < MAX_MATCHES; index++) {
         if (!matches->slots[index].active) {
@@ -160,7 +161,10 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
     for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
         UserId userId = room->players[seat].userId;
         if (room->players[seat].isBot) {
-            if (userId || (unsigned)room->players[seat].botLevel > HARD) return BAD_REQUEST;
+            // Ranked ELO is only meaningful between humans.
+            if (room->ranked || userId || (unsigned)room->players[seat].botLevel > HARD) {
+                return BAD_REQUEST;
+            }
             continue;
         }
         if (!userId || seatOf(&next, userId) >= 0) return BAD_REQUEST;
@@ -176,11 +180,12 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
     }
     if (!hasHuman) return BAD_REQUEST;
     next.result.mode = room->mode;
+    next.result.ranked = room->ranked;
     next.result.status = MATCH_ACTIVE;
     memcpy(next.roomId, room->roomId, sizeof next.roomId);
     generateId(&next.result.matchId);
     status = store_match_start(matches->store, (const MatchId *)&next.result.matchId,
-                               room->players, room->mode, false);
+                               room->players, room->mode, room->ranked);
     if (status != OK) return status;
     scheduleTurn(&next, nowMs);
     *slot = next;
@@ -211,6 +216,14 @@ static void beginFinish(Match *match, MatchStatus status, uint64_t nowMs) {
         result->team = match->game.team[seat];
         result->points = handPoints(&match->game.hands[seat]);
         result->stats = match->game.stats[seat];
+    }
+    if (status == MATCH_FINALIZED) {
+        // MATCH_LEAVE turns a human seat into a bot, but the leaver is still rated.
+        bool isBot[SEAT_COUNT];
+        for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
+            isBot[seat] = match->result.players[seat].userId == 0;
+        }
+        rating_apply(&match->result, isBot);
     }
 }
 
@@ -252,29 +265,12 @@ static json_object *resultJson(const Match *match) {
 }
 
 static Status storeAbort(Store *store, const Match *match) {
-    EventBatch events = {.count = 1};
-    events.events[0] = (MatchEvent){
+    MatchEvent event = {
         .seq = match->game.eventSeq + 1, .revision = match->finishRevision,
         .actor = -1, .type = "MATCH_ABORTED", .payload = "{}"
     };
-    Status status = store_events(store, (const MatchId *)&match->result.matchId, &events);
-    if (status != OK) return status;
-
-    // shortcut: store_finalize only writes FINALIZED; move this update to the
-    // repository when its finalize API can write ABORTED.
-    sqlite3 *db = store_get_db(store);
-    sqlite3_stmt *statement = NULL;
-    const char *sql = "UPDATE matches SET status = ?, duration_ms = ? "
-                      "WHERE match_id = ? AND status IN (?, ?)";
-    if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return STORAGE_ERROR;
-    sqlite3_bind_int(statement, 1, MATCH_ABORTED);
-    sqlite3_bind_int64(statement, 2, (sqlite3_int64)match->result.durationMs);
-    sqlite3_bind_text(statement, 3, match->result.matchId, -1, SQLITE_STATIC);
-    sqlite3_bind_int(statement, 4, MATCH_ACTIVE);
-    sqlite3_bind_int(statement, 5, MATCH_ABORTED);
-    bool saved = sqlite3_step(statement) == SQLITE_DONE && sqlite3_changes(db) == 1;
-    sqlite3_finalize(statement);
-    return saved ? OK : STORAGE_ERROR;
+    return store_abort(store, (const MatchId *)&match->result.matchId, &event,
+                       match->result.durationMs);
 }
 
 static Status pauseMatch(Matches *matches, Match *match, uint64_t nowMs) {

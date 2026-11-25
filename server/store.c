@@ -28,6 +28,8 @@ struct Store {
     sqlite3_stmt *stmt_profile_stats_select;
     sqlite3_stmt *stmt_profile_stats_update;
     sqlite3_stmt *stmt_profile_stats_insert_fallback;
+    sqlite3_stmt *stmt_match_abort;
+    sqlite3_stmt *stmt_leaderboard;
 };
 
 static const char *EMBEDDED_SCHEMA_SQL =
@@ -185,6 +187,15 @@ static Status prepare_statements(Store *s)
     const char *sql_acc_sel_id = "SELECT id, email, password_hash, name, avatar, elo FROM accounts WHERE id = ?;";
     if (sqlite3_prepare_v2(s->db, sql_acc_sel_id, -1, &s->stmt_account_select_by_id, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
+    /* Guarded by status so a FINALIZED match can never be overwritten. */
+    const char *sql_m_abort = "UPDATE matches SET status = ?, duration_ms = ? "
+                              "WHERE match_id = ? AND status = ?;";
+    if (sqlite3_prepare_v2(s->db, sql_m_abort, -1, &s->stmt_match_abort, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_board = "SELECT id, name, avatar, elo FROM accounts "
+                            "ORDER BY elo DESC, id ASC LIMIT ?;";
+    if (sqlite3_prepare_v2(s->db, sql_board, -1, &s->stmt_leaderboard, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
     return OK;
 }
 
@@ -210,6 +221,8 @@ static void finalize_statements(Store *s)
     if (s->stmt_profile_stats_select) { sqlite3_finalize(s->stmt_profile_stats_select); s->stmt_profile_stats_select = NULL; }
     if (s->stmt_profile_stats_update) { sqlite3_finalize(s->stmt_profile_stats_update); s->stmt_profile_stats_update = NULL; }
     if (s->stmt_profile_stats_insert_fallback) { sqlite3_finalize(s->stmt_profile_stats_insert_fallback); s->stmt_profile_stats_insert_fallback = NULL; }
+    if (s->stmt_match_abort) { sqlite3_finalize(s->stmt_match_abort); s->stmt_match_abort = NULL; }
+    if (s->stmt_leaderboard) { sqlite3_finalize(s->stmt_leaderboard); s->stmt_leaderboard = NULL; }
 }
 
 /* Bump whenever EMBEDDED_SCHEMA_SQL changes in a way CREATE TABLE IF NOT EXISTS
@@ -745,6 +758,106 @@ Status store_finalize(Store *s, const MatchResult *result, const ProfileDelta de
         return STORAGE_ERROR;
     }
 
+    return OK;
+}
+
+/* ROLLBACK can only fail when no transaction is open, which is the state wanted. */
+static Status rollback_with(sqlite3 *db, Status status) {
+    sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+    return status;
+}
+
+static Status read_match_status(Store *s, const char *matchId, MatchStatus *out) {
+    sqlite3_stmt *stmt = s->stmt_match_select;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    if (sqlite3_bind_text(stmt, 1, matchId, -1, SQLITE_STATIC) != SQLITE_OK) return STORAGE_ERROR;
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) *out = (MatchStatus)sqlite3_column_int(stmt, 2);
+    sqlite3_reset(stmt);
+    if (rc == SQLITE_ROW) return OK;
+    return rc == SQLITE_DONE ? NOT_FOUND : STORAGE_ERROR;
+}
+
+static Status insert_event(Store *s, const char *matchId, const MatchEvent *event) {
+    sqlite3_stmt *stmt = s->stmt_event_insert;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_text(stmt, 1, matchId, -1, SQLITE_STATIC) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)event->seq) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 3, (sqlite3_int64)event->revision) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 4, event->actor) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 5, event->type, -1, SQLITE_STATIC) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 6, event->payload, -1, SQLITE_STATIC) == SQLITE_OK;
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE ? OK : STORAGE_ERROR;
+}
+
+static Status mark_aborted(Store *s, const char *matchId, uint64_t durationMs) {
+    sqlite3_stmt *stmt = s->stmt_match_abort;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_int(stmt, 1, MATCH_ABORTED) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)durationMs) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 3, matchId, -1, SQLITE_STATIC) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 4, MATCH_ACTIVE) == SQLITE_OK;
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE && sqlite3_changes(s->db) == 1 ? OK : STORAGE_ERROR;
+}
+
+Status store_abort(Store *s, const MatchId *id, const MatchEvent *event, uint64_t duration_ms) {
+    if (!s || !id || !event) return BAD_REQUEST;
+    const char *matchId = (const char *)id;
+
+    /* Event and status commit together: otherwise a failure between them leaves
+     * an ABORTED match without its abort event, or an event on an ACTIVE match. */
+    if (sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK) {
+        return STORAGE_ERROR;
+    }
+    MatchStatus current = MATCH_ACTIVE;
+    Status status = read_match_status(s, matchId, &current);
+    if (status != OK) return rollback_with(s->db, status);
+    /* The coordinator retries until OK; a retry after a committed abort (or
+     * after crash recovery marked the match) must not append a second event. */
+    if (current == MATCH_ABORTED) return rollback_with(s->db, OK);
+    if (current != MATCH_ACTIVE) return rollback_with(s->db, INVALID_ACTION);
+
+    status = insert_event(s, matchId, event);
+    if (status == OK) status = mark_aborted(s, matchId, duration_ms);
+    if (status != OK) return rollback_with(s->db, status);
+
+    if (sqlite3_exec(s->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
+        return rollback_with(s->db, STORAGE_ERROR);
+    }
+    return OK;
+}
+
+Status store_leaderboard(Store *s, LeaderboardEntry out[STORE_LEADERBOARD_MAX], size_t *count) {
+    if (!s || !out || !count) return BAD_REQUEST;
+
+    sqlite3_stmt *stmt = s->stmt_leaderboard;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    if (sqlite3_bind_int(stmt, 1, STORE_LEADERBOARD_MAX) != SQLITE_OK) return STORAGE_ERROR;
+
+    size_t rows = 0;
+    int rc = SQLITE_DONE;
+    while (rows < STORE_LEADERBOARD_MAX && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        LeaderboardEntry *entry = &out[rows++];
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        const char *avatar = (const char *)sqlite3_column_text(stmt, 2);
+        memset(entry, 0, sizeof *entry);
+        entry->userId = (UserId)sqlite3_column_int64(stmt, 0);
+        snprintf(entry->name, sizeof entry->name, "%s", name ? name : "");
+        snprintf(entry->avatar, sizeof entry->avatar, "%s", avatar ? avatar : "");
+        entry->elo = sqlite3_column_int(stmt, 3);
+    }
+    sqlite3_reset(stmt);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) return STORAGE_ERROR;
+
+    *count = rows;
     return OK;
 }
 
