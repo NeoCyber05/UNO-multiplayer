@@ -1,11 +1,14 @@
 #include "desktop/net_session.h"
+#include <sodium.h>
 #include <stdlib.h>
 #include <string.h>
 
 enum {
     BACKOFF_INITIAL_MS = 1000,
     BACKOFF_MAX_MS = 8000,
-    NO_WIRE_ID = 0 /* id 0 is reserved for server pushes */
+    NO_WIRE_ID = 0, /* id 0 is reserved for server pushes */
+    /* Server tokens are 64 hex chars; the margin tolerates a longer format. */
+    TOKEN_CAPACITY = 128
 };
 
 /* Only these request types change native state when their response arrives. */
@@ -28,7 +31,10 @@ struct NetSession {
     NsState state;
     int32_t lastWireId;
     uint32_t backoffMs;
-    char *token;
+    /* Stored inline rather than on the heap so wiping it is the only way it
+     * ever goes away: no freed allocation can keep a copy of the secret. */
+    bool hasToken;
+    char token[TOKEN_CAPACITY];
     PendingRequest pending[NS_MAX_PENDING];
 };
 
@@ -53,23 +59,22 @@ static void clear_pending(NetSession *session)
 
 static void clear_token(NetSession *session)
 {
-    free(session->token);
-    session->token = NULL;
+    /* sodium_memzero cannot be optimised away like a memset before free. */
+    sodium_memzero(session->token, sizeof(session->token));
+    session->hasToken = false;
 }
 
 /* Copies the token so it outlives the response envelope it came from. */
 static void store_token(NetSession *session, const char *token)
 {
     size_t length = strlen(token);
-    char *copy = malloc(length + 1);
-    if (copy == NULL) {
+    clear_token(session);
+    if (length == 0 || length >= sizeof(session->token)) {
         /* Without a token the session simply cannot resume later. */
-        clear_token(session);
         return;
     }
-    memcpy(copy, token, length + 1);
-    clear_token(session);
-    session->token = copy;
+    memcpy(session->token, token, length + 1);
+    session->hasToken = true;
 }
 
 /* Registers a request; returns its wire id or NO_WIRE_ID if none is free. */
@@ -183,7 +188,7 @@ void ns_on_connected(NetSession *s)
     s->lastWireId = NO_WIRE_ID;
     s->backoffMs = 0;
     clear_pending(s);
-    s->state = s->token != NULL ? NS_RESUMING : NS_CONNECTED;
+    s->state = s->hasToken ? NS_RESUMING : NS_CONNECTED;
 }
 
 void ns_on_disconnected(NetSession *s)
@@ -202,7 +207,9 @@ NsState ns_state(const NetSession *s)
 
 Status ns_outgoing(NetSession *s, int32_t js_id, const char *type, int32_t *wire_id)
 {
-    if (s == NULL || type == NULL || wire_id == NULL) {
+    /* id 0 marks pushes and native requests, so a JS id must be positive or
+     * its response could not be told apart from them. */
+    if (s == NULL || type == NULL || wire_id == NULL || js_id <= 0) {
         return BAD_REQUEST;
     }
     RequestKind kind = request_kind(type);
@@ -274,12 +281,12 @@ NsVerdict ns_incoming(NetSession *s, const Envelope *e, int32_t *js_id, json_obj
 
 bool ns_has_token(const NetSession *s)
 {
-    return s != NULL && s->token != NULL;
+    return s != NULL && s->hasToken;
 }
 
 const char *ns_token(const NetSession *s)
 {
-    return s != NULL ? s->token : NULL;
+    return ns_has_token(s) ? s->token : NULL;
 }
 
 uint32_t ns_next_backoff_ms(NetSession *s)

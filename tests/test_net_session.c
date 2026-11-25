@@ -111,6 +111,49 @@ static void test_logout_clears_token(void)
     ns_destroy(session);
 }
 
+static void test_logout_wipes_token_bytes(void)
+{
+    NetSession *session = ns_create();
+    ns_on_connected(session);
+    login_with_token(session);
+
+    /* The token lives in session-owned storage that stays valid until
+     * ns_destroy, so its bytes can be inspected after LOGOUT. */
+    const char *stored = ns_token(session);
+    assert(stored != NULL);
+    size_t tokenLength = strlen(TEST_TOKEN);
+
+    int32_t wireId = 0;
+    assert(ns_outgoing(session, 4, "LOGOUT", &wireId) == OK);
+    Envelope response = make_envelope(wireId, "OK", NULL);
+    int32_t jsId = -1;
+    assert(ns_incoming(session, &response, &jsId, NULL) == NS_FORWARD);
+    assert(!ns_has_token(session));
+    assert(ns_token(session) == NULL);
+
+    /* No copy of the secret may linger in memory after it is dropped. */
+    for (size_t index = 0; index < tokenLength; index++) {
+        assert(stored[index] == '\0');
+    }
+
+    ns_destroy(session);
+}
+
+static void test_non_positive_js_id_rejected(void)
+{
+    NetSession *session = ns_create();
+    ns_on_connected(session);
+
+    /* id 0 marks server pushes; a JS request with it would be ambiguous. */
+    int32_t wireId = 0;
+    assert(ns_outgoing(session, 0, "PING", &wireId) == BAD_REQUEST);
+    assert(ns_outgoing(session, -5, "PING", &wireId) == BAD_REQUEST);
+    assert(ns_outgoing(session, 1, "PING", &wireId) == OK);
+    assert(wireId == 1);
+
+    ns_destroy(session);
+}
+
 static void test_js_resume_rejected(void)
 {
     NetSession *session = ns_create();
@@ -285,6 +328,8 @@ int main(void)
     test_push_forwarded_with_zero_js_id();
     test_login_token_captured_not_forwarded_logic();
     test_logout_clears_token();
+    test_logout_wipes_token_bytes();
+    test_non_positive_js_id_rejected();
     test_js_resume_rejected();
     test_send_while_disconnected_rejects();
     test_pending_table_full();

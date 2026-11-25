@@ -1,6 +1,7 @@
 #ifndef UNO_BRIDGE_H
 #define UNO_BRIDGE_H
 
+#include "desktop/net_session.h"
 #include "desktop/tcp_client.h"
 #include "shared/contracts.h"
 #include "shared/protocol.h"
@@ -14,8 +15,46 @@ void bridge_set_assets_dir(const char *assets_dir);
 const char *bridge_get_assets_dir(void);
 void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx);
 
-Status bridge_init(WebKitWebView *web_view, Client *client);
-Status bridge_dispatch(Client *client, const char *json_str, size_t len);
+/**
+ * @brief Register the uno:// scheme and the "uno" script message handler.
+ *
+ * JS requests are mapped through @p session and sent on whatever client
+ * @p client_slot points at when each message arrives, so the host can swap
+ * clients on reconnect without re-registering. A request that cannot be sent
+ * because the session is not connected is answered at once with
+ * {v:1,id:<js id>,type:"ERROR",payload:{code:"DISCONNECTED"}}; requests are
+ * never queued, so nothing is replayed after a reconnect. Any other rejection
+ * of a request with a positive id is answered the same way with the Status
+ * name as code (e.g. "BAD_REQUEST").
+ * @param[in] web_view View whose JS talks to native; must outlive the bridge.
+ * @param[in] session Session used to map ids; must outlive @p web_view.
+ * @param[in] client_slot Address of the host's current client variable
+ *            (the variable may be NULL while disconnected).
+ * @return OK when registered; BAD_REQUEST when an argument is NULL.
+ */
+Status bridge_init(WebKitWebView *web_view, NetSession *session, Client **client_slot);
+
+/**
+ * @brief Validate one JS message and send it to the server.
+ *
+ * The JS id is replaced by a per-connection wire id from ns_outgoing; the
+ * response is mapped back by ns_incoming. SPIKE_DONE (smoke test) is handled
+ * locally and never sent. RESUME is not accepted from JS.
+ * @param[in,out] session Session that allocates the wire id.
+ * @param[in] client Connection to send on; NULL skips sending (tests).
+ * @param[in] json_str Message text from JS, not necessarily NUL-terminated.
+ * @param[in] len Length of @p json_str in bytes.
+ * @param[out] js_id_out Set to the JS id once it has been parsed, else 0, so
+ *             the caller can answer the request with an ERROR. May be NULL.
+ * @return OK when sent (or handled locally);
+ *         BAD_REQUEST when the message is malformed, its type is not allowed
+ *         from JS, its id is not positive, or @p session is NULL;
+ *         BUSY when the session is not connected (or resuming) or has no free
+ *         request slot; any other Status is a send failure from client_send.
+ */
+Status bridge_dispatch(NetSession *session, Client *client, const char *json_str, size_t len,
+                       int32_t *js_id_out);
+
 void bridge_emit(WebKitWebView *web_view, const Envelope *e);
 char *bridge_format_emit_script(const Envelope *e);
 

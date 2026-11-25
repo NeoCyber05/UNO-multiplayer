@@ -34,10 +34,10 @@ void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx)
 static bool is_whitelisted_type(const char *type)
 {
     if (!type || !*type) return false;
+    /* RESUME is deliberately absent: only native code holds the token. */
     static const char *const whitelist[] = {
         "HELLO",
         "PING",
-        "RESUME",
         "LOGOUT",
         "REGISTER",
         "LOGIN",
@@ -76,8 +76,10 @@ static bool is_whitelisted_type(const char *type)
     return false;
 }
 
-Status bridge_dispatch(Client *client, const char *json_str, size_t len)
+Status bridge_dispatch(NetSession *session, Client *client, const char *json_str, size_t len,
+                       int32_t *js_id_out)
 {
+    if (js_id_out) *js_id_out = 0;
     if (!json_str || len == 0) return BAD_REQUEST;
 
     struct json_tokener *tok = json_tokener_new();
@@ -125,6 +127,7 @@ Status bridge_dispatch(Client *client, const char *json_str, size_t len)
     }
 
     int32_t id = (int32_t)json_object_get_int(id_obj);
+    if (js_id_out) *js_id_out = id;
     const char *type = json_object_get_string(type_obj);
     if (!type || strlen(type) == 0) {
         json_object_put(root);
@@ -146,13 +149,22 @@ Status bridge_dispatch(Client *client, const char *json_str, size_t len)
         return OK;
     }
 
+    /* The server requires strictly increasing ids per connection, which JS
+     * ids cannot guarantee across reconnects, so each request gets a fresh
+     * wire id and ns_incoming maps the response back to the JS id. */
+    int32_t wireId = 0;
+    Status s = ns_outgoing(session, id, type, &wireId);
+    if (s != OK) {
+        json_object_put(root);
+        return s;
+    }
+
     Envelope env;
     env.v = v;
-    env.id = id;
+    env.id = wireId;
     env.type = type;
     env.payload = payload_obj;
 
-    Status s = OK;
     if (client != NULL) {
         s = client_send(client, &env);
     }
@@ -362,8 +374,21 @@ void bridge_register_uri_scheme(WebKitWebContext *context, const char *assets_di
 
 typedef struct {
     WebKitWebView *web_view;
-    Client *client;
+    NetSession *session;
+    Client **client_slot; /* host-owned; points at NULL while disconnected */
 } BridgeState;
+
+/* Answer a request natively so JS settles it now instead of after its own
+ * response timeout. */
+static void emit_request_error(WebKitWebView *web_view, int32_t js_id, const char *code)
+{
+    struct json_object *payload = json_object_new_object();
+    if (!payload) return;
+    json_object_object_add(payload, "code", json_object_new_string(code));
+    Envelope error = {1, js_id, "ERROR", payload};
+    bridge_emit(web_view, &error);
+    json_object_put(payload);
+}
 
 static void on_script_message_uno(WebKitUserContentManager *manager,
                                    WebKitJavascriptResult *result,
@@ -371,19 +396,33 @@ static void on_script_message_uno(WebKitUserContentManager *manager,
 {
     (void)manager;
     BridgeState *state = (BridgeState *)user_data;
+    if (!state) return;
     JSCValue *val = webkit_javascript_result_get_js_value(result);
     if (!val) return;
 
     char *json_str = jsc_value_to_string(val);
     if (!json_str) return;
 
-    bridge_dispatch(state ? state->client : NULL, json_str, strlen(json_str));
+    int32_t jsId = 0;
+    Client *client = *state->client_slot;
+    Status s = bridge_dispatch(state->session, client, json_str, strlen(json_str), &jsId);
     g_free(json_str);
+
+    /* Without a positive id JS has nothing to match an answer against. */
+    if (s == OK || jsId <= 0) return;
+
+    /* BUSY while not connected (or still resuming) is the reconnect case:
+     * the request is dropped, never queued, so it cannot be replayed later. */
+    const char *code = status_code(s);
+    if (s == BUSY && ns_state(state->session) != NS_CONNECTED) {
+        code = "DISCONNECTED";
+    }
+    emit_request_error(state->web_view, jsId, code);
 }
 
-Status bridge_init(WebKitWebView *web_view, Client *client)
+Status bridge_init(WebKitWebView *web_view, NetSession *session, Client **client_slot)
 {
-    if (!web_view) return BAD_REQUEST;
+    if (!web_view || !session || !client_slot) return BAD_REQUEST;
 
     WebKitWebContext *context = webkit_web_view_get_context(web_view);
     bridge_register_uri_scheme(context, bridge_get_assets_dir());
@@ -391,7 +430,8 @@ Status bridge_init(WebKitWebView *web_view, Client *client)
     WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager(web_view);
     BridgeState *state = g_new0(BridgeState, 1);
     state->web_view = web_view;
-    state->client = client;
+    state->session = session;
+    state->client_slot = client_slot;
 
     g_object_set_data_full(G_OBJECT(web_view), "bridge_state", state, g_free);
 

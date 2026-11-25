@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "bridge.h"
+#include "net_session.h"
 #include "tcp_client.h"
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
@@ -7,26 +8,86 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    DEFAULT_PORT = 9090,
+    WINDOW_WIDTH = 1024,
+    WINDOW_HEIGHT = 768,
+    /* The server drops a connection after 15000 ms without a frame, so a
+     * PING every 5000 ms keeps an idle client alive with room for loss. */
+    PING_INTERVAL_MS = 5000,
+    /* Mirror of the server's window: if nothing (not even a PING reply) has
+     * arrived for this long, the link is dead even if TCP has not noticed. */
+    HEARTBEAT_TIMEOUT_MS = 15000,
+    NO_SOURCE = 0
+};
+
 static Client *g_client = NULL;
+static NetSession *g_session = NULL;
 static WebKitWebView *g_web_view = NULL;
 static GIOChannel *g_io_channel = NULL;
-static guint g_io_watch_id = 0;
+static guint g_io_watch_id = NO_SOURCE;
+static guint g_ping_timer_id = NO_SOURCE;
+static guint g_reconnect_timer_id = NO_SOURCE;
+static gint64 g_last_rx_ms = 0;
+static const char *g_host = "127.0.0.1";
+static uint16_t g_port = DEFAULT_PORT;
+/* Replayed when a page finishes loading, since events sent earlier are lost. */
+static const char *g_last_status = NULL;
+static bool g_quitting = false;
 
 static gboolean on_socket_io(GIOChannel *source, GIOCondition condition, gpointer data);
 
+static gint64 now_ms(void)
+{
+    /* Monotonic so a wall-clock change cannot fake or hide a heartbeat gap. */
+    return g_get_monotonic_time() / G_TIME_SPAN_MILLISECOND;
+}
+
+static void emit_connection_state(json_object *payload)
+{
+    Envelope event = {1, 0, "CONNECTION_STATE", payload};
+    bridge_emit(g_web_view, &event);
+}
+
+static void emit_status(const char *status)
+{
+    g_last_status = status;
+    json_object *payload = json_object_new_object();
+    if (payload == NULL) {
+        return;
+    }
+    json_object_object_add(payload, "status", json_object_new_string(status));
+    emit_connection_state(payload);
+    json_object_put(payload);
+}
+
 static void update_socket_watch(void)
 {
-    if (g_io_watch_id > 0) {
+    if (g_io_watch_id != NO_SOURCE) {
         g_source_remove(g_io_watch_id);
-        g_io_watch_id = 0;
+        g_io_watch_id = NO_SOURCE;
     }
     if (!g_io_channel || !g_client) return;
 
     GIOCondition cond = G_IO_IN | G_IO_HUP | G_IO_ERR;
+    /* Only wait for writability while a partial send is pending, otherwise
+     * the always-writable socket would spin the main loop. */
     if (g_client->conn.out_len > g_client->conn.out_pos) {
         cond |= G_IO_OUT;
     }
-    g_io_watch_id = g_io_add_watch(g_io_channel, cond, on_socket_io, g_web_view);
+    g_io_watch_id = g_io_add_watch(g_io_channel, cond, on_socket_io, NULL);
+}
+
+static void stop_socket_watch(void)
+{
+    if (g_io_watch_id != NO_SOURCE) {
+        g_source_remove(g_io_watch_id);
+        g_io_watch_id = NO_SOURCE;
+    }
+    if (g_io_channel) {
+        g_io_channel_unref(g_io_channel);
+        g_io_channel = NULL;
+    }
 }
 
 static void on_client_pending_write(void *ctx, bool has_pending)
@@ -36,43 +97,181 @@ static void on_client_pending_write(void *ctx, bool has_pending)
     update_socket_watch();
 }
 
+static gboolean on_reconnect_timer(gpointer data);
+
+static void schedule_reconnect(void)
+{
+    if (g_quitting || g_reconnect_timer_id != NO_SOURCE) return;
+    uint32_t delayMs = ns_next_backoff_ms(g_session);
+    fprintf(stderr, "desktop: reconnecting to %s:%u in %u ms\n", g_host, g_port, delayMs);
+    g_reconnect_timer_id = g_timeout_add(delayMs, on_reconnect_timer, NULL);
+}
+
+/* Tear down the dead connection but keep the window and the session token,
+ * so the next connection can RESUME the same seat. */
+static void handle_disconnect(const char *reason)
+{
+    if (!g_client) return;
+    fprintf(stderr, "desktop: connection lost (%s)\n", reason);
+    stop_socket_watch();
+    client_close(g_client);
+    g_client = NULL;
+    ns_on_disconnected(g_session);
+    emit_status("reconnecting");
+    schedule_reconnect();
+}
+
+/* Send a request whose response is consumed natively (PING, RESUME). */
+static Status send_native(int32_t wireId, const char *type, json_object *payload)
+{
+    json_object *body = payload ? json_object_get(payload) : json_object_new_object();
+    if (body == NULL) return BUSY;
+    Envelope request = {1, wireId, type, body};
+    Status s = client_send(g_client, &request);
+    json_object_put(body);
+    return s;
+}
+
+static Status send_resume(void)
+{
+    int32_t wireId = ns_internal(g_session, "RESUME");
+    if (wireId == 0) return BUSY;
+    json_object *payload = json_object_new_object();
+    if (payload == NULL) return BUSY;
+    json_object_object_add(payload, "token", json_object_new_string(ns_token(g_session)));
+    Status s = send_native(wireId, "RESUME", payload);
+    json_object_put(payload);
+    return s;
+}
+
 static Status on_client_frame(const Envelope *e, void *ctx)
 {
-    WebKitWebView *web_view = (WebKitWebView *)ctx;
-    bridge_emit(web_view, e);
+    (void)ctx;
+    g_last_rx_ms = now_ms();
+
+    int32_t jsId = 0;
+    json_object *connState = NULL;
+    NsVerdict verdict = ns_incoming(g_session, e, &jsId, &connState);
+    if (connState != NULL) {
+        bool expired = json_object_object_get(connState, "sessionExpired") != NULL;
+        fprintf(stderr, "desktop: %s\n", expired ? "session expired" : "session resumed");
+        g_last_status = "connected";
+        emit_connection_state(connState);
+        json_object_put(connState);
+    }
+    if (verdict == NS_FORWARD) {
+        Envelope forwarded = *e;
+        forwarded.id = jsId;
+        bridge_emit(g_web_view, &forwarded);
+    }
     return OK;
 }
 
 static gboolean on_socket_io(GIOChannel *source, GIOCondition condition, gpointer data)
 {
     (void)source;
-    WebKitWebView *web_view = (WebKitWebView *)data;
+    (void)data;
+    if (!g_client) return G_SOURCE_REMOVE;
 
+    /* Read before checking HUP so frames sent just before a close still
+     * reach JS; a closed peer then shows up as a read failure. */
     if (condition & G_IO_IN) {
-        Status s = client_read(g_client, on_client_frame, web_view);
-        if (s != OK) {
-            gtk_main_quit();
-            return G_SOURCE_REMOVE;
-        }
-    }
-
-    if (condition & G_IO_OUT) {
-        Status s = conn_flush(&g_client->conn);
-        if (s != OK) {
-            gtk_main_quit();
-            return G_SOURCE_REMOVE;
-        }
-        if (g_client->conn.out_len == g_client->conn.out_pos) {
-            update_socket_watch();
+        if (client_read(g_client, on_client_frame, NULL) != OK) {
+            handle_disconnect("closed by peer or read error");
             return G_SOURCE_REMOVE;
         }
     }
 
     if (condition & (G_IO_HUP | G_IO_ERR)) {
-        gtk_main_quit();
+        handle_disconnect("socket hang-up");
         return G_SOURCE_REMOVE;
     }
 
+    if (condition & G_IO_OUT) {
+        if (conn_flush(&g_client->conn) != OK) {
+            handle_disconnect("write error");
+            return G_SOURCE_REMOVE;
+        }
+        if (g_client->conn.out_len == g_client->conn.out_pos) {
+            /* Re-arm without G_IO_OUT; this source is replaced. */
+            update_socket_watch();
+            return G_SOURCE_REMOVE;
+        }
+    }
+
+    return G_SOURCE_CONTINUE;
+}
+
+/* One connect attempt. On success the connection is live and either RESUME
+ * is in flight (token held) or "connected" has been emitted. */
+static bool connect_once(void)
+{
+    Client *client = NULL;
+    Status st = client_connect(&client, g_host, g_port);
+    if (st != OK || !client) {
+        fprintf(stderr, "desktop: failed to connect to %s:%u (status=%d)\n", g_host, g_port, st);
+        return false;
+    }
+
+    GIOChannel *channel = g_io_channel_unix_new(client_fd(client));
+    /* Raw bytes, unbuffered: framing is done by Conn, not by GIOChannel. */
+    if (g_io_channel_set_encoding(channel, NULL, NULL) != G_IO_STATUS_NORMAL) {
+        fprintf(stderr, "desktop: failed to set socket channel encoding\n");
+        g_io_channel_unref(channel);
+        client_close(client);
+        return false;
+    }
+    g_io_channel_set_buffered(channel, FALSE);
+
+    g_client = client;
+    g_io_channel = channel;
+    client_set_pending_callback(g_client, on_client_pending_write, NULL);
+    update_socket_watch();
+    g_last_rx_ms = now_ms();
+    ns_on_connected(g_session);
+    fprintf(stderr, "desktop: connected to %s:%u\n", g_host, g_port);
+
+    if (ns_state(g_session) == NS_RESUMING) {
+        /* JS stays in "reconnecting" until the RESUME answer arrives. */
+        if (send_resume() != OK) {
+            handle_disconnect("RESUME send failed");
+            return false;
+        }
+        return true;
+    }
+    emit_status("connected");
+    return true;
+}
+
+static gboolean on_reconnect_timer(gpointer data)
+{
+    (void)data;
+    g_reconnect_timer_id = NO_SOURCE;
+    if (g_quitting) return G_SOURCE_REMOVE;
+    if (!connect_once()) {
+        schedule_reconnect();
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean on_heartbeat(gpointer data)
+{
+    (void)data;
+    if (!g_client) return G_SOURCE_CONTINUE;
+
+    if (now_ms() - g_last_rx_ms >= HEARTBEAT_TIMEOUT_MS) {
+        handle_disconnect("heartbeat timeout");
+        return G_SOURCE_CONTINUE;
+    }
+    int32_t wireId = ns_internal(g_session, "PING");
+    if (wireId == 0) {
+        /* No free slot means replies are not coming; the timeout above
+         * will catch that, so there is nothing to send now. */
+        return G_SOURCE_CONTINUE;
+    }
+    if (send_native(wireId, "PING", NULL) != OK) {
+        handle_disconnect("PING send failed");
+    }
     return G_SOURCE_CONTINUE;
 }
 
@@ -100,10 +299,35 @@ static gboolean on_decide_policy(WebKitWebView *web_view,
     return FALSE;
 }
 
+static void on_load_changed(WebKitWebView *web_view, WebKitLoadEvent event, gpointer data)
+{
+    (void)web_view;
+    (void)data;
+    /* The first connect happens before the page exists; tell it now. */
+    if (event == WEBKIT_LOAD_FINISHED && g_last_status != NULL) {
+        emit_status(g_last_status);
+    }
+}
+
+static void request_quit(void)
+{
+    g_quitting = true;
+    gtk_main_quit();
+}
+
+static void on_window_destroy(GtkWidget *widget, gpointer data)
+{
+    (void)widget;
+    (void)data;
+    /* The view dies with the window; later emits must not touch it. */
+    g_web_view = NULL;
+    request_quit();
+}
+
 static void on_spike_done(void *ctx)
 {
     (void)ctx;
-    gtk_main_quit();
+    request_quit();
 }
 
 static gboolean on_timeout(gpointer data)
@@ -115,19 +339,38 @@ static gboolean on_timeout(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* Remove every source that could touch the client before closing it. */
+static void shutdown_network(void)
+{
+    g_quitting = true;
+    stop_socket_watch();
+    if (g_ping_timer_id != NO_SOURCE) {
+        g_source_remove(g_ping_timer_id);
+        g_ping_timer_id = NO_SOURCE;
+    }
+    if (g_reconnect_timer_id != NO_SOURCE) {
+        g_source_remove(g_reconnect_timer_id);
+        g_reconnect_timer_id = NO_SOURCE;
+    }
+    if (g_client) {
+        client_close(g_client);
+        g_client = NULL;
+    }
+    ns_destroy(g_session);
+    g_session = NULL;
+}
+
 int main(int argc, char *argv[])
 {
-    const char *host = "127.0.0.1";
-    uint16_t port = 9090;
     const char *assets = "./client/dist";
     const char *uri = "uno://app/index.html";
     int timeout_sec = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
-            host = argv[++i];
+            g_host = argv[++i];
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = (uint16_t)atoi(argv[++i]);
+            g_port = (uint16_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--assets") == 0 && i + 1 < argc) {
             assets = argv[++i];
         } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
@@ -138,37 +381,39 @@ int main(int argc, char *argv[])
     bridge_set_assets_dir(assets);
     bridge_set_done_callback(on_spike_done, NULL);
 
-    Status st = client_connect(&g_client, host, port);
-    if (st != OK || !g_client) {
-        fprintf(stderr, "desktop: failed to connect to %s:%u (status=%d)\n", host, port, st);
+    gtk_init(&argc, &argv);
+
+    g_session = ns_create();
+    if (!g_session) {
+        fprintf(stderr, "desktop: out of memory\n");
         return 1;
     }
 
-    gtk_init(&argc, &argv);
-
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_default_size(GTK_WINDOW(window), 1024, 768);
+    gtk_window_set_default_size(GTK_WINDOW(window), WINDOW_WIDTH, WINDOW_HEIGHT);
     gtk_window_set_title(GTK_WINDOW(window), "UNO Multiplayer");
-    g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(window, "destroy", G_CALLBACK(on_window_destroy), NULL);
 
     GtkWidget *view_widget = webkit_web_view_new();
     g_web_view = WEBKIT_WEB_VIEW(view_widget);
     g_signal_connect(g_web_view, "decide-policy", G_CALLBACK(on_decide_policy), NULL);
+    g_signal_connect(g_web_view, "load-changed", G_CALLBACK(on_load_changed), NULL);
     gtk_container_add(GTK_CONTAINER(window), view_widget);
 
-    st = bridge_init(g_web_view, g_client);
-    if (st != OK) {
+    if (bridge_init(g_web_view, g_session, &g_client) != OK) {
         fprintf(stderr, "desktop: failed to initialize bridge\n");
-        client_close(g_client);
+        ns_destroy(g_session);
         return 1;
     }
 
-    int fd = client_fd(g_client);
-    g_io_channel = g_io_channel_unix_new(fd);
-    g_io_channel_set_encoding(g_io_channel, NULL, NULL);
-    g_io_channel_set_buffered(g_io_channel, FALSE);
-    client_set_pending_callback(g_client, on_client_pending_write, NULL);
-    update_socket_watch();
+    /* A server that is not up yet is not fatal: open the window anyway and
+     * keep retrying with backoff, like after a drop. */
+    emit_status("connecting");
+    if (!connect_once()) {
+        emit_status("reconnecting");
+        schedule_reconnect();
+    }
+    g_ping_timer_id = g_timeout_add(PING_INTERVAL_MS, on_heartbeat, NULL);
 
     if (timeout_sec > 0) {
         g_timeout_add_seconds(timeout_sec, on_timeout, NULL);
@@ -179,16 +424,6 @@ int main(int argc, char *argv[])
 
     gtk_main();
 
-    if (g_io_watch_id > 0) {
-        g_source_remove(g_io_watch_id);
-        g_io_watch_id = 0;
-    }
-    if (g_io_channel) {
-        g_io_channel_unref(g_io_channel);
-        g_io_channel = NULL;
-    }
-
-    client_close(g_client);
-    g_client = NULL;
+    shutdown_network();
     return 0;
 }

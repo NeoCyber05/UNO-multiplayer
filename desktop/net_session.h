@@ -28,7 +28,7 @@ typedef struct NetSession NetSession;
 NetSession *ns_create(void);
 
 /**
- * @brief Free a session and its token.
+ * @brief Wipe the token, then free the session.
  * @param[in] s Session to free; NULL is ignored.
  */
 void ns_destroy(NetSession *s);
@@ -64,11 +64,12 @@ NsState ns_state(const NetSession *s);
 /**
  * @brief Allocate a wire id for a request coming from JS.
  * @param[in,out] s Session.
- * @param[in] js_id Id the JS side chose; echoed back by ns_incoming.
+ * @param[in] js_id Id the JS side chose (> 0); echoed back by ns_incoming.
  * @param[in] type Request type; LOGIN/LOGOUT responses update the token.
  * @param[out] wire_id Id to put on the wire envelope.
  * @return OK when the request was registered;
- *         BAD_REQUEST when an argument is NULL or @p type is "RESUME"
+ *         BAD_REQUEST when an argument is NULL, @p js_id <= 0 (0 marks
+ *         pushes) or @p type is "RESUME"
  *         (only the native side may resume, since JS never sees the token);
  *         BUSY when the state is not NS_CONNECTED, all NS_MAX_PENDING slots
  *         are in use, or the connection ran out of wire ids.
@@ -117,8 +118,9 @@ bool ns_has_token(const NetSession *s);
 /**
  * @brief The held token, for building the native RESUME request only.
  * @param[in] s Session.
- * @return The token string owned by the session (invalidated by the next
- *         LOGIN/LOGOUT/RESUME failure or ns_destroy), or NULL when none.
+ * @return The token string owned by the session; its storage is wiped (not
+ *         freed) by the next LOGIN/LOGOUT/RESUME failure and freed by
+ *         ns_destroy. NULL when no token is held.
  */
 const char *ns_token(const NetSession *s);
 
