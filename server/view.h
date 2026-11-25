@@ -21,7 +21,7 @@ typedef struct {
     Color currentColor;
     Card topCard;
     DraftState draft;
-    PlayerView players[4];
+    PlayerView players[SEAT_COUNT];
     bool legal[CARD_COUNT]; /* Indexed by position in the viewer's hand. */
     bool canDraw, canPass, canSayUno;
     /* The coordinator supplies match identity, clocks and connection status. */
@@ -29,8 +29,21 @@ typedef struct {
     uint64_t deadline, serverNowMs, durationMs;
 } GameView;
 
-Status view_build(const Game *g, Seat viewer, GameView *out);
-/* On success the caller owns one reference to the GAME_STATE payload. */
-Status view_json(const GameView *view, json_object **out);
+/**
+ * @brief Build a snapshot with only the hands the viewer is allowed to see.
+ * @param[in] game Current game state.
+ * @param[in] viewer Seat for which to build the snapshot.
+ * @param[out] view Receives the snapshot. The coordinator fills in clocks and presence.
+ * @return OK on success or BAD_REQUEST for an invalid argument.
+ */
+Status viewBuild(const Game *game, Seat viewer, GameView *view);
+
+/**
+ * @brief Serialize the seat-specific GAME_STATE payload.
+ * @param[in] view Snapshot for the intended viewer.
+ * @param[out] out Receives one caller-owned JSON reference on success.
+ * @return OK on success, BAD_REQUEST for an invalid argument, or BUSY on encoding failure.
+ */
+Status viewJson(const GameView *view, json_object **out);
 
 #endif

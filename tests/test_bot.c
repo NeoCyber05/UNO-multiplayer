@@ -4,66 +4,68 @@
 #include <string.h>
 
 static EventBatch events;
-static const PlayerSpec players[4] = {{0}};
+static const PlayerSpec PLAYERS[4] = {{0}};
 
-static Intent choose(Game *g, BotLevel level, uint64_t *rng) {
-    GameView v;
-    assert(view_build(g,g->turn,&v) == OK);
-    uint64_t copy = *rng;
-    Intent a, b;
-    assert(bot_choose(&v,level,rng,&a) == OK);
-    assert(bot_choose(&v,level,&copy,&b) == OK && *rng == copy);
-    assert(a.kind == b.kind && a.index == b.index && a.color == b.color && !strcmp(a.cardId,b.cardId));
-    return a;
+static Intent choose(Game *game, BotLevel level, uint64_t *randomState) {
+    GameView view;
+    assert(viewBuild(game, game->turn, &view) == OK);
+    uint64_t copy = *randomState;
+    Intent intent, repeatedIntent;
+    assert(botChoose(&view, level, randomState, &intent) == OK);
+    assert(botChoose(&view, level, &copy, &repeatedIntent) == OK && *randomState == copy);
+    assert(intent.kind == repeatedIntent.kind && intent.index == repeatedIntent.index &&
+           intent.color == repeatedIntent.color && !strcmp(intent.cardId, repeatedIntent.cardId));
+    return intent;
 }
 
-static void tactics(void) {
-    Game g;
-    uint64_t rng = 7;
-    assert(game_init(&g,SIDE,players,3) == OK);
-    g.currentColor = RED;
-    g.hands[0] = (Pile){.count=3,.cards={{"c1",RED,ONE},{"c2",RED,DRAW_TWO},{"c3",BLUE,TWO}}};
-    g.hands[1].count = 1;
-    Intent a = choose(&g,HARD,&rng);
-    assert(a.kind == PLAY && !strcmp(a.cardId,"c1"));
-    g.direction = -1;
-    g.hands[3].count = 1;
-    a = choose(&g,HARD,&rng);
-    assert(a.kind == PLAY && !strcmp(a.cardId,"c2"));
-    g.hands[0].cards[0] = (Card){"c1",RED,DISCARD_ALL};
-    g.hands[0].cards[2].color = RED;
-    a = choose(&g,HARD,&rng);
-    assert(a.kind == PLAY && !strcmp(a.cardId,"c1"));
+static void testTactics(void) {
+    Game game;
+    uint64_t randomState = 7;
+    assert(gameInit(&game, SIDE, PLAYERS, 3) == OK);
+    game.currentColor = RED;
+    game.hands[0] =
+        (Pile){.count = 3, .cards = {{"c1", RED, ONE}, {"c2", RED, DRAW_TWO}, {"c3", BLUE, TWO}}};
+    game.hands[1].count = 1;
+    Intent intent = choose(&game, HARD, &randomState);
+    assert(intent.kind == PLAY && !strcmp(intent.cardId, "c1"));
+    game.direction = -1;
+    game.hands[3].count = 1;
+    intent = choose(&game, HARD, &randomState);
+    assert(intent.kind == PLAY && !strcmp(intent.cardId, "c2"));
+    game.hands[0].cards[0] = (Card){"c1", RED, DISCARD_ALL};
+    game.hands[0].cards[2].color = RED;
+    intent = choose(&game, HARD, &randomState);
+    assert(intent.kind == PLAY && !strcmp(intent.cardId, "c1"));
 
-    g.currentColor = GREEN;
-    g.discard.cards[0].value = THREE;
-    assert(choose(&g,NORMAL,&rng).kind == DRAW);
-    GameView v;
-    assert(view_build(&g,0,&v) == OK);
-    v.canDraw = false;
-    v.canPass = true;
-    assert(bot_choose(&v,EASY,&rng,&a) == OK && a.kind == PASS);
-    assert(view_build(&g,1,&v) == OK && bot_choose(&v,HARD,&rng,&a) != OK);
+    game.currentColor = GREEN;
+    game.discard.cards[0].value = THREE;
+    assert(choose(&game, NORMAL, &randomState).kind == DRAW);
+    GameView view;
+    assert(viewBuild(&game, 0, &view) == OK);
+    view.canDraw = false;
+    view.canPass = true;
+    assert(botChoose(&view, EASY, &randomState, &intent) == OK && intent.kind == PASS);
+    assert(viewBuild(&game, 1, &view) == OK && botChoose(&view, HARD, &randomState, &intent) != OK);
 }
 
 int main(void) {
-    tactics();
+    testTactics();
     bool uno = false, wild = false, draft = false, draw = false;
-    for (BotLevel level=EASY; level<=HARD; level++) {
-        for (uint64_t seed=0; seed<100; seed++) {
-            Game g;
-            uint64_t rng = seed;
-            assert(game_init(&g,(Mode)(seed % 4),players,seed) == OK);
+    for (BotLevel level = EASY; level <= HARD; level++) {
+        for (uint64_t seed = 0; seed < 100; seed++) {
+            Game game;
+            uint64_t randomState = seed;
+            assert(gameInit(&game, (Mode)(seed % 4), PLAYERS, seed) == OK);
             int steps = 0;
-            while (g.phase != FINISHED && steps++ < 2000) {
-                Intent a = choose(&g,level,&rng);
-                assert(game_apply(&g,g.turn,&a,&events) == OK);
-                uno |= a.kind == SAY_UNO;
-                draft |= a.kind == DRAFT_PICK;
-                wild |= a.kind == PLAY && a.color != NO_COLOR;
-                draw |= a.kind == DRAW;
+            while (game.phase != FINISHED && steps++ < 2000) {
+                Intent intent = choose(&game, level, &randomState);
+                assert(gameApply(&game, game.turn, &intent, &events) == OK);
+                uno |= intent.kind == SAY_UNO;
+                draft |= intent.kind == DRAFT_PICK;
+                wild |= intent.kind == PLAY && intent.color != NO_COLOR;
+                draw |= intent.kind == DRAW;
             }
-            assert(g.phase == FINISHED);
+            assert(game.phase == FINISHED);
         }
     }
     assert(uno && wild && draft && draw);

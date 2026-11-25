@@ -3,87 +3,113 @@
 #include <limits.h>
 #include <string.h>
 
+enum { WINNING_PLAY_SCORE = 1000 };
+
 /* Reservoir sampling gives equal-scoring candidates an equal chance. */
-static bool prefer(int score, int *best, unsigned *ties, uint64_t *rng) {
+static bool prefer(int score, int *best, unsigned *ties, uint64_t *randomState) {
     if (score < *best) return false;
     if (score > *best) {
         *best = score;
         *ties = 1;
         return true;
     }
-    return game_random(rng) % ++*ties == 0;
+    return gameRandom(randomState) % ++*ties == 0;
 }
 
-static int score_play(const GameView *v, const Card *c, BotLevel level, int same_color) {
+static int scorePlay(const GameView *view, const Card *card, BotLevel level, int sameColorCount) {
     if (level == EASY) return 0;
-    const PlayerView *me = &v->players[v->viewerSeat];
-    Seat next = (Seat)((4 + v->turn + v->direction) % 4);
-    const PlayerView *target = &v->players[next];
+    const PlayerView *me = &view->players[view->viewerSeat];
+    Seat nextSeat = (Seat)((SEAT_COUNT + view->turn + view->direction) % SEAT_COUNT);
+    const PlayerView *target = &view->players[nextSeat];
     bool friendly = me->team >= 0 && me->team == target->team;
     bool threat = target->cardCount <= 2;
-    int score = c->color == v->currentColor ? 2 : 0;
-    switch (c->value) {
-    case DISCARD_ALL: score += 3 * same_color; break;
+    int score = card->color == view->currentColor ? 2 : 0;
+    switch (card->value) {
+    case DISCARD_ALL:
+        score += 3 * sameColorCount;
+        break;
     case DRAW_TWO:
-    case SKIP: score += friendly ? -8 : threat ? 12 : 6; break;
-    case REVERSE: score += 2; break;
-    case WILD: score -= 4; break;
-    case WILD_FOUR: score += friendly ? -16 : threat ? 14 : -2; break;
-    default: break;
+    case SKIP:
+        score += friendly ? -8 : threat ? 12 : 6;
+        break;
+    case REVERSE:
+        score += 2;
+        break;
+    case WILD:
+        score -= 4;
+        break;
+    case WILD_FOUR:
+        score += friendly ? -16 : threat ? 14 : -2;
+        break;
+    default:
+        break;
     }
     if (level == HARD) {
-        int shed = c->value == DISCARD_ALL ? same_color : 1;
-        if (shed == me->cardCount) return 1000;
+        int shed = card->value == DISCARD_ALL ? sameColorCount : 1;
+        if (shed == me->cardCount) return WINNING_PLAY_SCORE;
         score += 2 * shed;
-        bool blocks = c->value == SKIP || c->value == DRAW_TWO ||
-                      c->value == WILD_FOUR || c->value == REVERSE;
+        bool blocks = card->value == SKIP || card->value == DRAW_TWO || card->value == WILD_FOUR ||
+                      card->value == REVERSE;
         if (blocks && friendly) score -= 40;
         if (blocks && !friendly && threat) score += 40;
     }
     return score;
 }
 
-Status bot_choose(const GameView *v, BotLevel level, uint64_t *rng, Intent *out) {
-    if (!v || !rng || !out || v->viewerSeat >= 4 || (unsigned)level > HARD) return BAD_REQUEST;
-    Intent a = {.turnNo=v->turnNo,.draftTurn=v->draft.turn};
-    memcpy(a.matchId,v->matchId,sizeof a.matchId);
-    if (v->canSayUno) {
-        a.kind = SAY_UNO;
-    } else if (v->phase == FINISHED) return INVALID_ACTION;
-    else if (v->viewerSeat != v->turn) return NOT_YOUR_TURN;
-    else if (v->phase == DRAFTING) {
+Status botChoose(const GameView *view, BotLevel level, uint64_t *randomState, Intent *out) {
+    if (!view || !randomState || !out || view->viewerSeat >= SEAT_COUNT || (unsigned)level > HARD)
+        return BAD_REQUEST;
+    Intent intent = {.turnNo = view->turnNo, .draftTurn = view->draft.turn};
+    memcpy(intent.matchId, view->matchId, sizeof intent.matchId);
+    if (view->canSayUno) {
+        intent.kind = SAY_UNO;
+    } else if (view->phase == FINISHED) {
+        return INVALID_ACTION;
+    } else if (view->viewerSeat != view->turn) {
+        return NOT_YOUR_TURN;
+    } else if (view->phase == DRAFTING) {
         int best = INT_MIN;
         unsigned ties = 0;
-        a.kind = DRAFT_PICK;
-        for (int i=0; i<4; i++) {
-            if (v->draft.offers[i].occupied && prefer(0,&best,&ties,rng)) a.index = i;
+        intent.kind = DRAFT_PICK;
+        for (int i = 0; i < DRAFT_OFFER_COUNT; i++) {
+            if (view->draft.offers[i].occupied && prefer(0, &best, &ties, randomState))
+                intent.index = i;
         }
         if (!ties) return INVALID_ACTION;
     } else {
-        const Pile *h = &v->players[v->viewerSeat].hand;
-        int counts[WILD_COLOR+1] = {0};
-        for (int i=0; i<h->count; i++) counts[h->cards[i].color]++;
-        int best = INT_MIN, pick = -1;
+        const Pile *hand = &view->players[view->viewerSeat].hand;
+        int colorCounts[WILD_COLOR + 1] = {0};
+        for (int i = 0; i < hand->count; i++)
+            colorCounts[hand->cards[i].color]++;
+        int best = INT_MIN, selectedIndex = -1;
         unsigned ties = 0;
-        for (int i=0; i<h->count; i++) {
-            if (!v->legal[i]) continue;
-            const Card *c = &h->cards[i];
-            if (prefer(score_play(v,c,level,counts[c->color]),&best,&ties,rng)) pick = i;
+        for (int i = 0; i < hand->count; i++) {
+            if (!view->legal[i]) continue;
+            const Card *card = &hand->cards[i];
+            if (prefer(scorePlay(view, card, level, colorCounts[card->color]), &best, &ties,
+                       randomState))
+                selectedIndex = i;
         }
-        if (pick >= 0) {
-            Card c = h->cards[pick];
-            a.kind = PLAY;
-            memcpy(a.cardId,c.id,sizeof a.cardId);
-            if (c.color == WILD_COLOR) {
+        if (selectedIndex >= 0) {
+            Card card = hand->cards[selectedIndex];
+            intent.kind = PLAY;
+            memcpy(intent.cardId, card.id, sizeof intent.cardId);
+            if (card.color == WILD_COLOR) {
                 best = INT_MIN;
                 ties = 0;
-                for (Color k=RED; k<=BLUE; k++)
-                    if (prefer(level == EASY ? 0 : counts[k],&best,&ties,rng)) a.color = k;
+                for (Color color = RED; color <= BLUE; color++) {
+                    if (prefer(level == EASY ? 0 : colorCounts[color], &best, &ties, randomState))
+                        intent.color = color;
+                }
             }
-        } else if (v->canPass) a.kind = PASS;
-        else if (v->canDraw) a.kind = DRAW;
-        else return INVALID_ACTION;
+        } else if (view->canPass) {
+            intent.kind = PASS;
+        } else if (view->canDraw) {
+            intent.kind = DRAW;
+        } else {
+            return INVALID_ACTION;
+        }
     }
-    *out = a;
+    *out = intent;
     return OK;
 }

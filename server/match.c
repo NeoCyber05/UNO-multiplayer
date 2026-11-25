@@ -12,6 +12,8 @@
 #include <string.h>
 
 enum {
+    WILD_CARD_POINTS = 50,
+    ACTION_CARD_POINTS = 20,
     MAX_MATCHES = 16,
     TURN_MS = 20000,
     BOT_DELAY_MS = 700,
@@ -85,12 +87,14 @@ static uint64_t durationAt(const Match *match, uint64_t nowMs) {
 static void sendView(Matches *matches, const Match *match, Seat seat, uint64_t nowMs) {
     GameView view;
     json_object *payload = NULL;
-    if (view_build(&match->game, seat, &view) != OK) return;
+    if (viewBuild(&match->game, seat, &view) != OK) return;
     memcpy(view.matchId, match->result.matchId, sizeof view.matchId);
     view.deadline = match->deadline;
-    if (match->finishing) view.deadline = 0;
+    if (match->finishing)
+        view.deadline = 0;
     else if (match->retryAt) {
-        uint64_t remaining = match->deadline > match->pausedAt ? match->deadline - match->pausedAt : 0;
+        uint64_t remaining =
+            match->deadline > match->pausedAt ? match->deadline - match->pausedAt : 0;
         view.deadline = nowMs + remaining;
     }
     view.serverNowMs = nowMs;
@@ -98,9 +102,10 @@ static void sendView(Matches *matches, const Match *match, Seat seat, uint64_t n
     for (Seat index = 0; index < SEAT_COUNT; index++) {
         view.players[index].connected = match->connected[index];
     }
-    if (view_json(&view, &payload) != OK) return;
+    if (viewJson(&view, &payload) != OK) return;
     json_object_object_add(payload, "paused", json_object_new_boolean(match->retryAt != 0));
-    json_object_object_add(payload, "unoCalls", json_object_new_uint64(match->game.stats[seat].unoCalls));
+    json_object_object_add(payload, "unoCalls",
+                           json_object_new_uint64(match->game.stats[seat].unoCalls));
     matches->push(matches->context, match->result.players[seat].userId, "GAME_STATE", payload);
     json_object_put(payload);
 }
@@ -136,12 +141,11 @@ static void generateId(MatchId *out) {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     sodium_bin2hex(hex, sizeof hex, bytes, sizeof bytes);
-    snprintf(*out, sizeof *out, "%.8s-%.4s-%.4s-%.4s-%.12s",
-             hex, hex + 8, hex + 12, hex + 16, hex + 20);
+    snprintf(*out, sizeof *out, "%.8s-%.4s-%.4s-%.4s-%.12s", hex, hex + 8, hex + 12, hex + 16,
+             hex + 20);
 }
 
-Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
-                    MatchId *outMatchId) {
+Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs, MatchId *outMatchId) {
     if (!matches || !room || !outMatchId) return BAD_REQUEST;
     Match *slot = NULL;
     for (int index = 0; index < MAX_MATCHES; index++) {
@@ -156,7 +160,7 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
     uint64_t seed;
     randombytes_buf(&seed, sizeof seed);
     randombytes_buf(&next.botRng, sizeof next.botRng);
-    Status status = game_init(&next.game, room->mode, room->players, seed);
+    Status status = gameInit(&next.game, room->mode, room->players, seed);
     if (status != OK) return status;
     bool hasHuman = false;
     for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
@@ -185,8 +189,8 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
     next.result.status = MATCH_ACTIVE;
     memcpy(next.roomId, room->roomId, sizeof next.roomId);
     generateId(&next.result.matchId);
-    status = store_match_start(matches->store, (const MatchId *)&next.result.matchId,
-                               room->players, room->mode, room->ranked);
+    status = store_match_start(matches->store, (const MatchId *)&next.result.matchId, room->players,
+                               room->mode, room->ranked);
     if (status != OK) return status;
     scheduleTurn(&next, nowMs);
     *slot = next;
@@ -199,8 +203,10 @@ static int handPoints(const Pile *hand) {
     int points = 0;
     for (int index = 0; index < hand->count; index++) {
         Value value = hand->cards[index].value;
-        if (value <= NINE) points += value;
-        else points += value >= WILD ? 50 : 20;
+        if (value <= NINE)
+            points += value;
+        else
+            points += value >= WILD ? WILD_CARD_POINTS : ACTION_CARD_POINTS;
     }
     return points;
 }
@@ -229,11 +235,11 @@ static void beginFinish(Match *match, MatchStatus status, uint64_t nowMs) {
 }
 
 static json_object *resultJson(const Match *match) {
-    static const char *const modes[] = {"classic", "2v2", "side", "draft"};
+    static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
     json_object *payload = json_object_new_object();
     json_object *players = json_object_new_array();
     json_object_object_add(payload, "matchId", json_object_new_string(match->result.matchId));
-    json_object_object_add(payload, "mode", json_object_new_string(modes[match->game.mode]));
+    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[match->game.mode]));
     json_object_object_add(payload, "ranked", json_object_new_boolean(match->result.ranked));
     json_object_object_add(payload, "winnerSeat", json_object_new_int(match->result.winnerSeat));
     json_object_object_add(payload, "winnerTeam", json_object_new_int(match->result.winnerTeam));
@@ -252,7 +258,8 @@ static json_object *resultJson(const Match *match) {
         json_object_object_add(row, "avatar", json_object_new_string(player->avatar));
         json_object_object_add(row, "isBot", json_object_new_boolean(player->isBot));
         json_object_object_add(row, "team", json_object_new_int(result->team));
-        json_object_object_add(row, "cardsLeft", json_object_new_int(match->game.hands[seat].count));
+        json_object_object_add(row, "cardsLeft",
+                               json_object_new_int(match->game.hands[seat].count));
         json_object_object_add(row, "points", json_object_new_int(result->points));
         json_object_object_add(row, "eloBefore", json_object_new_int(result->eloBefore));
         json_object_object_add(row, "eloAfter", json_object_new_int(result->eloAfter));
@@ -266,10 +273,11 @@ static json_object *resultJson(const Match *match) {
 }
 
 static Status storeAbort(Store *store, const Match *match) {
-    MatchEvent event = {
-        .seq = match->game.eventSeq + 1, .revision = match->finishRevision,
-        .actor = -1, .type = "MATCH_ABORTED", .payload = "{}"
-    };
+    MatchEvent event = {.seq = match->game.eventSeq + 1,
+                        .revision = match->finishRevision,
+                        .actor = -1,
+                        .type = "MATCH_ABORTED",
+                        .payload = "{}"};
     return store_abort(store, (const MatchId *)&match->result.matchId, &event,
                        match->result.durationMs);
 }
@@ -337,7 +345,8 @@ static Status applyEvents(Matches *matches, Match *match, const Game *candidate,
         return pauseMatch(matches, match, nowMs);
     }
     bool turnChanged = candidate->turnNo != match->game.turnNo ||
-        candidate->phase != match->game.phase || candidate->draft.turn != match->game.draft.turn;
+                       candidate->phase != match->game.phase ||
+                       candidate->draft.turn != match->game.draft.turn;
     resumeClock(match, nowMs);
     match->game = *candidate;
     if (candidate->phase == FINISHED) {
@@ -376,15 +385,16 @@ static void tickMatch(Matches *matches, Match *match, uint64_t nowMs) {
     Status status;
     uint64_t botRng = match->botRng;
     if (expired) {
-        status = candidate.phase == DRAFTING ?
-            game_draft_timeout(&candidate, candidate.draft.turn, &events) :
-            game_timeout(&candidate, candidate.turnNo, &events);
+        status = candidate.phase == DRAFTING
+                     ? gameDraftTimeout(&candidate, candidate.draft.turn, &events)
+                     : gameTimeout(&candidate, candidate.turnNo, &events);
     } else {
         GameView view;
         Intent intent;
-        status = view_build(&candidate, turn, &view);
-        if (status == OK) status = bot_choose(&view, candidate.players[turn].botLevel, &botRng, &intent);
-        if (status == OK) status = game_apply(&candidate, turn, &intent, &events);
+        status = viewBuild(&candidate, turn, &view);
+        if (status == OK)
+            status = botChoose(&view, candidate.players[turn].botLevel, &botRng, &intent);
+        if (status == OK) status = gameApply(&candidate, turn, &intent, &events);
     }
     if (status == OK && applyEvents(matches, match, &candidate, &events, nowMs) == OK) {
         match->botRng = botRng;
@@ -400,8 +410,8 @@ void matchesTick(Matches *matches, uint64_t nowMs) {
     }
 }
 
-static void updatePresence(Matches *matches, Match *match, Seat seat,
-                           bool connected, uint64_t nowMs) {
+static void updatePresence(Matches *matches, Match *match, Seat seat, bool connected,
+                           uint64_t nowMs) {
     match->connected[seat] = connected;
     match->game.revision++;
     if (!match->finishing && !hasConnectedHuman(match)) {
@@ -428,11 +438,11 @@ Status matchesConnected(Matches *matches, UserId userId, bool connected, uint64_
     return OK;
 }
 
-static bool readInt(json_object *payload, const char *key, int64_t min, int64_t max,
-                    int64_t *out) {
+static bool readInt(json_object *payload, const char *key, int64_t min, int64_t max, int64_t *out) {
     json_object *field;
     if (!json_object_object_get_ex(payload, key, &field) ||
-        !json_object_is_type(field, json_type_int)) return false;
+        !json_object_is_type(field, json_type_int))
+        return false;
     *out = json_object_get_int64(field);
     return *out >= min && *out <= max;
 }
@@ -440,19 +450,19 @@ static bool readInt(json_object *payload, const char *key, int64_t min, int64_t 
 static const char *readString(json_object *payload, const char *key, size_t maxLength) {
     json_object *field;
     if (!json_object_object_get_ex(payload, key, &field) ||
-        !json_object_is_type(field, json_type_string)) return NULL;
+        !json_object_is_type(field, json_type_string))
+        return NULL;
     const char *value = json_object_get_string(field);
     size_t length = (size_t)json_object_get_string_len(field);
     return length && length <= maxLength && strlen(value) == length ? value : NULL;
 }
 
 static bool readIntent(const Envelope *request, Intent *intent) {
-    static const char *const types[] = {
-        "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "MATCH_LEAVE", "CHAT"
-    };
+    static const char *const INTENT_TYPES[] = {"PLAY",       "DRAW",        "PASS", "SAY_UNO",
+                                               "DRAFT_PICK", "MATCH_LEAVE", "CHAT"};
     int kind;
     for (kind = PLAY; kind <= CHAT; kind++) {
-        if (!strcmp(request->type, types[kind])) break;
+        if (!strcmp(request->type, INTENT_TYPES[kind])) break;
     }
     if (kind > CHAT) return false;
     intent->kind = (IntentKind)kind;
@@ -460,7 +470,7 @@ static bool readIntent(const Envelope *request, Intent *intent) {
     if (kind == DRAFT_PICK) {
         if (!readInt(request->payload, "draftTurn", 0, UINT32_MAX, &value)) return false;
         intent->draftTurn = (uint32_t)value;
-        if (!readInt(request->payload, "index", 0, SEAT_COUNT - 1, &value)) return false;
+        if (!readInt(request->payload, "index", 0, DRAFT_OFFER_COUNT - 1, &value)) return false;
         intent->index = (int)value;
     } else if (kind == CHAT) {
         if (!readInt(request->payload, "chatId", 0, QUICK_CHAT_COUNT - 1, &value)) return false;
@@ -476,9 +486,9 @@ static bool readIntent(const Envelope *request, Intent *intent) {
         if (json_object_object_get_ex(request->payload, "color", NULL)) {
             const char *color = readString(request->payload, "color", 6);
             if (!color) return false;
-            static const char *const colors[] = {"", "red", "yellow", "green", "blue"};
+            static const char *const COLOR_NAMES[] = {"", "red", "yellow", "green", "blue"};
             for (Color index = RED; index <= BLUE; index++) {
-                if (!strcmp(color, colors[index])) intent->color = index;
+                if (!strcmp(color, COLOR_NAMES[index])) intent->color = index;
             }
             if (intent->color == NO_COLOR) return false;
         }
@@ -489,10 +499,11 @@ static bool readIntent(const Envelope *request, Intent *intent) {
 static Status leaveMatch(Matches *matches, Match *match, Seat seat, uint64_t nowMs) {
     Game candidate = match->game;
     EventBatch events = {.count = 1};
-    events.events[0] = (MatchEvent){
-        .seq = ++candidate.eventSeq, .revision = ++candidate.revision,
-        .actor = seat, .type = "MATCH_LEAVE", .payload = "{}"
-    };
+    events.events[0] = (MatchEvent){.seq = ++candidate.eventSeq,
+                                    .revision = ++candidate.revision,
+                                    .actor = seat,
+                                    .type = "MATCH_LEAVE",
+                                    .payload = "{}"};
     if (store_events(matches->store, (const MatchId *)&match->result.matchId, &events) != OK) {
         return pauseMatch(matches, match, nowMs);
     }
@@ -512,8 +523,8 @@ Status matchesHandle(Matches *matches, UserId userId, const Envelope *request, u
     Intent intent = {0};
     const char *matchId = readString(request->payload, "matchId", sizeof(MatchId) - 1);
     if (!matchId || json_object_object_get_ex(request->payload, "actor", NULL) ||
-        json_object_object_get_ex(request->payload, "seat", NULL) ||
-        !readIntent(request, &intent)) return BAD_REQUEST;
+        json_object_object_get_ex(request->payload, "seat", NULL) || !readIntent(request, &intent))
+        return BAD_REQUEST;
 
     Match *match = findByUser(matches, userId);
     if (!match || strcmp(matchId, match->result.matchId)) return NOT_FOUND;
@@ -534,6 +545,6 @@ Status matchesHandle(Matches *matches, UserId userId, const Envelope *request, u
     }
     Game candidate = match->game;
     EventBatch events;
-    Status status = game_apply(&candidate, seat, &intent, &events);
+    Status status = gameApply(&candidate, seat, &intent, &events);
     return status == OK ? applyEvents(matches, match, &candidate, &events, nowMs) : status;
 }

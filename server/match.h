@@ -3,8 +3,7 @@
 
 #include "rooms.h"
 
-typedef void (*MatchPush)(void *context, UserId userId, const char *type,
-                          json_object *payload);
+typedef void (*MatchPush)(void *context, UserId userId, const char *type, json_object *payload);
 typedef void (*MatchEnded)(void *context, const char *roomId);
 
 /**
@@ -26,15 +25,14 @@ Matches *matchesCreate(Store *store, MatchPush push, MatchEnded ended, void *con
 void matchesDestroy(Matches *matches);
 
 /**
- * @brief Persist an unranked match before sending its initial snapshots.
+ * @brief Persist a match before sending its initial snapshots.
  * @param matches Coordinator owned by the poll loop.
- * @param room Occupied seats with authenticated humans and optional bots.
+ * @param room Occupied seats with authenticated humans. Only unranked matches allow bots.
  * @param nowMs Current time from the poll loop's monotonic clock.
  * @param outMatchId Receives the new ID only on success.
  * @return OK on success, or a validation, capacity or storage error.
  */
-Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs,
-                    MatchId *outMatchId);
+Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs, MatchId *outMatchId);
 
 /**
  * @brief Check whether an account is reserved by a match awaiting completion.

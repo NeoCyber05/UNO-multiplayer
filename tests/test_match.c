@@ -20,13 +20,13 @@ static const char *randomName(void) {
 }
 
 static uint32_t randomWord(void) {
-    return (uint32_t)game_random(&randomState);
+    return (uint32_t)gameRandom(&randomState);
 }
 
 static void randomBuffer(void *buffer, size_t size) {
     unsigned char *cursor = buffer;
     while (size) {
-        uint64_t word = game_random(&randomState);
+        uint64_t word = gameRandom(&randomState);
         size_t length = size < sizeof word ? size : sizeof word;
         memcpy(cursor, &word, length);
         cursor += length;
@@ -35,8 +35,7 @@ static void randomBuffer(void *buffer, size_t size) {
 }
 
 static randombytes_implementation testRandom = {
-    .implementation_name = randomName, .random = randomWord, .buf = randomBuffer
-};
+    .implementation_name = randomName, .random = randomWord, .buf = randomBuffer};
 
 static void ended(void *context, const char *roomId) {
     Capture *messages = context;
@@ -70,8 +69,8 @@ static int number(json_object *value, const char *key) {
     return json_object_get_int(field(value, key));
 }
 
-static Status sendPayload(Matches *matches, UserId userId, const char *type,
-                          const MatchId *matchId, json_object *payload, uint64_t nowMs) {
+static Status sendPayload(Matches *matches, UserId userId, const char *type, const MatchId *matchId,
+                          json_object *payload, uint64_t nowMs) {
     json_object_object_add(payload, "matchId", json_object_new_string(*matchId));
     Envelope request = {1, 1, type, payload};
     Status status = matchesHandle(matches, userId, &request, nowMs);
@@ -79,8 +78,8 @@ static Status sendPayload(Matches *matches, UserId userId, const char *type,
     return status;
 }
 
-static Status send(Matches *matches, UserId userId, const char *type,
-                   const MatchId *matchId, int turnNo, uint64_t nowMs) {
+static Status send(Matches *matches, UserId userId, const char *type, const MatchId *matchId,
+                   int turnNo, uint64_t nowMs) {
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "turnNo", json_object_new_int(turnNo));
     return sendPayload(matches, userId, type, matchId, payload, nowMs);
@@ -92,9 +91,9 @@ static void checkDrawDeadline(Matches *matches, const RoomStart *room, Capture *
     for (uint64_t trial = 1; trial <= 100; trial++) {
         uint64_t trialState = trial;
         Game game;
-        assert(game_init(&game, CLASSIC, room->players, game_random(&trialState)) == OK);
+        assert(gameInit(&game, CLASSIC, room->players, gameRandom(&trialState)) == OK);
         Card drawn = game.deck.cards[game.deck.count - 1];
-        if (!game_playable(&game, 0, &drawn)) continue;
+        if (!gamePlayable(&game, 0, &drawn)) continue;
         randomState = trial;
         found = true;
         break;
@@ -159,16 +158,19 @@ static void checkDraftAndResult(Matches *matches, RoomStart room, Capture *messa
             if (!strcmp(json_object_get_string(field(view, "phase")), "DRAFT")) {
                 json_object *offers = field(view, "offers");
                 int index = 0;
-                while (index < 4 && !json_object_array_get_idx(offers, index)) index++;
+                while (index < 4 && !json_object_array_get_idx(offers, index))
+                    index++;
                 assert(index < 4);
                 type = "DRAFT_PICK";
                 json_object_object_add(payload, "index", json_object_new_int(index));
                 json_object_object_add(payload, "draftTurn",
                                        json_object_new_int(number(view, "draftTurn")));
             } else {
-                json_object_object_add(payload, "turnNo", json_object_new_int(number(view, "turnNo")));
+                json_object_object_add(payload, "turnNo",
+                                       json_object_new_int(number(view, "turnNo")));
                 json_object *legal = field(view, "legalCardIds");
-                if (json_object_get_boolean(field(view, "canSayUno"))) type = "SAY_UNO";
+                if (json_object_get_boolean(field(view, "canSayUno")))
+                    type = "SAY_UNO";
                 else if (json_object_array_length(legal)) {
                     type = "PLAY";
                     json_object *cardId = json_object_array_get_idx(legal, 0);
@@ -183,7 +185,8 @@ static void checkDraftAndResult(Matches *matches, RoomStart room, Capture *messa
                                                    json_object_get(field(view, "currentColor")));
                         }
                     }
-                } else if (json_object_get_boolean(field(view, "canPass"))) type = "PASS";
+                } else if (json_object_get_boolean(field(view, "canPass")))
+                    type = "PASS";
             }
             assert(sendPayload(matches, 2, type, (const MatchId *)&matchId, payload, nowMs) == OK);
         }
@@ -221,7 +224,8 @@ static void playClassicTurn(Matches *matches, const Capture *messages, UserId us
     const char *type = "DRAW";
     json_object_object_add(payload, "turnNo", json_object_new_int(number(view, "turnNo")));
     json_object *legal = field(view, "legalCardIds");
-    if (json_object_get_boolean(field(view, "canSayUno"))) type = "SAY_UNO";
+    if (json_object_get_boolean(field(view, "canSayUno")))
+        type = "SAY_UNO";
     else if (json_object_array_length(legal)) {
         type = "PLAY";
         json_object *cardId = json_object_array_get_idx(legal, 0);
@@ -236,11 +240,12 @@ static void playClassicTurn(Matches *matches, const Capture *messages, UserId us
                                        json_object_get(field(view, "currentColor")));
             }
         }
-    } else if (json_object_get_boolean(field(view, "canPass"))) type = "PASS";
+    } else if (json_object_get_boolean(field(view, "canPass")))
+        type = "PASS";
     assert(sendPayload(matches, userId, type, matchId, payload, nowMs) == OK);
 }
 
-static void test_ranked_room_with_bot_rejected(Matches *matches, sqlite3 *db, RoomStart room) {
+static void testRankedRoomWithBotRejected(Matches *matches, sqlite3 *db, RoomStart room) {
     int matchesBefore = queryInt(db, "SELECT count(*) FROM matches", 0);
     room.ranked = true;
     room.players[LEAVER_SEAT].userId = 0;
@@ -252,8 +257,8 @@ static void test_ranked_room_with_bot_rejected(Matches *matches, sqlite3 *db, Ro
     assert(!matchesContains(matches, 1));
 }
 
-static void test_ranked_finish_applies_elo(Matches *matches, Store *store, RoomStart room,
-                                           Capture *messages) {
+static void testRankedFinishAppliesElo(Matches *matches, Store *store, RoomStart room,
+                                       Capture *messages) {
     sqlite3 *db = store_get_db(store);
     ProfileStats before[PROFILE_SEAT_COUNT];
     for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
@@ -277,8 +282,8 @@ static void test_ranked_finish_applies_elo(Matches *matches, Store *store, RoomS
     for (int step = 0; step < RANKED_MAX_STEPS && messages->results == resultsBefore; step++) {
         Seat turn = (Seat)number(messages->views[1], "turn");
         if (turn != LEAVER_SEAT) {
-            playClassicTurn(matches, messages, room.players[turn].userId,
-                            (const MatchId *)&matchId, nowMs);
+            playClassicTurn(matches, messages, room.players[turn].userId, (const MatchId *)&matchId,
+                            nowMs);
         }
         nowMs += 700;
         matchesTick(matches, nowMs);
@@ -291,8 +296,9 @@ static void test_ranked_finish_applies_elo(Matches *matches, Store *store, RoomS
         UserId userId = room.players[seat].userId;
         int expected = seat == winnerSeat ? RANKED_WIN_ELO : RANKED_LOSS_ELO;
         assert(queryInt(db, "SELECT elo FROM accounts WHERE id = ?", (int64_t)userId) == expected);
-        assert(queryInt(db, "SELECT elo_before FROM match_players WHERE seat = ? AND "
-                            "match_id = (SELECT match_id FROM matches WHERE ranked = 1)",
+        assert(queryInt(db,
+                        "SELECT elo_before FROM match_players WHERE seat = ? AND "
+                        "match_id = (SELECT match_id FROM matches WHERE ranked = 1)",
                         seat) == RANKED_START_ELO);
         ProfileStats after;
         assert(store_profile_stats(store, userId, &after) == OK);
@@ -300,9 +306,10 @@ static void test_ranked_finish_applies_elo(Matches *matches, Store *store, RoomS
         assert(after.matches == before[seat].matches + 1);
         assert(after.wins == before[seat].wins + won);
         int streak = before[seat].streak;
-        assert(after.streak == (won ? (streak < 0 ? 1 : streak + 1) :
-                                      (streak > 0 ? -1 : streak - 1)));
-        assert(after.peakElo == (expected > before[seat].peakElo ? expected : before[seat].peakElo));
+        assert(after.streak ==
+               (won ? (streak < 0 ? 1 : streak + 1) : (streak > 0 ? -1 : streak - 1)));
+        assert(after.peakElo ==
+               (expected > before[seat].peakElo ? expected : before[seat].peakElo));
     }
 }
 
@@ -363,7 +370,8 @@ int main(void) {
     assert(matchesConnected(matches, 1, true, 621101) == OK);
     assert(number(messages.views[1], "turnNo") > 2);
     int turnNo = number(messages.views[1], "turnNo");
-    assert(send(matches, 1, "UNO_PENALTY", (const MatchId *)&matchId, turnNo, 621102) == BAD_REQUEST);
+    assert(send(matches, 1, "UNO_PENALTY", (const MatchId *)&matchId, turnNo, 621102) ==
+           BAD_REQUEST);
     assert(send(matches, 1, "MATCH_LEAVE", (const MatchId *)&matchId, turnNo, 621102) == OK);
     assert(matchesContains(matches, 1));
     assert(matchesConnected(matches, 1, true, 621103) == FORBIDDEN);
@@ -376,21 +384,22 @@ int main(void) {
     assert(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == MATCH_ABORTED);
     sqlite3_finalize(query);
     assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM match_events WHERE type = 'MATCH_ABORTED'",
-                             -1, &query, NULL) == SQLITE_OK);
+                              -1, &query, NULL) == SQLITE_OK);
     assert(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == 1);
     sqlite3_finalize(query);
     assert(messages.finished == 1 && messages.results == 0);
     checkDrawDeadline(matches, &room, &messages);
     checkDraftAndResult(matches, room, &messages);
-    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM matches WHERE status = ?",
-                             -1, &query, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM matches WHERE status = ?", -1, &query,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_bind_int(query, 1, MATCH_FINALIZED) == SQLITE_OK);
     assert(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == 1);
     sqlite3_finalize(query);
-    test_ranked_room_with_bot_rejected(matches, db, room);
-    test_ranked_finish_applies_elo(matches, store, room, &messages);
+    testRankedRoomWithBotRejected(matches, db, room);
+    testRankedFinishAppliesElo(matches, store, room, &messages);
 
-    for (UserId userId = 1; userId <= 4; userId++) json_object_put(messages.views[userId]);
+    for (UserId userId = 1; userId <= 4; userId++)
+        json_object_put(messages.views[userId]);
     matchesDestroy(matches);
     store_close(store);
 }

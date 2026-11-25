@@ -53,35 +53,36 @@ Status profileCompute(Store *store, const MatchResult *result,
             after.matches = addCount(before.matches, 1);
             // streak/bestStreak/peakElo are written as absolute values, so a bot match keeps them as read.
             if (!vsBots) {
-                bool won = !player->left && (teamMode ? player->team == result->winnerTeam :
-                                                        seat == result->winnerSeat);
+                bool won = !player->left && (teamMode ? player->team == result->winnerTeam
+                                                      : seat == result->winnerSeat);
                 after.wins = addCount(before.wins, won);
                 after.teamWins = addCount(before.teamWins, won && teamMode);
                 after.plus4 = addCount(before.plus4, player->stats.plus4);
                 after.unoCalls = addCount(before.unoCalls, player->stats.unoCalls);
                 if (won) {
-                    after.streak = before.streak < 0 ? 1 :
-                        before.streak == INT32_MAX ? INT32_MAX : before.streak + 1;
+                    after.streak = before.streak < 0            ? 1
+                                   : before.streak == INT32_MAX ? INT32_MAX
+                                                                : before.streak + 1;
                     if ((uint32_t)after.streak > before.bestStreak) {
                         after.bestStreak = (uint32_t)after.streak;
                     }
                 } else {
-                    after.streak = before.streak > 0 ? -1 :
-                        before.streak == INT32_MIN ? INT32_MIN : before.streak - 1;
+                    after.streak = before.streak > 0            ? -1
+                                   : before.streak == INT32_MIN ? INT32_MIN
+                                                                : before.streak - 1;
                 }
                 if (player->eloAfter > before.peakElo) after.peakElo = player->eloAfter;
             }
-            deltas[seat] = (ProfileDelta){
-                .add = {
-                    .matches = after.matches - before.matches,
-                    .wins = after.wins - before.wins,
-                    .teamWins = after.teamWins - before.teamWins,
-                    .plus4 = after.plus4 - before.plus4,
-                    .unoCalls = after.unoCalls - before.unoCalls
-                },
-                .streak = after.streak, .bestStreak = after.bestStreak, .peakElo = after.peakElo,
-                .unlocked = earnedBadges(&after) & ~earnedBadges(&before)
-            };
+            deltas[seat] =
+                (ProfileDelta){.add = {.matches = after.matches - before.matches,
+                                       .wins = after.wins - before.wins,
+                                       .teamWins = after.teamWins - before.teamWins,
+                                       .plus4 = after.plus4 - before.plus4,
+                                       .unoCalls = after.unoCalls - before.unoCalls},
+                               .streak = after.streak,
+                               .bestStreak = after.bestStreak,
+                               .peakElo = after.peakElo,
+                               .unlocked = earnedBadges(&after) & ~earnedBadges(&before)};
         }
     }
     memcpy(out, deltas, sizeof deltas);
