@@ -141,10 +141,17 @@ class TestMatch(unittest.TestCase):
                 turn = states[0]["turn"]
                 state = states[turn]
                 hand = state["players"][turn]["hand"]
-                spoofed = clients[turn].request("PLAY", {
+                # A well-formed PLAY (legal card, color for wilds) so that
+                # BAD_REQUEST can only come from the spoofed "seat" field.
+                legal = state["legalCardIds"]
+                card = next((c for c in hand if legal and c["id"] == legal[0]), hand[0])
+                play = {
                     "matchId": state["matchId"], "turnNo": state["turnNo"],
-                    "cardId": hand[0]["id"], "seat": 0
-                })
+                    "cardId": card["id"], "seat": 0
+                }
+                if card["color"] == "wild":
+                    play["color"] = "red"
+                spoofed = clients[turn].request("PLAY", play)
                 self.assertEqual(error_code(spoofed), "BAD_REQUEST", spoofed)
                 for fake in ("TIMEOUT", "UNO_PENALTY"):
                     resp = clients[turn].request(fake, {})
@@ -212,6 +219,65 @@ class TestMatch(unittest.TestCase):
             finally:
                 fresh.close()
                 close_all(clients)
+
+    def test_relogin_single_human_keeps_match(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            human = login_many(server, 1)[0]
+            fresh = WireClient("127.0.0.1", server.port)
+            try:
+                created = human.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(created["type"], "OK", created)
+                seat = created["payload"]["seat"]
+                for bot_seat in range(SEAT_COUNT):
+                    if bot_seat == seat:
+                        continue
+                    added = human.request("ROOM_BOT", {"seat": bot_seat, "level": "easy"})
+                    self.assertEqual(added["type"], "OK", added)
+                started = human.request("ROOM_START", {})
+                self.assertEqual(started["type"], "OK", started)
+                match_id = recv_game_state(human)["matchId"]
+
+                logged_in = fresh.request("LOGIN", {
+                    "email": human.email, "password": human.password
+                })
+                self.assertEqual(logged_in["type"], "OK", logged_in)
+                self.assertTrue(wait_for_eof(human.sock, RECV_TIMEOUT_S),
+                                "old socket should be closed by relogin")
+                state = recv_game_state(fresh)
+                self.assertEqual(state["matchId"], match_id)
+                self.assertEqual(state["viewerSeat"], seat)
+                self.assertIs(state["players"][seat]["connected"], True)
+                time.sleep(QUIET_WINDOW_S)
+                pump_events(fresh)
+                types = [env.get("type") for env in fresh._queue]
+                self.assertNotIn("MATCH_RESULT", types)
+                # The seat is still ours: a match command is accepted, not NOT_FOUND.
+                chat = fresh.request("CHAT", {"matchId": match_id, "chatId": 0})
+                self.assertEqual(chat["type"], "OK", chat)
+            finally:
+                fresh.close()
+                human.close()
+
+    def test_relogin_keeps_waiting_room(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            host, guest = login_many(server, 2)
+            fresh = WireClient("127.0.0.1", server.port)
+            try:
+                created = host.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(created["type"], "OK", created)
+                joined = guest.request("ROOM_JOIN", {"code": created["payload"]["roomId"]})
+                self.assertEqual(joined["type"], "OK", joined)
+                logged_in = fresh.request("LOGIN", {
+                    "email": guest.email, "password": guest.password
+                })
+                self.assertEqual(logged_in["type"], "OK", logged_in)
+                self.assertTrue(wait_for_eof(guest.sock, RECV_TIMEOUT_S))
+                # Still a member, so creating another room is refused.
+                again = fresh.request("ROOM_CREATE", {"mode": "classic"})
+                self.assertEqual(error_code(again), "BUSY", again)
+            finally:
+                fresh.close()
+                close_all([host, guest])
 
     def test_heartbeat_timeout(self):
         extra = ["--heartbeat-ms", HEARTBEAT_MS]

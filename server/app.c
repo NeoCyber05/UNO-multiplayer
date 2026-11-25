@@ -168,8 +168,9 @@ void app_close_slot(App *app, int slot_idx)
     if (sessions_user(app, (ConnId){(uint32_t)slot_idx, s->generation}, &uid) == OK && uid != 0) {
         uint64_t nowMs = app_now_ms();
         /* Mark the seat offline while the session still exists; the room keeps
-         * an in-match member so the seat can be reclaimed by RESUME or LOGIN. */
-        matchesConnected(app->matches, uid, false, nowMs);
+         * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
+         * NOT_FOUND just means the user is not in a match. */
+        (void)matchesConnected(app->matches, uid, false, nowMs);
         rooms_disconnect(app, uid, nowMs);
     }
     sessions_disconnect(app, (ConnId){(uint32_t)slot_idx, s->generation});

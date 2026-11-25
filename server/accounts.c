@@ -551,8 +551,9 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             json_object_put(payload);
             conn_flush(&slot->conn);
 
-            /* After OK so the client sees the session before its GAME_STATE. */
-            matchesConnected(app->matches, uid, true, app_now_ms());
+            /* After OK so the client sees the session before its GAME_STATE.
+             * NOT_FOUND just means the user is not in a match. */
+            (void)matchesConnected(app->matches, uid, true, app_now_ms());
         } else {
             accounts_send_error(app, conn_id.slot, e->id, "UNAUTHENTICATED", "Invalid or expired token");
         }
@@ -561,9 +562,10 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
 
     if (strcmp(e->type, "LOGOUT") == 0) {
         UserId uid = 0;
-        /* Presence must change while the session still maps conn -> user. */
+        /* Presence must change while the session still maps conn -> user.
+         * NOT_FOUND just means the user is not in a match. */
         if (sessions_user(app, conn_id, &uid) == OK && uid != 0) {
-            matchesConnected(app->matches, uid, false, app_now_ms());
+            (void)matchesConnected(app->matches, uid, false, app_now_ms());
         }
         sessions_logout(app, conn_id);
         struct json_object *payload = json_object_new_object();
@@ -636,6 +638,11 @@ void auth_drain(App *app)
                 ConnId old_conn;
                 if (sessions_find_conn(app, res.user_id, &old_conn) == OK) {
                     if (old_conn.slot != res.conn_id.slot && old_conn.slot < APP_MAX_CONNS) {
+                        /* Detach the session first so app_close_slot sees an
+                         * anonymous socket: the user is moving, not leaving, so
+                         * no offline presence (which aborts a match with no
+                         * other connected human) and no room/party exit. */
+                        sessions_disconnect(app, old_conn);
                         app_close_slot(app, old_conn.slot);
                     }
                 }
@@ -663,8 +670,10 @@ void auth_drain(App *app)
                 json_object_put(payload);
                 conn_flush(&slot->conn);
 
-                /* A re-login reclaims the seat; the old socket was closed above. */
-                matchesConnected(app->matches, res.user_id, true, app_now_ms());
+                /* A re-login reclaims the seat. If the seat never went offline
+                 * the coordinator still sends this connection a fresh view.
+                 * NOT_FOUND just means the user is not in a match. */
+                (void)matchesConnected(app->matches, res.user_id, true, app_now_ms());
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "UNAUTHENTICATED", "Invalid email or password");
             }
