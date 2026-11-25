@@ -1,4 +1,4 @@
--- UNO multiplayer SQLite Schema Version 1
+-- UNO multiplayer SQLite Schema Version 3 (mirror of EMBEDDED_SCHEMA_SQL in store.c)
 
 PRAGMA foreign_keys = ON;
 
@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS matches (
     winner_seat INTEGER NOT NULL DEFAULT -1,
     winner_team INTEGER NOT NULL DEFAULT -1,
     duration_ms INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    ended_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS match_players (

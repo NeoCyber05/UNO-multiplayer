@@ -30,7 +30,34 @@ struct Store {
     sqlite3_stmt *stmt_profile_stats_insert_fallback;
     sqlite3_stmt *stmt_match_abort;
     sqlite3_stmt *stmt_leaderboard;
+    sqlite3_stmt *stmt_friend_link_select;
+    sqlite3_stmt *stmt_friend_insert;
+    sqlite3_stmt *stmt_friend_accept;
+    sqlite3_stmt *stmt_friend_reject;
+    sqlite3_stmt *stmt_friend_list;
+    sqlite3_stmt *stmt_profile_badges;
+    sqlite3_stmt *stmt_profile_modes;
+    sqlite3_stmt *stmt_profile_history;
+    sqlite3_stmt *stmt_profile_update;
 };
+
+/* friends.status values; a rejected request is deleted, so it has no value. */
+enum { FRIEND_STATUS_PENDING = 0, FRIEND_STATUS_ACCEPTED = 1 };
+
+enum { MS_PER_SECOND = 1000 };
+
+/* A seat wins by team in team modes (?3, ?4 = TWO_V_TWO, SIDE) and by seat
+ * otherwise; -1 means no winner. A player who left never wins, matching how
+ * profileCompute counts profile_stats.wins. */
+#define PROFILE_WON_SQL \
+    "(mp.player_left = 0 AND CASE WHEN m.mode IN (?3, ?4) " \
+    "THEN m.winner_team >= 0 AND mp.team = m.winner_team " \
+    "ELSE m.winner_seat >= 0 AND mp.seat = m.winner_seat END)"
+
+/* ?1 = user id, ?2 = MATCH_FINALIZED: only finished matches reach a profile. */
+#define PROFILE_MATCHES_SQL \
+    " FROM match_players mp JOIN matches m ON m.match_id = mp.match_id " \
+    "WHERE mp.user_id = ?1 AND m.status = ?2"
 
 static const char *EMBEDDED_SCHEMA_SQL =
     "PRAGMA foreign_keys = ON;\n"
@@ -42,7 +69,8 @@ static const char *EMBEDDED_SCHEMA_SQL =
     "    winner_seat INTEGER NOT NULL DEFAULT -1,\n"
     "    winner_team INTEGER NOT NULL DEFAULT -1,\n"
     "    duration_ms INTEGER NOT NULL DEFAULT 0,\n"
-    "    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n"
+    "    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),\n"
+    "    ended_at INTEGER NOT NULL DEFAULT 0\n"
     ");\n"
     "CREATE TABLE IF NOT EXISTS match_players (\n"
     "    match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,\n"
@@ -117,7 +145,8 @@ static Status prepare_statements(Store *s)
                             "VALUES (?, ?, ?, ?, -1, -1, 0, ?);";
     if (sqlite3_prepare_v2(s->db, sql_m_ins, -1, &s->stmt_match_insert, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
-    const char *sql_m_upd = "UPDATE matches SET status = ?, winner_seat = ?, winner_team = ?, duration_ms = ? WHERE match_id = ?;";
+    const char *sql_m_upd = "UPDATE matches SET status = ?, winner_seat = ?, winner_team = ?, duration_ms = ?, "
+                            "ended_at = ? WHERE match_id = ?;";
     if (sqlite3_prepare_v2(s->db, sql_m_upd, -1, &s->stmt_match_update_status, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
     const char *sql_p_ins = "INSERT INTO match_players (match_id, seat, user_id, name, avatar, bot_level, is_bot, team, points, elo_before, elo_after) "
@@ -196,6 +225,44 @@ static Status prepare_statements(Store *s)
                             "ORDER BY elo DESC, id ASC LIMIT ?;";
     if (sqlite3_prepare_v2(s->db, sql_board, -1, &s->stmt_leaderboard, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
+    const char *sql_f_link = "SELECT status FROM friends "
+                             "WHERE (user_id = ?1 AND friend_id = ?2) OR (user_id = ?2 AND friend_id = ?1);";
+    if (sqlite3_prepare_v2(s->db, sql_f_link, -1, &s->stmt_friend_link_select, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_f_ins = "INSERT INTO friends (user_id, friend_id, status, created_at) "
+                            "VALUES (?, ?, ?, strftime('%s', 'now'));";
+    if (sqlite3_prepare_v2(s->db, sql_f_ins, -1, &s->stmt_friend_insert, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    /* Both reply statements only touch a PENDING row in the requester -> me
+     * direction, so the sender cannot answer its own request. */
+    const char *sql_f_acc = "UPDATE friends SET status = ?1 "
+                            "WHERE user_id = ?2 AND friend_id = ?3 AND status = ?4;";
+    if (sqlite3_prepare_v2(s->db, sql_f_acc, -1, &s->stmt_friend_accept, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_f_rej = "DELETE FROM friends WHERE user_id = ?1 AND friend_id = ?2 AND status = ?3;";
+    if (sqlite3_prepare_v2(s->db, sql_f_rej, -1, &s->stmt_friend_reject, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_f_list = "SELECT a.id, a.name, a.avatar, a.elo, f.user_id, f.status FROM friends f "
+                             "JOIN accounts a ON a.id = CASE WHEN f.user_id = ?1 THEN f.friend_id ELSE f.user_id END "
+                             "WHERE f.user_id = ?1 OR f.friend_id = ?1 ORDER BY a.id ASC LIMIT ?2;";
+    if (sqlite3_prepare_v2(s->db, sql_f_list, -1, &s->stmt_friend_list, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_badges = "SELECT badge FROM achievements WHERE user_id = ?;";
+    if (sqlite3_prepare_v2(s->db, sql_badges, -1, &s->stmt_profile_badges, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_modes = "SELECT m.mode, count(*), sum(" PROFILE_WON_SQL ")"
+                            PROFILE_MATCHES_SQL " GROUP BY m.mode;";
+    if (sqlite3_prepare_v2(s->db, sql_modes, -1, &s->stmt_profile_modes, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    /* rowid breaks ties between matches that ended in the same second. */
+    const char *sql_history = "SELECT m.match_id, m.mode, " PROFILE_WON_SQL ", "
+                              "mp.elo_after - mp.elo_before, m.ended_at"
+                              PROFILE_MATCHES_SQL " ORDER BY m.ended_at DESC, m.rowid DESC LIMIT ?5;";
+    if (sqlite3_prepare_v2(s->db, sql_history, -1, &s->stmt_profile_history, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    const char *sql_identity = "UPDATE accounts SET name = ?, avatar = ? WHERE id = ?;";
+    if (sqlite3_prepare_v2(s->db, sql_identity, -1, &s->stmt_profile_update, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
     return OK;
 }
 
@@ -223,13 +290,25 @@ static void finalize_statements(Store *s)
     if (s->stmt_profile_stats_insert_fallback) { sqlite3_finalize(s->stmt_profile_stats_insert_fallback); s->stmt_profile_stats_insert_fallback = NULL; }
     if (s->stmt_match_abort) { sqlite3_finalize(s->stmt_match_abort); s->stmt_match_abort = NULL; }
     if (s->stmt_leaderboard) { sqlite3_finalize(s->stmt_leaderboard); s->stmt_leaderboard = NULL; }
+    sqlite3_stmt **socialStatements[] = {
+        &s->stmt_friend_link_select, &s->stmt_friend_insert, &s->stmt_friend_accept,
+        &s->stmt_friend_reject, &s->stmt_friend_list, &s->stmt_profile_badges,
+        &s->stmt_profile_modes, &s->stmt_profile_history, &s->stmt_profile_update
+    };
+    for (size_t i = 0; i < sizeof socialStatements / sizeof socialStatements[0]; i++) {
+        /* sqlite3_finalize(NULL) is a no-op, so a partly prepared store is fine. */
+        sqlite3_finalize(*socialStatements[i]);
+        *socialStatements[i] = NULL;
+    }
 }
 
 /* Bump whenever EMBEDDED_SCHEMA_SQL changes in a way CREATE TABLE IF NOT EXISTS
  * cannot apply to an existing database file. Tracked in PRAGMA user_version.
  *   1: original schema (achievements as key/progress rows)
- *   2: profile_stats table + achievements(user_id, badge, unlocked_at, match_id) */
-#define STORE_SCHEMA_VERSION 2
+ *   2: profile_stats table + achievements(user_id, badge, unlocked_at, match_id)
+ *   3: matches.ended_at (finalize time, Unix seconds) for profile history */
+#define STORE_SCHEMA_VERSION 3
+#define STORE_SCHEMA_END_TIME_VERSION 3
 
 static int query_int(sqlite3 *db, const char *sql, int *out)
 {
@@ -239,6 +318,26 @@ static int query_int(sqlite3 *db, const char *sql, int *out)
     *out = (rc == SQLITE_ROW) ? sqlite3_column_int(stmt, 0) : 0;
     sqlite3_finalize(stmt);
     return (rc == SQLITE_ROW || rc == SQLITE_DONE) ? 0 : -1;
+}
+
+/* Additive only: a v2 file keeps every row. CREATE TABLE IF NOT EXISTS already
+ * gave new files the column, so only add it when it is missing. */
+static Status add_match_end_time(sqlite3 *db) {
+    int hasColumn = 0;
+    if (query_int(db, "SELECT count(*) FROM pragma_table_info('matches') WHERE name = 'ended_at';",
+                  &hasColumn) != 0) return STORAGE_ERROR;
+    if (!hasColumn &&
+        sqlite3_exec(db, "ALTER TABLE matches ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0;",
+                     NULL, NULL, NULL) != SQLITE_OK) return STORAGE_ERROR;
+
+    /* Matches finalized before v3 never recorded an end time; start plus
+     * played duration is the closest value the old rows can give. */
+    char sql[160];
+    snprintf(sql, sizeof(sql),
+             "UPDATE matches SET ended_at = created_at + duration_ms / %d "
+             "WHERE status = %d AND ended_at = 0;",
+             MS_PER_SECOND, (int)MATCH_FINALIZED);
+    return sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK ? OK : STORAGE_ERROR;
 }
 
 static Status migrate_schema(Store *s)
@@ -270,6 +369,8 @@ static Status migrate_schema(Store *s)
                          "SELECT id, MAX(elo, 1500) FROM accounts;",
                          NULL, NULL, NULL) != SQLITE_OK) goto fail;
     }
+
+    if (version < STORE_SCHEMA_END_TIME_VERSION && add_match_end_time(s->db) != OK) goto fail;
 
     if (version < STORE_SCHEMA_VERSION) {
         char sql[64];
@@ -692,7 +793,8 @@ Status store_finalize(Store *s, const MatchResult *result, const ProfileDelta de
     sqlite3_bind_int(stmt, 2, result->winnerSeat);
     sqlite3_bind_int(stmt, 3, result->winnerTeam);
     sqlite3_bind_int64(stmt, 4, (sqlite3_int64)result->durationMs);
-    sqlite3_bind_text(stmt, 5, mid, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 5, (sqlite3_int64)time(NULL));
+    sqlite3_bind_text(stmt, 6, mid, -1, SQLITE_STATIC);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         sqlite3_reset(stmt);
@@ -859,6 +961,217 @@ Status store_leaderboard(Store *s, LeaderboardEntry out[STORE_LEADERBOARD_MAX], 
 
     *count = rows;
     return OK;
+}
+
+static Status account_exists(Store *s, UserId id) {
+    Account account;
+    return store_account_get_by_id(s, id, &account);
+}
+
+static Status read_friend_link(Store *s, UserId first, UserId second, bool *linked) {
+    sqlite3_stmt *stmt = s->stmt_friend_link_select;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)first) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)second) == SQLITE_OK;
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) return STORAGE_ERROR;
+    *linked = rc == SQLITE_ROW;
+    return OK;
+}
+
+static Status insert_friend_request(Store *s, UserId from, UserId to) {
+    sqlite3_stmt *stmt = s->stmt_friend_insert;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)from) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)to) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 3, FRIEND_STATUS_PENDING) == SQLITE_OK;
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE ? OK : STORAGE_ERROR;
+}
+
+Status store_friend_request(Store *s, UserId from, UserId to) {
+    if (!s || from == to) return BAD_REQUEST;
+
+    /* The reverse-direction check and the insert must see the same state:
+     * otherwise two crossing requests could both pass and leave A->B and B->A. */
+    if (sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK) {
+        return STORAGE_ERROR;
+    }
+    Status status = account_exists(s, to);
+    if (status != OK) return rollback_with(s->db, status);
+
+    bool linked = false;
+    status = read_friend_link(s, from, to, &linked);
+    if (status != OK) return rollback_with(s->db, status);
+    if (linked) return rollback_with(s->db, INVALID_ACTION);
+
+    status = insert_friend_request(s, from, to);
+    if (status != OK) return rollback_with(s->db, status);
+
+    if (sqlite3_exec(s->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
+        return rollback_with(s->db, STORAGE_ERROR);
+    }
+    return OK;
+}
+
+Status store_friend_reply(Store *s, UserId me, UserId requester, bool accept) {
+    if (!s) return BAD_REQUEST;
+
+    /* One guarded statement per answer: no transaction is needed, and a row
+     * count of 0 means there was no pending requester -> me request. */
+    sqlite3_stmt *stmt = accept ? s->stmt_friend_accept : s->stmt_friend_reject;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound;
+    if (accept) {
+        bound = sqlite3_bind_int(stmt, 1, FRIEND_STATUS_ACCEPTED) == SQLITE_OK &&
+            sqlite3_bind_int64(stmt, 2, (sqlite3_int64)requester) == SQLITE_OK &&
+            sqlite3_bind_int64(stmt, 3, (sqlite3_int64)me) == SQLITE_OK &&
+            sqlite3_bind_int(stmt, 4, FRIEND_STATUS_PENDING) == SQLITE_OK;
+    } else {
+        bound = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)requester) == SQLITE_OK &&
+            sqlite3_bind_int64(stmt, 2, (sqlite3_int64)me) == SQLITE_OK &&
+            sqlite3_bind_int(stmt, 3, FRIEND_STATUS_PENDING) == SQLITE_OK;
+    }
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    if (rc != SQLITE_DONE) return STORAGE_ERROR;
+    return sqlite3_changes(s->db) == 1 ? OK : NOT_FOUND;
+}
+
+Status store_friend_list(Store *s, UserId me, FriendRow out[STORE_FRIEND_MAX], size_t *count) {
+    if (!s || !out || !count) return BAD_REQUEST;
+
+    sqlite3_stmt *stmt = s->stmt_friend_list;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)me) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 2, STORE_FRIEND_MAX) == SQLITE_OK;
+    if (!bound) return STORAGE_ERROR;
+
+    size_t rows = 0;
+    int rc = SQLITE_DONE;
+    while (rows < STORE_FRIEND_MAX && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        FriendRow *row = &out[rows++];
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        const char *avatar = (const char *)sqlite3_column_text(stmt, 2);
+        UserId sender = (UserId)sqlite3_column_int64(stmt, 4);
+        memset(row, 0, sizeof *row);
+        row->userId = (UserId)sqlite3_column_int64(stmt, 0);
+        snprintf(row->name, sizeof row->name, "%s", name ? name : "");
+        snprintf(row->avatar, sizeof row->avatar, "%s", avatar ? avatar : "");
+        row->elo = sqlite3_column_int(stmt, 3);
+        if (sqlite3_column_int(stmt, 5) == FRIEND_STATUS_ACCEPTED) {
+            row->link = FRIEND_ACCEPTED;
+        } else {
+            row->link = sender == me ? FRIEND_PENDING_OUT : FRIEND_PENDING_IN;
+        }
+    }
+    sqlite3_reset(stmt);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) return STORAGE_ERROR;
+
+    *count = rows;
+    return OK;
+}
+
+/* Binds ?1 user, ?2 MATCH_FINALIZED, ?3/?4 the team modes shared by the
+ * PROFILE_WON_SQL / PROFILE_MATCHES_SQL fragments. */
+static bool bind_profile_matches(sqlite3_stmt *stmt, UserId id) {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    return sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 2, MATCH_FINALIZED) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 3, TWO_V_TWO) == SQLITE_OK &&
+        sqlite3_bind_int(stmt, 4, SIDE) == SQLITE_OK;
+}
+
+static Status read_profile_badges(Store *s, UserId id, uint32_t *badges) {
+    sqlite3_stmt *stmt = s->stmt_profile_badges;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    if (sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id) != SQLITE_OK) return STORAGE_ERROR;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        *badges |= (uint32_t)sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE ? OK : STORAGE_ERROR;
+}
+
+static Status read_profile_modes(Store *s, UserId id, Profile *out) {
+    sqlite3_stmt *stmt = s->stmt_profile_modes;
+    if (!bind_profile_matches(stmt, id)) return STORAGE_ERROR;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int mode = sqlite3_column_int(stmt, 0);
+        /* A row from a mode this build does not know is skipped, not trusted. */
+        if (mode < 0 || mode >= STORE_MODE_COUNT) continue;
+        out->modes[mode].matches = (uint32_t)sqlite3_column_int64(stmt, 1);
+        out->modes[mode].wins = (uint32_t)sqlite3_column_int64(stmt, 2);
+    }
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE ? OK : STORAGE_ERROR;
+}
+
+static Status read_profile_history(Store *s, UserId id, Profile *out) {
+    sqlite3_stmt *stmt = s->stmt_profile_history;
+    if (!bind_profile_matches(stmt, id) ||
+        sqlite3_bind_int(stmt, 5, STORE_HISTORY_MAX) != SQLITE_OK) return STORAGE_ERROR;
+    int rc = SQLITE_DONE;
+    while (out->historyCount < STORE_HISTORY_MAX && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        HistoryRow *row = &out->history[out->historyCount++];
+        const char *matchId = (const char *)sqlite3_column_text(stmt, 0);
+        snprintf(row->matchId, sizeof row->matchId, "%s", matchId ? matchId : "");
+        row->mode = (Mode)sqlite3_column_int(stmt, 1);
+        row->won = sqlite3_column_int(stmt, 2) != 0;
+        row->eloDelta = sqlite3_column_int(stmt, 3);
+        row->endedAt = (int64_t)sqlite3_column_int64(stmt, 4);
+    }
+    sqlite3_reset(stmt);
+    return rc == SQLITE_DONE || rc == SQLITE_ROW ? OK : STORAGE_ERROR;
+}
+
+Status store_profile_get(Store *s, UserId id, Profile *out) {
+    if (!s || !out) return BAD_REQUEST;
+
+    Account account;
+    Status status = store_account_get_by_id(s, id, &account);
+    if (status != OK) return status;
+
+    /* Copy only the public fields: email and hash stay in the local Account. */
+    memset(out, 0, sizeof *out);
+    out->userId = account.id;
+    snprintf(out->name, sizeof out->name, "%s", account.name);
+    snprintf(out->avatar, sizeof out->avatar, "%s", account.avatar);
+    out->elo = account.elo;
+
+    status = store_profile_stats(s, id, &out->stats);
+    /* Every account gets a profile_stats row at creation or v2 migration;
+     * a missing one just means nothing has been recorded yet. */
+    if (status == NOT_FOUND) status = OK;
+    if (status == OK) status = read_profile_badges(s, id, &out->badges);
+    if (status == OK) status = read_profile_modes(s, id, out);
+    if (status == OK) status = read_profile_history(s, id, out);
+    return status;
+}
+
+Status store_profile_update(Store *s, UserId id, const char *name, const char *avatar) {
+    if (!s || !name || !avatar) return BAD_REQUEST;
+
+    sqlite3_stmt *stmt = s->stmt_profile_update;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bool bound = sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 2, avatar, -1, SQLITE_STATIC) == SQLITE_OK &&
+        sqlite3_bind_int64(stmt, 3, (sqlite3_int64)id) == SQLITE_OK;
+    int rc = bound ? sqlite3_step(stmt) : SQLITE_ERROR;
+    sqlite3_reset(stmt);
+    if (rc != SQLITE_DONE) return STORAGE_ERROR;
+    return sqlite3_changes(s->db) == 1 ? OK : NOT_FOUND;
 }
 
 Status store_export_match(Store *s, const MatchId *match_id, const char *path)
