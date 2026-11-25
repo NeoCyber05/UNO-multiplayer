@@ -5,6 +5,7 @@
 #include "match.h"
 #include "queue.h"
 #include "rooms.h"
+#include "social.h"
 #include "store.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -46,6 +47,31 @@ enum {
 static const char *const MATCH_COMMANDS[] = {
     "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "MATCH_LEAVE", "CHAT"
 };
+
+/* Opcodes routed to rooms_handle. */
+static const char *const ROOM_COMMANDS[] = {
+    "ROOM_CREATE", "ROOM_JOIN", "ROOM_LEAVE", "ROOM_BOT", "ROOM_KICK", "ROOM_MODE",
+    "ROOM_START", "INVITE_SEND", "INVITE_REPLY", "PARTY_LEAVE"
+};
+
+/* Opcodes routed to social_handle. */
+static const char *const SOCIAL_COMMANDS[] = {
+    "FRIEND_LIST", "FRIEND_REQUEST", "FRIEND_REPLY", "PROFILE_GET", "PROFILE_UPDATE",
+    "LEADERBOARD_GET", "LOBBY_GET"
+};
+
+enum {
+    /* Actor, their room's humans, their party and an inviter, before dedup. */
+    PRESENCE_WATCH_MAX = 1 + ROOM_MAX_SEATS + PARTY_MAX_MEMBERS + 1
+};
+
+/* Presence of everyone a command may move, taken before it runs, so only
+ * real changes reach friends. */
+typedef struct {
+    UserId users[PRESENCE_WATCH_MAX];
+    Presence before[PRESENCE_WATCH_MAX];
+    size_t count;
+} PresenceWatch;
 
 uint64_t app_now_ms(void) {
     struct timespec now;
@@ -132,22 +158,151 @@ static void app_match_push(void *context, UserId userId, const char *type,
     (void)app_push((App *)context, userId, type, payload);
 }
 
+static bool record_in_match(const App *app, const AppMatchRecord *record) {
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (matchesContains(app->matches, record->users[seat])) return true;
+    }
+    return false;
+}
+
+static void record_match(App *app, const RoomStart *rs) {
+    AppMatchRecord *slot = NULL;
+    for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
+        if (!app->match_records[index].active) slot = &app->match_records[index];
+    }
+    /* Safety net only: reuse a record whose match is already over. */
+    for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
+        if (!record_in_match(app, &app->match_records[index])) {
+            slot = &app->match_records[index];
+        }
+    }
+    if (!slot) return;
+    memset(slot, 0, sizeof *slot);
+    slot->active = true;
+    memcpy(slot->roomId, rs->roomId, sizeof slot->roomId);
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (!rs->players[seat].isBot) slot->users[seat] = rs->players[seat].userId;
+    }
+}
+
 static void app_match_ended(void *context, const char *roomId) {
+    App *app = (App *)context;
     /* The coordinator already cleared the match, so members can rejoin at once. */
-    rooms_match_ended((App *)context, roomId);
+    rooms_match_ended(app, roomId);
+    for (int index = 0; index < APP_MATCH_RECORDS; index++) {
+        AppMatchRecord *record = &app->match_records[index];
+        /* A record still holding a seated user belongs to another match whose
+         * room later reused the same code. */
+        if (!record->active || strcmp(record->roomId, roomId) != 0 ||
+            record_in_match(app, record)) {
+            continue;
+        }
+        record->active = false;
+        /* Shutdown aborts matches while closing slots; nobody is left to tell. */
+        if (!app->running) continue;
+        for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+            if (record->users[seat]) social_presence(app, record->users[seat]);
+        }
+    }
 }
 
 static Status app_on_match_start(App *app, const RoomStart *rs, MatchId *out) {
     if (!app || !app->matches) return BUSY;
-    return matchesStart(app->matches, rs, app_now_ms(), out);
+    Status started = matchesStart(app->matches, rs, app_now_ms(), out);
+    if (started != OK) return started;
+    record_match(app, rs);
+    /* Every in_match transition goes through here, room or queue alike. */
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (!rs->players[seat].isBot) social_presence(app, rs->players[seat].userId);
+    }
+    return OK;
+}
+
+static bool in_list(const char *type, const char *const list[], size_t count) {
+    for (size_t index = 0; index < count; index++) {
+        if (strcmp(type, list[index]) == 0) return true;
+    }
+    return false;
 }
 
 static bool is_match_command(const char *type) {
-    size_t commandCount = sizeof MATCH_COMMANDS / sizeof MATCH_COMMANDS[0];
-    for (size_t index = 0; index < commandCount; index++) {
-        if (strcmp(type, MATCH_COMMANDS[index]) == 0) return true;
+    return in_list(type, MATCH_COMMANDS, sizeof MATCH_COMMANDS / sizeof MATCH_COMMANDS[0]);
+}
+
+static bool is_room_command(const char *type) {
+    return in_list(type, ROOM_COMMANDS, sizeof ROOM_COMMANDS / sizeof ROOM_COMMANDS[0]);
+}
+
+static bool is_social_command(const char *type) {
+    return in_list(type, SOCIAL_COMMANDS, sizeof SOCIAL_COMMANDS / sizeof SOCIAL_COMMANDS[0]);
+}
+
+static void watch_add(App *app, PresenceWatch *watch, UserId user) {
+    if (user == 0 || watch->count >= PRESENCE_WATCH_MAX) return;
+    for (size_t index = 0; index < watch->count; index++) {
+        if (watch->users[index] == user) return;
     }
-    return false;
+    watch->users[watch->count] = user;
+    watch->before[watch->count] = social_presence_of(app, user);
+    watch->count++;
+}
+
+/* A room, party or queue command can only move the actor and the people
+ * sharing their room or party (a kick, a dissolved party, a party entry). */
+static void watch_begin(App *app, PresenceWatch *watch, UserId actor) {
+    memset(watch, 0, sizeof *watch);
+    watch_add(app, watch, actor);
+    const Room *room = rooms_find_by_user(app->rooms, actor);
+    for (int seat = 0; room && seat < ROOM_MAX_SEATS; seat++) {
+        if (room->seats[seat].occupied && !room->seats[seat].is_bot) {
+            watch_add(app, watch, room->seats[seat].user_id);
+        }
+    }
+    const Party *party = party_find_by_user(app->rooms, actor);
+    for (size_t member = 0; party && member < party->member_count; member++) {
+        watch_add(app, watch, party->members[member]);
+    }
+}
+
+/* Accepting a party invite also moves the inviter from idle to online. */
+static void watch_inviter(App *app, PresenceWatch *watch, const Envelope *e) {
+    json_object *idObj = NULL;
+    if (!e->payload || !json_object_object_get_ex(e->payload, "inviteId", &idObj) ||
+        !json_object_is_type(idObj, json_type_string)) {
+        return;
+    }
+    const char *inviteId = json_object_get_string(idObj);
+    for (int index = 0; index < MAX_INVITES; index++) {
+        const Invite *invite = &app->rooms->invites[index];
+        if (invite->active && strcmp(invite->invite_id, inviteId) == 0) {
+            watch_add(app, watch, invite->sender_id);
+            return;
+        }
+    }
+}
+
+static void watch_end(App *app, PresenceWatch *watch) {
+    for (size_t index = 0; index < watch->count; index++) {
+        Presence now = social_presence_of(app, watch->users[index]);
+        /* app_on_match_start already announced in_match; skip the duplicate. */
+        if (now != watch->before[index] && now != PRESENCE_IN_MATCH) {
+            social_presence(app, watch->users[index]);
+        }
+    }
+}
+
+/* Runs a room or queue command and tells friends about every presence it moved. */
+static Status dispatch_watched(App *app, ConnId conn, const Envelope *e, bool roomCommand) {
+    PresenceWatch watch;
+    UserId actor = 0;
+    memset(&watch, 0, sizeof watch);
+    if (app->rooms && sessions_user(app, conn, &actor) == OK && actor != 0) {
+        watch_begin(app, &watch, actor);
+        if (strcmp(e->type, "INVITE_REPLY") == 0) watch_inviter(app, &watch, e);
+    }
+    Status result = roomCommand ? rooms_handle(app, conn, e) : queue_handle(app, conn, e);
+    watch_end(app, &watch);
+    return result;
 }
 
 bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms)
@@ -174,7 +329,11 @@ void app_close_slot(App *app, int slot_idx)
     AppConnSlot *s = &app->slots[slot_idx];
     if (!s->active) return;
     UserId uid = 0;
+    PresenceWatch watch;
+    memset(&watch, 0, sizeof watch);
     if (sessions_user(app, (ConnId){(uint32_t)slot_idx, s->generation}, &uid) == OK && uid != 0) {
+        /* Shutdown closes every slot; nobody is left to hear about it. */
+        if (app->running) watch_begin(app, &watch, uid);
         uint64_t nowMs = app_now_ms();
         /* Mark the seat offline while the session still exists; the room keeps
          * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
@@ -194,6 +353,8 @@ void app_close_slot(App *app, int slot_idx)
     s->rate_tokens = 0.0;
     s->last_request_id = 0;
     s->last_frame_ms = 0;
+    /* After sessions_disconnect, so the user now reads as offline. */
+    watch_end(app, &watch);
 }
 
 static Status app_on_frame(const Envelope *e, void *ctx)
@@ -256,21 +417,16 @@ static Status app_on_frame(const Envelope *e, void *ctx)
         return accounts_handle(app, (ConnId){fc->slot_idx, fc->generation}, e);
     }
 
-    if (strcmp(e->type, "ROOM_CREATE") == 0 ||
-        strcmp(e->type, "ROOM_JOIN") == 0 ||
-        strcmp(e->type, "ROOM_LEAVE") == 0 ||
-        strcmp(e->type, "ROOM_BOT") == 0 ||
-        strcmp(e->type, "ROOM_KICK") == 0 ||
-        strcmp(e->type, "ROOM_MODE") == 0 ||
-        strcmp(e->type, "ROOM_START") == 0 ||
-        strcmp(e->type, "INVITE_SEND") == 0 ||
-        strcmp(e->type, "INVITE_REPLY") == 0 ||
-        strcmp(e->type, "PARTY_LEAVE") == 0) {
-        return rooms_handle(app, (ConnId){fc->slot_idx, fc->generation}, e);
+    if (is_room_command(e->type)) {
+        return dispatch_watched(app, conn, e, true);
     }
 
     if (strcmp(e->type, "QUEUE_JOIN") == 0 || strcmp(e->type, "QUEUE_LEAVE") == 0) {
-        return queue_handle(app, conn, e);
+        return dispatch_watched(app, conn, e, false);
+    }
+
+    if (is_social_command(e->type)) {
+        return social_handle(app, conn, e);
     }
 
     if (is_match_command(e->type)) {
@@ -390,6 +546,8 @@ void app_stop(App *app)
 void app_cleanup(App *app)
 {
     if (!app) return;
+    /* Read by app_close_slot: no presence pushes while everything closes. */
+    app->running = false;
     for (int i = 0; i < APP_MAX_CONNS; i++) {
         if (app->slots[i].active) {
             app_close_slot(app, i);

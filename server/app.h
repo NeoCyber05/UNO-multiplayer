@@ -1,14 +1,25 @@
 #ifndef UNO_APP_H
 #define UNO_APP_H
 
+#include "server/rooms.h"
 #include "shared/contracts.h"
 #include "shared/net.h"
 
 enum {
     APP_MAX_CONNS = 64,
     /* Spec: clients PING every 5 s; a connection silent for 15 s is dead. */
-    APP_DEFAULT_HEARTBEAT_MS = 15000
+    APP_DEFAULT_HEARTBEAT_MS = 15000,
+    /* Above the coordinator's 16 match slots, so a record is always free. */
+    APP_MATCH_RECORDS = 32
 };
+
+/* Humans seated in a running match. The end callback only carries the room id,
+ * so this is how the App knows whose presence to refresh afterwards. */
+typedef struct {
+    bool active;
+    char roomId[sizeof(((RoomStart *)0)->roomId)];
+    UserId users[ROOM_MAX_SEATS]; /* 0 for a bot seat */
+} AppMatchRecord;
 
 typedef struct {
     Conn conn;
@@ -43,6 +54,7 @@ struct App {
     Queue *queue;
     Matches *matches;
     int heartbeat_ms;
+    AppMatchRecord match_records[APP_MATCH_RECORDS];
 };
 
 Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_path, int auth_limit);

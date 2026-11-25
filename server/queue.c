@@ -327,6 +327,21 @@ void queue_user_gone(App *app, UserId u) {
     broadcast_mode(app, mode);
 }
 
+void queue_sync_user(App *app, UserId u) {
+    if (!app || !app->queue || u == 0) return;
+    for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
+        const ModeQueue *modeQueue = &app->queue->modes[mode];
+        for (size_t index = 0; index < modeQueue->count; index++) {
+            if (!entry_has(&modeQueue->entries[index], u)) continue;
+            /* Only the new socket needs it; the others already hold this revision. */
+            json_object *state = active_state_json(app, (Mode)mode);
+            (void)app_push(app, u, "QUEUE_STATE", state);
+            json_object_put(state);
+            return;
+        }
+    }
+}
+
 /* LOGOUT keeps the socket but drops the session; such users cannot play. */
 static UserId first_offline(App *app, const QueueEntry *entry) {
     for (size_t member = 0; member < entry->count; member++) {

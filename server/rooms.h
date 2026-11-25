@@ -149,6 +149,18 @@ void rooms_match_ended(App *app, const char *room_id);
  */
 void rooms_sync_user(App *app, UserId user_id);
 
+/**
+ * @brief Copy a renamed account's name and avatar into its waiting-room seat.
+ *
+ * A room still WAITING bumps its revision and broadcasts ROOM_STATE; a room
+ * whose match already started keeps the identity the match was created with.
+ * @param[in,out] app Server state; app->rooms owns the room table.
+ * @param[in] u Account that changed its profile; a user in no room is ignored.
+ * @param[in] name New display name, already validated.
+ * @param[in] avatar New avatar key, already validated.
+ */
+void rooms_update_identity(App *app, UserId u, const char *name, const char *avatar);
+
 /* Party operations */
 Party *party_find_by_user(Rooms *r, UserId user_id);
 Status party_leave(Rooms *r, UserId user_id);

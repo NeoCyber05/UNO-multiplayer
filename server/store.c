@@ -242,9 +242,12 @@ static Status prepare_statements(Store *s)
     const char *sql_f_rej = "DELETE FROM friends WHERE user_id = ?1 AND friend_id = ?2 AND status = ?3;";
     if (sqlite3_prepare_v2(s->db, sql_f_rej, -1, &s->stmt_friend_reject, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
+    /* Accepted (status 1) before pending (0): a flood of requests must not
+     * push real friends past the LIMIT. */
     const char *sql_f_list = "SELECT a.id, a.name, a.avatar, a.elo, f.user_id, f.status FROM friends f "
                              "JOIN accounts a ON a.id = CASE WHEN f.user_id = ?1 THEN f.friend_id ELSE f.user_id END "
-                             "WHERE f.user_id = ?1 OR f.friend_id = ?1 ORDER BY a.id ASC LIMIT ?2;";
+                             "WHERE f.user_id = ?1 OR f.friend_id = ?1 "
+                             "ORDER BY f.status DESC, a.id ASC LIMIT ?2;";
     if (sqlite3_prepare_v2(s->db, sql_f_list, -1, &s->stmt_friend_list, NULL) != SQLITE_OK) return STORAGE_ERROR;
 
     const char *sql_badges = "SELECT badge FROM achievements WHERE user_id = ?;";

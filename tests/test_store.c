@@ -1279,6 +1279,48 @@ static void test_friend_reply_accept_and_reject(void)
     cleanup_file(db_path);
 }
 
+enum { FRIEND_FLOOD_EXTRA = 6 };
+
+static void test_friend_list_accepted_before_pending(void)
+{
+    const char *db_path = "/tmp/test_uno_store_friend_flood.db";
+    cleanup_file(db_path);
+
+    Store *s = NULL;
+    assert(store_open(&s, db_path) == OK);
+    UserId me = createAccount(s, "me@test.com", "Me");
+    /* More pending requests than the list can hold, all from lower ids than
+     * the real friend, so ordering by id alone would push the friend out. */
+    size_t flood = STORE_FRIEND_MAX + FRIEND_FLOOD_EXTRA;
+    for (size_t i = 0; i < flood; i++) {
+        char email[64];
+        snprintf(email, sizeof(email), "spam%zu@test.com", i);
+        UserId spammer = createAccount(s, email, "Spam");
+        assert(store_friend_request(s, spammer, me) == OK);
+    }
+    UserId oldFriend = createAccount(s, "friend1@test.com", "Friend1");
+    UserId newFriend = createAccount(s, "friend2@test.com", "Friend2");
+    assert(store_friend_request(s, newFriend, me) == OK);
+    assert(store_friend_reply(s, me, newFriend, true) == OK);
+    assert(store_friend_request(s, me, oldFriend) == OK);
+    assert(store_friend_reply(s, oldFriend, me, true) == OK);
+
+    FriendRow rows[STORE_FRIEND_MAX];
+    size_t count = 0;
+    assert(store_friend_list(s, me, rows, &count) == OK);
+    assert(count == STORE_FRIEND_MAX);
+    /* Accepted rows come first, each group ordered by account id. */
+    assert(rows[0].userId == oldFriend && rows[0].link == FRIEND_ACCEPTED);
+    assert(rows[1].userId == newFriend && rows[1].link == FRIEND_ACCEPTED);
+    for (size_t i = 2; i < count; i++) {
+        assert(rows[i].link == FRIEND_PENDING_IN);
+        assert(i == 2 || rows[i].userId > rows[i - 1].userId);
+    }
+
+    store_close(s);
+    cleanup_file(db_path);
+}
+
 static void startHumanMatch(Store *s, const char *matchId, Mode mode,
                             const UserId humans[4])
 {
@@ -1551,6 +1593,7 @@ int main(void)
 {
     test_friend_request_rules();
     test_friend_reply_accept_and_reject();
+    test_friend_list_accepted_before_pending();
     test_profile_get_after_matches();
     test_profile_history_newest_twenty();
     test_profile_update_stores_text_verbatim();

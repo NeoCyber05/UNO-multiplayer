@@ -567,6 +567,23 @@ Status rooms_broadcast_state(App *app, const Room *room)
     return OK;
 }
 
+void rooms_update_identity(App *app, UserId u, const char *name, const char *avatar)
+{
+    if (!app || !app->rooms || u == 0 || !name || !avatar) return;
+    Room *room = rooms_find_by_user(app->rooms, u);
+    /* matchesStart already copied the seats; a live match keeps its own copy. */
+    if (!room || room->status != ROOM_STATUS_WAITING) return;
+    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
+        RoomSeat *seat = &room->seats[i];
+        if (!seat->occupied || seat->is_bot || seat->user_id != u) continue;
+        snprintf(seat->name, sizeof(seat->name), "%s", name);
+        snprintf(seat->avatar, sizeof(seat->avatar), "%s", avatar);
+        room->revision++;
+        rooms_broadcast_state(app, room);
+        return;
+    }
+}
+
 void rooms_match_ended(App *app, const char *room_id)
 {
     if (!app || !app->rooms || !room_id || room_id[0] == '\0') return;

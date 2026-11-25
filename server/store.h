@@ -104,9 +104,10 @@ Status store_friend_reply(Store *s, UserId me, UserId requester, bool accept);
  * @brief List every friend and pending request involving an account.
  * @param[in] s Open store.
  * @param[in] me Account whose links are listed.
- * @param[out] out Receives up to STORE_FRIEND_MAX rows ordered by user id,
- *                 each with the other account's public identity and the link
- *                 as seen from me.
+ * @param[out] out Receives up to STORE_FRIEND_MAX rows: accepted friends first,
+ *                 then pending requests, each group ordered by user id, so a
+ *                 flood of requests never hides a real friend. Each row has the
+ *                 other account's public identity and the link as seen from me.
  * @param[out] count Number of rows written to out.
  * @return OK on success (count may be 0); BAD_REQUEST for NULL arguments;
  *         STORAGE_ERROR when SQLite fails (count is left unchanged).

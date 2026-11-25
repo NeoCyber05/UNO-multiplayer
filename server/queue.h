@@ -110,6 +110,14 @@ Status queue_handle(App *app, ConnId conn, const Envelope *e);
 void queue_user_gone(App *app, UserId u);
 
 /**
+ * @brief Resend the user's QUEUE_STATE after LOGIN or RESUME bound a new socket.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] u Account that just bound a connection; a user who is not queued
+ *              gets nothing.
+ */
+void queue_sync_user(App *app, UserId u);
+
+/**
  * @brief Prune entries whose users went offline and retry modes whose start failed.
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] now_ms Monotonic time from app_now_ms.

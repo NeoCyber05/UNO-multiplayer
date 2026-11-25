@@ -2,6 +2,9 @@
 #include "accounts.h"
 #include "auth_worker.h"
 #include "match.h"
+#include "queue.h"
+#include "rooms.h"
+#include "social.h"
 #include "store.h"
 #include <ctype.h>
 #include <errno.h>
@@ -554,6 +557,11 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             /* After OK so the client sees the session before its GAME_STATE.
              * NOT_FOUND just means the user is not in a match. */
             (void)matchesConnected(app->matches, uid, true, app_now_ms());
+            /* Like LOGIN: the session moved to a socket that has seen no
+             * room, party or queue snapshot yet. */
+            rooms_sync_user(app, uid);
+            queue_sync_user(app, uid);
+            social_presence(app, uid);
         } else {
             accounts_send_error(app, conn_id.slot, e->id, "UNAUTHENTICATED", "Invalid or expired token");
         }
@@ -573,6 +581,8 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
         conn_queue(&slot->conn, &resp);
         json_object_put(payload);
         conn_flush(&slot->conn);
+        /* The session is gone, so friends now see this account offline. */
+        if (uid != 0) social_presence(app, uid);
         return OK;
     }
 
@@ -677,6 +687,9 @@ void auth_drain(App *app)
                 /* A re-login keeps room and party membership, but this socket has
                  * never seen their snapshots. */
                 rooms_sync_user(app, res.user_id);
+                queue_sync_user(app, res.user_id);
+                /* Also hands this socket its first FRIEND_STATE. */
+                social_presence(app, res.user_id);
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "UNAUTHENTICATED", "Invalid email or password");
             }
