@@ -3,6 +3,7 @@
 #include "accounts.h"
 #include "auth_worker.h"
 #include "match.h"
+#include "queue.h"
 #include "rooms.h"
 #include "store.h"
 #include <arpa/inet.h>
@@ -116,6 +117,15 @@ void app_reply_status(App *app, ConnId conn, int32_t id, Status st) {
     json_object_put(payload);
 }
 
+void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload) {
+    if (!app || !payload) return;
+    AppConnSlot *slot = live_slot(app, conn);
+    if (!slot) return;
+    Envelope reply = {1, id, "OK", payload};
+    /* A failed send already marked the conn closing; nothing else to undo. */
+    (void)send_envelope(slot, &reply);
+}
+
 static void app_match_push(void *context, UserId userId, const char *type,
                            json_object *payload) {
     /* An offline seat simply misses the push; RESUME resends the current view. */
@@ -170,6 +180,9 @@ void app_close_slot(App *app, int slot_idx)
          * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
          * NOT_FOUND just means the user is not in a match. */
         (void)matchesConnected(app->matches, uid, false, nowMs);
+        /* Before rooms_disconnect dissolves the party: a dropped member takes
+         * the whole party entry out of the queue and the partner is told. */
+        queue_user_gone(app, uid);
         rooms_disconnect(app, uid, nowMs);
     }
     sessions_disconnect(app, (ConnId){(uint32_t)slot_idx, s->generation});
@@ -256,6 +269,10 @@ static Status app_on_frame(const Envelope *e, void *ctx)
         return rooms_handle(app, (ConnId){fc->slot_idx, fc->generation}, e);
     }
 
+    if (strcmp(e->type, "QUEUE_JOIN") == 0 || strcmp(e->type, "QUEUE_LEAVE") == 0) {
+        return queue_handle(app, conn, e);
+    }
+
     if (is_match_command(e->type)) {
         UserId userId = 0;
         if (sessions_user(app, conn, &userId) != OK) {
@@ -299,6 +316,8 @@ Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_pat
 
     sessions_init(app);
     rooms_init(&app->rooms, app, app_on_match_start);
+    Status queueStatus = queue_init(&app->queue);
+    if (queueStatus != OK) return queueStatus;
 
     int pfd[2];
     if (pipe(pfd) == 0) {
@@ -392,6 +411,9 @@ void app_cleanup(App *app)
         close(app->auth_pipe_write);
         app->auth_pipe_write = -1;
     }
+    /* Every slot is closed above, so no disconnect can reach the queue any more. */
+    queue_destroy(app->queue);
+    app->queue = NULL;
     if (app->rooms) {
         rooms_destroy(app->rooms);
         app->rooms = NULL;
@@ -476,7 +498,10 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
 
     while (app->running && !g_stop_requested) {
         /* Turn deadlines and bot moves advance even when no socket is readable. */
-        matchesTick(app->matches, app_now_ms());
+        uint64_t tickMs = app_now_ms();
+        matchesTick(app->matches, tickMs);
+        /* Retries failed match starts and drops logged-out users from the queue. */
+        queue_tick(app, tickMs);
 
         pfd[0].fd = app->listen_fd;
         pfd[0].events = POLLIN;

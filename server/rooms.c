@@ -3,6 +3,7 @@
 #include "accounts.h"
 #include "app.h"
 #include "match.h"
+#include "queue.h"
 #include "store.h"
 #include <arpa/inet.h>
 #include <sodium.h>
@@ -20,8 +21,21 @@ static uint64_t get_now_ms(void)
 static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
 
 enum {
-    ID_TEXT_SIZE = 32 /* fits the decimal form of any 64-bit id */
+    ID_TEXT_SIZE = 32, /* fits the decimal form of any 64-bit id */
+    QUEUE_ROOM_PREFIX = 'Q',
+    ROOM_CODE_LENGTH = 6
 };
+
+/* "Q" + 5 digits is reserved for queue matches; a room with such a code would
+ * be freed by rooms_match_ended when the queue match of the same id ends. */
+static bool is_queue_room_id(const char *code)
+{
+    if (code[0] != QUEUE_ROOM_PREFIX) return false;
+    for (int i = 1; i < ROOM_CODE_LENGTH; i++) {
+        if (code[i] < '0' || code[i] > '9') return false;
+    }
+    return true;
+}
 
 static void send_error(App *app, ConnId conn_id, int32_t req_id, const char *code, const char *msg)
 {
@@ -75,8 +89,8 @@ void rooms_generate_code(Rooms *r, char out_code[7])
         }
         candidate[6] = '\0';
 
-        bool collision = false;
-        if (r) {
+        bool collision = is_queue_room_id(candidate);
+        if (r && !collision) {
             for (int i = 0; i < MAX_ROOMS; i++) {
                 if (r->rooms[i].active && r->rooms[i].code != out_code && strcmp(r->rooms[i].code, candidate) == 0) {
                     collision = true;
@@ -135,6 +149,14 @@ static bool reject_if_in_match(App *app, ConnId conn_id, int32_t req_id, UserId 
 {
     if (!matchesContains(app->matches, user_id)) return false;
     send_error(app, conn_id, req_id, "BUSY", "User is in a match");
+    return true;
+}
+
+/* Spec: a user waiting in matchmaking cannot also sit in a room or party. */
+static bool reject_if_queued(App *app, ConnId conn_id, int32_t req_id, UserId user_id)
+{
+    if (!queue_contains(app->queue, user_id)) return false;
+    send_error(app, conn_id, req_id, "BUSY", "User is in matchmaking");
     return true;
 }
 
@@ -453,31 +475,33 @@ void rooms_disconnect(App *app, UserId user_id, uint64_t now_ms_val)
 
 Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *out_match_id)
 {
-    if (!out_match_id) return BAD_REQUEST;
-    generate_uuid(*out_match_id);
+    if (!app || !app->rooms || !users || !out_match_id) return BAD_REQUEST;
+    Rooms *rooms = app->rooms;
+    if (!rooms->on_start) return BUSY;
+    if (!app->store) return STORAGE_ERROR;
 
-    PlayerSpec players[4];
-    memset(players, 0, sizeof(players));
-    for (int i = 0; i < 4; i++) {
-        players[i].userId = users[i];
-        players[i].isBot = (users[i] == 0);
-        if (users[i] != 0 && app && app->store) {
-            Account acc;
-            if (store_account_get_by_id(app->store, users[i], &acc) == OK) {
-                strncpy(players[i].name, acc.name, sizeof(players[i].name) - 1);
-                strncpy(players[i].avatar, acc.avatar, sizeof(players[i].avatar) - 1);
-            }
-        }
-        if (players[i].name[0] == '\0') {
-            snprintf(players[i].name, sizeof(players[i].name), "Player%llu", (unsigned long long)users[i]);
-            strcpy(players[i].avatar, "fox");
-        }
+    RoomStart roomStart;
+    memset(&roomStart, 0, sizeof(roomStart));
+    unsigned serial = (unsigned)(rooms->next_queue_room % QUEUE_ROOM_SERIAL_LIMIT);
+    snprintf(roomStart.roomId, sizeof(roomStart.roomId), "%c%05u", QUEUE_ROOM_PREFIX, serial);
+    roomStart.mode = mode;
+    /* Spec: only matchmaking with four humans is ranked; no bot ever fills a seat. */
+    roomStart.ranked = true;
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (users[seat] == 0) return BAD_REQUEST;
+        Account account;
+        Status lookup = store_account_get_by_id(app->store, users[seat], &account);
+        if (lookup != OK) return lookup;
+        PlayerSpec *player = &roomStart.players[seat];
+        player->userId = users[seat];
+        strncpy(player->name, account.name, sizeof(player->name) - 1);
+        strncpy(player->avatar, account.avatar, sizeof(player->avatar) - 1);
     }
 
-    if (app && app->store) {
-        return store_match_start(app->store, (const MatchId *)out_match_id, players, mode, false);
-    }
-    return OK;
+    /* The coordinator persists the match and pushes GAME_STATE itself. */
+    Status started = rooms->on_start(app, &roomStart, out_match_id);
+    if (started == OK) rooms->next_queue_room++;
+    return started;
 }
 
 /* Wire ids are decimal strings so 64-bit ids survive JSON number precision. */
@@ -710,6 +734,7 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
 
     if (strcmp(e->type, "ROOM_CREATE") == 0) {
         if (reject_if_in_match(app, conn_id, e->id, user_id)) return OK;
+        if (reject_if_queued(app, conn_id, e->id, user_id)) return OK;
         Mode mode = CLASSIC;
         struct json_object *m_obj = NULL;
         if (e->payload && json_object_object_get_ex(e->payload, "mode", &m_obj)) {
@@ -750,6 +775,7 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
             return OK;
         }
         if (reject_if_in_match(app, conn_id, e->id, user_id)) return OK;
+        if (reject_if_queued(app, conn_id, e->id, user_id)) return OK;
         const char *code = json_object_get_string(c_obj);
         Seat seat = 0;
         Status st = rooms_join(r, user_id, acc.name, acc.avatar, code, &seat);
@@ -1114,6 +1140,13 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
 
         /* Accept invite; the invite stays pending so it can be accepted after the match. */
         if (reject_if_in_match(app, conn_id, e->id, user_id)) return OK;
+        if (reject_if_queued(app, conn_id, e->id, user_id)) return OK;
+        /* A party entry always holds both members, so a solo-queued inviter
+         * cannot gain a partner either. */
+        if (strcasecmp(inv->kind, "party") == 0 && queue_contains(app->queue, inv->sender_id)) {
+            send_error(app, conn_id, e->id, "BUSY", "Inviter is in matchmaking");
+            return OK;
+        }
         if (strcasecmp(inv->kind, "room") == 0) {
             if (rooms_find_by_user(r, user_id) != NULL) {
                 send_error(app, conn_id, e->id, "BUSY", "Already in a room");
@@ -1201,6 +1234,8 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e)
     }
 
     if (strcmp(e->type, "PARTY_LEAVE") == 0) {
+        /* The queued party entry cannot outlive the party; a solo entry stays. */
+        if (party_find_by_user(r, user_id)) queue_user_gone(app, user_id);
         party_leave(r, user_id);
         send_ok(app, conn_id, e->id, NULL);
         return OK;

@@ -40,6 +40,7 @@ struct App {
     Sessions *sessions;
     RateLimiter *rate_limiter;
     Rooms *rooms;
+    Queue *queue;
     Matches *matches;
     int heartbeat_ms;
 };
@@ -86,5 +87,14 @@ Status app_push(App *app, UserId user, const char *type, json_object *payload);
  * @param[in] st OK sends an empty OK; any other value sends ERROR with status_code(st).
  */
 void app_reply_status(App *app, ConnId conn, int32_t id, Status st);
+
+/**
+ * @brief Answer a request with OK and a result object.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] conn Connection that sent the request; ignored if already closed.
+ * @param[in] id Request id echoed back to the client.
+ * @param[in] payload JSON object borrowed for the call; ownership stays with the caller.
+ */
+void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload);
 
 #endif
