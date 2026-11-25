@@ -1,4 +1,4 @@
-#include "server/view.h"
+#include "server/game/view.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

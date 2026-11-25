@@ -1,7 +1,7 @@
 #ifndef UNO_VIEW_H
 #define UNO_VIEW_H
 
-#include "game.h"
+#include "server/game/game.h"
 #include <json-c/json.h>
 
 typedef struct {

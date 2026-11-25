@@ -1,9 +1,9 @@
 #include "match.h"
 
-#include "bot.h"
-#include "profile.h"
-#include "rating.h"
-#include "store.h"
+#include "server/game/bot.h"
+#include "server/game/profile.h"
+#include "server/rating.h"
+#include "server/store.h"
 
 #include <inttypes.h>
 #include <sodium.h>

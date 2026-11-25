@@ -1,6 +1,6 @@
-#include "server/match.h"
-#include "server/game.h"
-#include "server/profile.h"
+#include "server/game/match.h"
+#include "server/game/game.h"
+#include "server/game/profile.h"
 #include "server/store.h"
 
 #include <assert.h>

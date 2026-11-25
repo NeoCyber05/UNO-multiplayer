@@ -2,7 +2,7 @@
 #include "rooms.h"
 #include "accounts.h"
 #include "app.h"
-#include "match.h"
+#include "server/game/match.h"
 #include "queue.h"
 #include "store.h"
 #include <arpa/inet.h>

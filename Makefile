@@ -11,14 +11,18 @@ CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread -lm
 
 shared := $(wildcard shared/*.c)
-modules := $(filter-out server/main.c,$(wildcard server/*.c))
+server_dirs := server server/game
+modules := $(filter-out server/main.c,$(wildcard $(addsuffix /*.c,$(server_dirs))))
 desktop_modules := $(filter-out desktop/main.c,$(wildcard desktop/*.c))
-headers := $(wildcard shared/*.h server/*.h desktop/*.h)
+headers := $(wildcard shared/*.h $(addsuffix /*.h,$(server_dirs)) desktop/*.h)
 ifeq ($(origin NAME),environment)
 NAME :=
 endif
 gtk_test_names := bridge
-test_names := $(patsubst tests/test_%.c,%,$(wildcard tests/test_*.c))
+test_dirs := tests tests/unit
+test_sources := $(wildcard $(addsuffix /test_*.c,$(test_dirs)))
+test_names := $(patsubst test_%.c,%,$(notdir $(test_sources)))
+vpath test_%.c $(test_dirs)
 ifneq ($(HAVE_GTK),1)
 test_names := $(filter-out $(gtk_test_names),$(test_names))
 endif
@@ -45,7 +49,7 @@ $(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(h
 $(BUILD)/tests/test_net: desktop/tcp_client.c
 $(BUILD)/tests/test_net_session: desktop/net_session.c
 
-$(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(headers) Makefile
+$(BUILD)/tests/test_%: test_%.c $(shared) $(modules) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) -o $@
 

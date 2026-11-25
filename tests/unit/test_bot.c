@@ -1,4 +1,4 @@
-#include "server/bot.h"
+#include "server/game/bot.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

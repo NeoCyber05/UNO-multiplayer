@@ -1,7 +1,7 @@
 #ifndef UNO_BOT_H
 #define UNO_BOT_H
 
-#include "view.h"
+#include "server/game/view.h"
 
 /**
  * @brief Choose an action using only the bot seat's view.

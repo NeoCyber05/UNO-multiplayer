@@ -1,4 +1,4 @@
-#include "server/profile.h"
+#include "server/game/profile.h"
 #include "server/store.h"
 
 #include <assert.h>

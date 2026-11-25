@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "accounts.h"
 #include "auth_worker.h"
-#include "match.h"
+#include "server/game/match.h"
 #include "queue.h"
 #include "rooms.h"
 #include "social.h"
