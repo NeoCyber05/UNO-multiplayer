@@ -79,7 +79,7 @@ Status gameInit(Game *game, Mode mode, const PlayerSpec players[SEAT_COUNT], uin
 /**
  * @brief Apply one validated move to the caller's candidate game.
  * @param[in,out] game Candidate state. The coordinator owns persistence and publication.
- * @param[in] actor Authenticated seat bound by the coordinator.
+ * @param[in] actor Seat taking the move, whether controlled by a human or a bot.
  * @param[in] intent Move and the turn or draft pick it applies to.
  * @param[out] out Receives the events produced by the move.
  * @return OK on success or a status describing the rejected move.

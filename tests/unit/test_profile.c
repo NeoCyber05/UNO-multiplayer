@@ -43,7 +43,7 @@ int main(void) {
     assert(profileCompute(store, &result, deltas) == OK);
     assert(deltas[0].streak == -1 && deltas[0].add.wins == 0);
 
-    // A bot seat (no account) counts the match but awards no win, streak or badge.
+    // The 500th match still earns the participation badge when a bot seat is present.
     result.players[0].left = false;
     result.players[3].userId = 0;
     assert(profileCompute(store, &result, deltas) == OK);

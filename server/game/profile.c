@@ -36,7 +36,7 @@ Status profileCompute(Store *store, const MatchResult *result,
     if (!store || !result || !out || result->status == MATCH_ACTIVE) return BAD_REQUEST;
     ProfileDelta deltas[PROFILE_SEAT_COUNT] = {0};
     bool teamMode = result->mode == TWO_V_TWO || result->mode == SIDE;
-    // Bot seats have no account; wins against bots must not farm streak or badges.
+    // Bot matches count toward participation. Competitive awards require human opponents.
     bool vsBots = false;
     for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
         if (!result->players[seat].userId) vsBots = true;
