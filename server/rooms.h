@@ -57,6 +57,7 @@ typedef struct {
     UserId recipient_id;
     char kind[16]; /* "room" or "party" */
     char room_code[7];
+    Mode mode; /* party invites only: mode the new party queues for */
     uint64_t created_at_ms;
 } Invite;
 
@@ -112,6 +113,25 @@ Status rooms_handle(App *app, ConnId conn_id, const Envelope *e);
 
 /* Broadcast */
 Status rooms_broadcast_state(App *app, const Room *room);
+
+/**
+ * @brief Release a room once its match is finalized so members may play again.
+ * @param[in,out] app Server state; app->rooms owns the room table.
+ * @param[in] room_id Room code carried by the finished match; an empty or unknown
+ *            code (e.g. a queue match or a room every human already left) is ignored,
+ *            as is a room not in ROOM_STATUS_IN_MATCH.
+ */
+void rooms_match_ended(App *app, const char *room_id);
+
+/**
+ * @brief Push the user's current ROOM_STATE and PARTY_STATE to their live connection.
+ *
+ * Used after LOGIN: a re-login moves the session to a new socket without leaving
+ * the room or party, and that socket has not seen any snapshot yet.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] user_id Account that just bound a connection.
+ */
+void rooms_sync_user(App *app, UserId user_id);
 
 /* Party operations */
 Party *party_find_by_user(Rooms *r, UserId user_id);

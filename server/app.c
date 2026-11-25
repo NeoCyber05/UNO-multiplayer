@@ -123,9 +123,8 @@ static void app_match_push(void *context, UserId userId, const char *type,
 }
 
 static void app_match_ended(void *context, const char *roomId) {
-    /* Task 2 releases the room here via rooms_match_ended(context, roomId). */
-    (void)context;
-    (void)roomId;
+    /* The coordinator already cleared the match, so members can rejoin at once. */
+    rooms_match_ended((App *)context, roomId);
 }
 
 static Status app_on_match_start(App *app, const RoomStart *rs, MatchId *out) {

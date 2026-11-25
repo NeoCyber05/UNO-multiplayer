@@ -674,6 +674,9 @@ void auth_drain(App *app)
                  * the coordinator still sends this connection a fresh view.
                  * NOT_FOUND just means the user is not in a match. */
                 (void)matchesConnected(app->matches, res.user_id, true, app_now_ms());
+                /* A re-login keeps room and party membership, but this socket has
+                 * never seen their snapshots. */
+                rooms_sync_user(app, res.user_id);
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "UNAUTHENTICATED", "Invalid email or password");
             }
