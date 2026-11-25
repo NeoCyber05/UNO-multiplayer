@@ -43,6 +43,7 @@ $(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(h
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
 $(BUILD)/tests/test_net: desktop/tcp_client.c
+$(BUILD)/tests/test_net_session: desktop/net_session.c
 
 $(BUILD)/tests/test_%: tests/test_%.c $(shared) $(modules) $(headers) Makefile
 	mkdir -p $(@D)
