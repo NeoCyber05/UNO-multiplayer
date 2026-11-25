@@ -140,12 +140,20 @@ static void test_fixtures(void)
     json_object_put(rows);
 }
 
+static void test_status_code(void) {
+    assert(strcmp(status_code(OK), "OK") == 0);
+    assert(strcmp(status_code(STALE_REQUEST), "STALE_REQUEST") == 0);
+    assert(strcmp(status_code(SERVER_FULL), "SERVER_FULL") == 0);
+    assert(strcmp(status_code((Status)99), "BAD_REQUEST") == 0);
+}
+
 int main(void)
 {
     test_fragmented_and_coalesced();
     test_frame_limits();
     test_invalid_json();
     test_fixtures();
+    test_status_code();
     puts("protocol: OK");
     return 0;
 }

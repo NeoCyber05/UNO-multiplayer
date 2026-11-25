@@ -176,3 +176,18 @@ done:
     json_object_put(root);
     return s;
 }
+
+/* Indexed by Status; the static assert keeps it in step with contracts.h. */
+static const char *const STATUS_NAMES[] = {
+    "OK", "BAD_REQUEST", "UNAUTHENTICATED", "FORBIDDEN", "BUSY", "NOT_FOUND",
+    "ROOM_FULL", "INVALID_ACTION", "NOT_YOUR_TURN", "STALE_TURN",
+    "STALE_REQUEST", "RATE_LIMITED", "STORAGE_ERROR", "SERVER_FULL"
+};
+_Static_assert(sizeof STATUS_NAMES / sizeof STATUS_NAMES[0] == SERVER_FULL + 1,
+               "STATUS_NAMES must list every Status in enum order");
+
+const char *status_code(Status status) {
+    size_t statusCount = sizeof STATUS_NAMES / sizeof STATUS_NAMES[0];
+    if ((size_t)status >= statusCount) return "BAD_REQUEST";
+    return STATUS_NAMES[status];
+}

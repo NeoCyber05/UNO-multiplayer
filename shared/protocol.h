@@ -24,4 +24,13 @@ void frame_reader_reset(FrameReader *r);
 Status frame_feed(FrameReader *r, const uint8_t *data, size_t len, FrameCallback cb, void *ctx);
 Status frame_encode(const Envelope *e, uint8_t *out, size_t cap, size_t *written);
 
+/**
+ * @brief Map a Status to the wire error code string used in ERROR payloads.
+ * @param[in] status Any Status value, including ones outside the enum.
+ * @return A static string equal to the enum name (OK -> "OK",
+ *         STALE_REQUEST -> "STALE_REQUEST", ...). A value outside the enum
+ *         returns "BAD_REQUEST" so a corrupted status never leaks to the wire.
+ */
+const char *status_code(Status status);
+
 #endif

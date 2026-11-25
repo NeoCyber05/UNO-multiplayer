@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "accounts.h"
 #include "auth_worker.h"
+#include "match.h"
 #include "store.h"
 #include <ctype.h>
 #include <errno.h>
@@ -529,8 +530,9 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             memset(&acc, 0, sizeof(acc));
             store_account_get_by_id(app->store, uid, &acc);
 
+            /* The client already holds the token it just sent; echoing it adds
+             * nothing and only widens where the secret appears on the wire. */
             struct json_object *payload = json_object_new_object();
-            json_object_object_add(payload, "token", json_object_new_string(token));
 
             struct json_object *me = json_object_new_object();
             char uid_str[32], tag_str[32];
@@ -548,6 +550,9 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
             conn_queue(&slot->conn, &resp);
             json_object_put(payload);
             conn_flush(&slot->conn);
+
+            /* After OK so the client sees the session before its GAME_STATE. */
+            matchesConnected(app->matches, uid, true, app_now_ms());
         } else {
             accounts_send_error(app, conn_id.slot, e->id, "UNAUTHENTICATED", "Invalid or expired token");
         }
@@ -555,6 +560,11 @@ Status accounts_handle(App *app, ConnId conn_id, const Envelope *e)
     }
 
     if (strcmp(e->type, "LOGOUT") == 0) {
+        UserId uid = 0;
+        /* Presence must change while the session still maps conn -> user. */
+        if (sessions_user(app, conn_id, &uid) == OK && uid != 0) {
+            matchesConnected(app->matches, uid, false, app_now_ms());
+        }
         sessions_logout(app, conn_id);
         struct json_object *payload = json_object_new_object();
         Envelope resp = {1, e->id, "OK", payload};
@@ -652,6 +662,9 @@ void auth_drain(App *app)
                 conn_queue(&slot->conn, &resp);
                 json_object_put(payload);
                 conn_flush(&slot->conn);
+
+                /* A re-login reclaims the seat; the old socket was closed above. */
+                matchesConnected(app->matches, res.user_id, true, app_now_ms());
             } else {
                 accounts_send_error(app, slot_idx, res.req_id, "UNAUTHENTICATED", "Invalid email or password");
             }

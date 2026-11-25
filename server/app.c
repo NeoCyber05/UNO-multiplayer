@@ -2,6 +2,7 @@
 #include "app.h"
 #include "accounts.h"
 #include "auth_worker.h"
+#include "match.h"
 #include "rooms.h"
 #include "store.h"
 #include <arpa/inet.h>
@@ -35,11 +36,109 @@ typedef struct {
     uint32_t generation;
 } FrameContext;
 
-static uint64_t get_monotonic_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+enum {
+    MS_PER_SECOND = 1000,
+    NS_PER_MS = 1000000
+};
+
+/* Opcodes routed to the match coordinator; the actor always comes from the session. */
+static const char *const MATCH_COMMANDS[] = {
+    "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "MATCH_LEAVE", "CHAT"
+};
+
+uint64_t app_now_ms(void) {
+    struct timespec now;
+    /* CLOCK_MONOTONIC cannot fail on Linux; 0 keeps callers defined if it ever does. */
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * MS_PER_SECOND + (uint64_t)(now.tv_nsec / NS_PER_MS);
+}
+
+static const char *status_message(Status status) {
+    switch (status) {
+    case BAD_REQUEST: return "Malformed or unsupported request";
+    case UNAUTHENTICATED: return "Authentication required";
+    case FORBIDDEN: return "Not allowed";
+    case BUSY: return "Resource busy";
+    case NOT_FOUND: return "Not found";
+    case ROOM_FULL: return "Room is full";
+    case INVALID_ACTION: return "Action not allowed now";
+    case NOT_YOUR_TURN: return "Not your turn";
+    case STALE_TURN: return "Turn already advanced";
+    case STALE_REQUEST: return "Request id must increase";
+    case RATE_LIMITED: return "Too many requests";
+    case STORAGE_ERROR: return "Storage unavailable";
+    case SERVER_FULL: return "Server is full";
+    default: return "Request failed";
+    }
+}
+
+/* Returns the slot only while conn still names the same accepted socket. */
+static AppConnSlot *live_slot(App *app, ConnId conn) {
+    if (conn.slot >= APP_MAX_CONNS) return NULL;
+    AppConnSlot *slot = &app->slots[conn.slot];
+    if (!slot->active || slot->generation != conn.generation) return NULL;
+    return slot;
+}
+
+/* Queue then flush immediately; a failed flush marks the conn closing and the
+ * poll loop tears it down, so callers never close a slot mid-dispatch. */
+static Status send_envelope(AppConnSlot *slot, const Envelope *envelope) {
+    Status queued = conn_queue(&slot->conn, envelope);
+    if (queued != OK) return queued;
+    return conn_flush(&slot->conn);
+}
+
+Status app_push(App *app, UserId user, const char *type, json_object *payload) {
+    if (!app || !user || !type || !payload) return BAD_REQUEST;
+    ConnId conn;
+    if (sessions_find_conn(app, user, &conn) != OK) return NOT_FOUND;
+    AppConnSlot *slot = live_slot(app, conn);
+    if (!slot) return NOT_FOUND;
+    /* Protocol: pushes carry id 0 so clients never match them to a request. */
+    Envelope push = {1, 0, type, payload};
+    return send_envelope(slot, &push);
+}
+
+void app_reply_status(App *app, ConnId conn, int32_t id, Status st) {
+    if (!app) return;
+    AppConnSlot *slot = live_slot(app, conn);
+    if (!slot) return;
+    json_object *payload = json_object_new_object();
+    if (!payload) return;
+    if (st != OK) {
+        json_object_object_add(payload, "code", json_object_new_string(status_code(st)));
+        json_object_object_add(payload, "message",
+                               json_object_new_string(status_message(st)));
+    }
+    Envelope reply = {1, id, st == OK ? "OK" : "ERROR", payload};
+    /* A failed send already marked the conn closing; nothing else to undo. */
+    (void)send_envelope(slot, &reply);
+    json_object_put(payload);
+}
+
+static void app_match_push(void *context, UserId userId, const char *type,
+                           json_object *payload) {
+    /* An offline seat simply misses the push; RESUME resends the current view. */
+    (void)app_push((App *)context, userId, type, payload);
+}
+
+static void app_match_ended(void *context, const char *roomId) {
+    /* Task 2 releases the room here via rooms_match_ended(context, roomId). */
+    (void)context;
+    (void)roomId;
+}
+
+static Status app_on_match_start(App *app, const RoomStart *rs, MatchId *out) {
+    if (!app || !app->matches) return BUSY;
+    return matchesStart(app->matches, rs, app_now_ms(), out);
+}
+
+static bool is_match_command(const char *type) {
+    size_t commandCount = sizeof MATCH_COMMANDS / sizeof MATCH_COMMANDS[0];
+    for (size_t index = 0; index < commandCount; index++) {
+        if (strcmp(type, MATCH_COMMANDS[index]) == 0) return true;
+    }
+    return false;
 }
 
 bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms)
@@ -67,10 +166,11 @@ void app_close_slot(App *app, int slot_idx)
     if (!s->active) return;
     UserId uid = 0;
     if (sessions_user(app, (ConnId){(uint32_t)slot_idx, s->generation}, &uid) == OK && uid != 0) {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
-        rooms_disconnect(app, uid, now_ms);
+        uint64_t nowMs = app_now_ms();
+        /* Mark the seat offline while the session still exists; the room keeps
+         * an in-match member so the seat can be reclaimed by RESUME or LOGIN. */
+        matchesConnected(app->matches, uid, false, nowMs);
+        rooms_disconnect(app, uid, nowMs);
     }
     sessions_disconnect(app, (ConnId){(uint32_t)slot_idx, s->generation});
     conn_close(&s->conn);
@@ -79,6 +179,8 @@ void app_close_slot(App *app, int slot_idx)
     s->client_ip[0] = '\0';
     s->rate_last_ms = 0;
     s->rate_tokens = 0.0;
+    s->last_request_id = 0;
+    s->last_frame_ms = 0;
 }
 
 static Status app_on_frame(const Envelope *e, void *ctx)
@@ -91,17 +193,24 @@ static Status app_on_frame(const Envelope *e, void *ctx)
         return BAD_REQUEST;
     }
 
-    uint64_t now_ms = get_monotonic_ms();
-    if (!app_conn_check_rate_limit(slot, now_ms)) {
-        struct json_object *payload = json_object_new_object();
-        json_object_object_add(payload, "code", json_object_new_string("RATE_LIMITED"));
-        json_object_object_add(payload, "message", json_object_new_string("Too many requests"));
-        Envelope resp = {1, e->id, "ERROR", payload};
-        conn_queue(&slot->conn, &resp);
-        json_object_put(payload);
-        conn_flush(&slot->conn);
+    ConnId conn = {fc->slot_idx, fc->generation};
+    uint64_t nowMs = app_now_ms();
+    if (!app_conn_check_rate_limit(slot, nowMs)) {
+        app_reply_status(app, conn, e->id, RATE_LIMITED);
         return OK;
     }
+
+    /* Spec: ids strictly increase per connection; a replayed or reordered id
+     * is answered without re-running the command. */
+    if (e->id <= slot->last_request_id) {
+        app_reply_status(app, conn, e->id, STALE_REQUEST);
+        return OK;
+    }
+    slot->last_request_id = e->id;
+    slot->last_frame_ms = nowMs;
+
+    /* Resolve due deadlines first so no command acts on an already expired turn. */
+    matchesTick(app->matches, nowMs);
 
     if (strcmp(e->type, "HELLO") == 0) {
         struct timespec ts;
@@ -147,12 +256,22 @@ static Status app_on_frame(const Envelope *e, void *ctx)
         return rooms_handle(app, (ConnId){fc->slot_idx, fc->generation}, e);
     }
 
-    struct json_object *payload = json_object_new_object();
-    Envelope resp = {1, e->id, "BAD_REQUEST", payload};
-    Status s = conn_queue(&slot->conn, &resp);
-    json_object_put(payload);
-    if (s != OK) return s;
-    return conn_flush(&slot->conn);
+    if (is_match_command(e->type)) {
+        UserId userId = 0;
+        if (sessions_user(app, conn, &userId) != OK) {
+            app_reply_status(app, conn, e->id, UNAUTHENTICATED);
+            return OK;
+        }
+        /* GAME_STATE pushes go out inside matchesHandle; the reply follows them. */
+        Status result = matchesHandle(app->matches, userId, e, nowMs);
+        app_reply_status(app, conn, e->id, result);
+        return OK;
+    }
+
+    /* Unknown opcodes, including server-only events such as TIMEOUT or
+     * UNO_PENALTY, are rejected but keep the connection open. */
+    app_reply_status(app, conn, e->id, BAD_REQUEST);
+    return OK;
 }
 
 Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_path, int auth_limit)
@@ -164,6 +283,7 @@ Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_pat
     app->auth_pipe_write = -1;
     app->running = false;
     app->auth_limit = auth_limit;
+    app->heartbeat_ms = APP_DEFAULT_HEARTBEAT_MS;
 
     if (bind_ip) {
         strncpy(app->bind_ip, bind_ip, sizeof(app->bind_ip) - 1);
@@ -178,7 +298,7 @@ Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_pat
     }
 
     sessions_init(app);
-    rooms_init(&app->rooms, app, NULL);
+    rooms_init(&app->rooms, app, app_on_match_start);
 
     int pfd[2];
     if (pipe(pfd) == 0) {
@@ -277,6 +397,9 @@ void app_cleanup(App *app)
         app->rooms = NULL;
     }
     sessions_cleanup(app);
+    /* The coordinator borrows the store, so it must go first. */
+    matchesDestroy(app->matches);
+    app->matches = NULL;
     if (app->store) {
         store_close(app->store);
         app->store = NULL;
@@ -284,7 +407,34 @@ void app_cleanup(App *app)
     app->running = false;
 }
 
-int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_limit)
+/* Tell every authenticated client the server is going away before sockets close. */
+static void app_announce_shutdown(App *app) {
+    json_object *payload = json_object_new_object();
+    if (!payload) return;
+    for (int index = 0; index < APP_MAX_CONNS; index++) {
+        AppConnSlot *slot = &app->slots[index];
+        UserId userId = 0;
+        if (!slot->active) continue;
+        ConnId conn = {(uint32_t)index, slot->generation};
+        if (sessions_user(app, conn, &userId) == OK && userId != 0) {
+            (void)app_push(app, userId, "SERVER_SHUTDOWN", payload);
+        }
+    }
+    json_object_put(payload);
+}
+
+/* Close connections with no accepted frame within the heartbeat window. */
+static void app_sweep_idle(App *app, uint64_t nowMs) {
+    uint64_t limitMs = (uint64_t)app->heartbeat_ms;
+    for (int index = 0; index < APP_MAX_CONNS; index++) {
+        AppConnSlot *slot = &app->slots[index];
+        if (!slot->active || nowMs < slot->last_frame_ms) continue;
+        if (nowMs - slot->last_frame_ms >= limitMs) app_close_slot(app, index);
+    }
+}
+
+int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_limit,
+            int heartbeat_ms)
 {
     App *app = calloc(1, sizeof(App));
     if (!app) {
@@ -298,6 +448,7 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
         free(app);
         return 1;
     }
+    if (heartbeat_ms > 0) app->heartbeat_ms = heartbeat_ms;
 
     if (!app->store) {
         s = store_open(&app->store, app->db_path);
@@ -309,6 +460,14 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
         }
     }
 
+    app->matches = matchesCreate(app->store, app_match_push, app_match_ended, app);
+    if (!app->matches) {
+        fprintf(stderr, "Failed to create match coordinator\n");
+        app_cleanup(app);
+        free(app);
+        return 1;
+    }
+
     printf("PORT %u\n", app->bound_port);
     fflush(stdout);
 
@@ -316,6 +475,9 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
     int slot_map[2 + APP_MAX_CONNS];
 
     while (app->running && !g_stop_requested) {
+        /* Turn deadlines and bot moves advance even when no socket is readable. */
+        matchesTick(app->matches, app_now_ms());
+
         pfd[0].fd = app->listen_fd;
         pfd[0].events = POLLIN;
         pfd[0].revents = 0;
@@ -390,8 +552,11 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
                 slot->active = true;
                 slot->generation++;
                 inet_ntop(AF_INET, &client_addr.sin_addr, slot->client_ip, sizeof(slot->client_ip));
-                slot->rate_last_ms = get_monotonic_ms();
+                slot->rate_last_ms = app_now_ms();
                 slot->rate_tokens = 60.0;
+                slot->last_request_id = 0;
+                /* A fresh socket gets one full heartbeat window to send its first frame. */
+                slot->last_frame_ms = slot->rate_last_ms;
                 conn_init(&slot->conn, cfd, (uint32_t)free_slot, slot->generation);
             }
         }
@@ -434,8 +599,11 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
                 app_close_slot(app, i);
             }
         }
+
+        app_sweep_idle(app, app_now_ms());
     }
 
+    app_announce_shutdown(app);
     app_cleanup(app);
     free(app);
     return 0;

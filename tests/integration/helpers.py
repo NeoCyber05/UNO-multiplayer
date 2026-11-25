@@ -1,10 +1,12 @@
 import json
 import os
 import re
+import select
 import socket
 import struct
 import subprocess
 import time
+import uuid
 
 class ServerProcess:
     def __init__(self, bind="127.0.0.1", port=0, db=":memory:", auth_limit=5, extra_args=None):
@@ -181,3 +183,137 @@ class WireClient:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+ACCOUNT_PASSWORD = "password123"
+# Codes that only mean the acting client's snapshot was older than the server's.
+STALE_SNAPSHOT_CODES = ("STALE_TURN", "NOT_YOUR_TURN")
+RATE_LIMIT_BACKOFF_S = 0.1
+PUMP_WAIT_S = 0.005
+WILD_COLOR_CHOICE = "red"
+
+
+def login_many(server, n):
+    """Register and log in n fresh accounts; each client gets .me, .token, .email, .password."""
+    clients = []
+    for index in range(n):
+        client = WireClient("127.0.0.1", server.port)
+        email = f"player{index}_{uuid.uuid4().hex[:12]}@test.com"
+        registered = client.request("REGISTER", {
+            "email": email,
+            "password": ACCOUNT_PASSWORD,
+            "name": f"Player{index}",
+            "avatar": "fox"
+        })
+        if registered.get("type") != "OK":
+            raise AssertionError(f"REGISTER failed: {registered}")
+        logged_in = client.request("LOGIN", {"email": email, "password": ACCOUNT_PASSWORD})
+        if logged_in.get("type") != "OK":
+            raise AssertionError(f"LOGIN failed: {logged_in}")
+        client.me = logged_in["payload"]["me"]
+        client.token = logged_in["payload"]["token"]
+        client.email = email
+        client.password = ACCOUNT_PASSWORD
+        clients.append(client)
+    return clients
+
+
+def _has_full_frame(client):
+    if len(client._buf) < 4:
+        return False
+    length = struct.unpack(">I", client._buf[:4])[0]
+    return len(client._buf) >= 4 + length
+
+
+def pump_events(client, wait=0.0):
+    """Move every frame already readable on the socket into the client's queue.
+
+    Waits up to `wait` seconds for the first frame only, so pumping several
+    clients in a row stays cheap when nothing is pending.
+    """
+    first = True
+    while True:
+        if not _has_full_frame(client):
+            readable, _, _ = select.select([client.sock], [], [], wait if first else 0)
+            if not readable:
+                return
+        client._queue.append(client._read_one_raw())
+        first = False
+
+
+def _absorb_game_states(client):
+    """Keep only the newest GAME_STATE per client; leave other events queued."""
+    kept = []
+    for env in client._queue:
+        if env.get("type") != "GAME_STATE":
+            kept.append(env)
+            continue
+        state = env["payload"]
+        latest = getattr(client, "game_state", None)
+        if latest is None or state["revision"] >= latest["revision"]:
+            client.game_state = state
+    client._queue = kept
+
+
+def _queued_result(clients):
+    for client in clients:
+        for env in client._queue:
+            if env.get("type") == "MATCH_RESULT":
+                return env["payload"]
+    return None
+
+
+def _choose_action(state):
+    if state["canSayUno"]:
+        return "SAY_UNO", {"matchId": state["matchId"]}
+    base = {"matchId": state["matchId"], "turnNo": state["turnNo"]}
+    legal = state["legalCardIds"]
+    if legal:
+        hand = state["players"][state["viewerSeat"]]["hand"]
+        card = next(card for card in hand if card["id"] == legal[0])
+        payload = dict(base, cardId=card["id"])
+        if card["color"] == "wild":
+            payload["color"] = WILD_COLOR_CHOICE
+        return "PLAY", payload
+    if state["canPass"]:
+        return "PASS", base
+    return "DRAW", base
+
+
+def play_until_result(clients, timeout=60):
+    """Drive every human seat with a first-legal-card policy until MATCH_RESULT.
+
+    The MATCH_RESULT envelopes stay queued on each client so callers can still
+    recv_event("MATCH_RESULT") on every connection; the returned payload is the
+    first one seen.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for client in clients:
+            pump_events(client, PUMP_WAIT_S)
+            _absorb_game_states(client)
+        result = _queued_result(clients)
+        if result is not None:
+            return result
+        states = [getattr(client, "game_state", None) for client in clients]
+        newest = max((state["revision"] for state in states if state), default=None)
+        actor = None
+        for client, state in zip(clients, states):
+            if (state and state["revision"] == newest and state["phase"] == "PLAYING"
+                    and state["viewerSeat"] == state["turn"]):
+                actor = client
+                break
+        if actor is None:
+            continue
+        msg_type, payload = _choose_action(actor.game_state)
+        resp = actor.request(msg_type, payload)
+        if resp.get("type") == "OK":
+            continue
+        code = resp.get("payload", {}).get("code")
+        if code in STALE_SNAPSHOT_CODES:
+            continue
+        if code == "RATE_LIMITED":
+            time.sleep(RATE_LIMIT_BACKOFF_S)
+            continue
+        raise AssertionError(f"{msg_type} {payload} rejected: {resp}")
+    raise TimeoutError("Match did not reach MATCH_RESULT in time")
