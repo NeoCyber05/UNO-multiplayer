@@ -2,7 +2,7 @@
 
 Một máy chạy `uno-server`, mỗi người chơi chạy `uno-desktop` (GTK3 + WebKitGTK 4.1) trỏ tới IP LAN của máy server. Desktop tự giữ kết nối (PING 5 giây/lần), tự nối lại khi mất mạng và tự `RESUME` để về đúng ghế.
 
-## 1. Cài gói (Ubuntu 22.04)
+## 1. Cài gói (Ubuntu 24.04 LTS, đã kiểm chứng trên 22.04 với WebKitGTK 4.1)
 
 ```bash
 sudo apt update

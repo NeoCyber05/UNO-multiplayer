@@ -42,11 +42,13 @@ Mã lỗi gồm BAD_REQUEST, UNAUTHENTICATED, FORBIDDEN, BUSY, NOT_FOUND, ROOM_F
 
 Bên nhận đóng kết nối khi framing/envelope hỏng. Tầng xử lý command kiểm tra opcode, chiều bản tin, payload và quyền theo session. Request ID phải tăng nghiêm ngặt trên từng kết nối. Khi ID cũ hoặc trùng, server trả STALE_REQUEST và bỏ qua thao tác. Sau reconnect, client lấy snapshot mới. UserId, roomId, matchId và tag trên wire là chuỗi opaque. Seat là số nguyên tuyệt đối 0..3. Server lấy actor từ session.
 
+Rời phiên (đóng socket, hết heartbeat, LOGOUT) xử lý giống nhau: ngoài trận, người đó rời ngay queue (cả entry party), invite, party (party giải tán) và phòng đang chờ; trong trận, ghế chuyển offline nhưng vẫn giữ cho RESUME hoặc LOGIN lấy lại, và trận bị hủy (aborted) ngay khi không còn human nào kết nối. Với LOGOUT, socket vẫn mở và nhận các push đóng (QUEUE_STATE `active:false`, PARTY_STATE giải tán) trước OK; session bị xóa nên token hết hiệu lực. Mỗi socket chỉ mang một tài khoản: LOGIN hoặc RESUME thành công cho tài khoản khác trên socket đã đăng nhập sẽ đăng xuất tài khoản cũ như LOGOUT trước khi gắn tài khoản mới. Token sai hoặc hết hạn không làm mất tài khoản đang gắn.
+
 Server đóng kết nối không có frame hợp lệ nào trong cửa sổ heartbeat (`--heartbeat-ms`, mặc định 15.000 ms); socket mới cũng có đúng một cửa sổ để gửi frame đầu. Desktop gửi PING mỗi 5 giây và coi kết nối chết sau 15 giây không nhận được gì. Khi hết chỗ, server gửi `ERROR {"code":"SERVER_FULL",…}` với id 0 rồi đóng socket. Khi tắt, server push `SERVER_SHUTDOWN {}` tới mọi session đã đăng nhập trước khi đóng.
 
 ## Payload trạng thái
 
-Mọi id người dùng là chuỗi thập phân. `me` của LOGIN và RESUME là `{userId, tag, name, avatar, elo}`, với tag dạng `UNO#<userId>`. Sau LOGIN OK hoặc RESUME OK, server gửi lại cho socket mới GAME_STATE (nếu đang trong trận), ROOM_STATE, PARTY_STATE, QUEUE_STATE (nếu đang ở đó) và FRIEND_STATE.
+Mọi id người dùng là chuỗi thập phân. `me` của LOGIN và RESUME là `{userId, tag, name, avatar, elo}`, với tag dạng `UNO#<userId>`. Sau LOGIN OK hoặc RESUME OK, server gửi lại cho socket mới GAME_STATE (nếu đang trong trận), ROOM_STATE, PARTY_STATE, QUEUE_STATE (nếu đang ở đó) và FRIEND_STATE. Server chỉ gửi lại những gì còn tồn tại, không có snapshot "không có" nào: khi server đã thấy kết nối rớt (EOF/reset hoặc hết 15 giây heartbeat), party đã giải tán, ghế ở phòng đang chờ và entry queue đã bị xóa, còn trận có thể đã kết thúc hoặc bị hủy trong lúc offline. Vì vậy client không được giữ room/party/queue qua lần mất kết nối; xem hợp đồng `reconnecting` ở phần Desktop bridge.
 
 | Bản tin | Payload |
 |---|---|
@@ -68,7 +70,7 @@ ROOM_KICK gửi cho người bị kick cùng ROOM_STATE như các ghế còn l�
 
 ## Desktop bridge
 
-`CONNECTION_STATE` là event cục bộ do native phát cho JS, không bao giờ đi trên TCP: `{status, me?, sessionExpired?}` với `status` là `connecting`, `connected` hoặc `reconnecting`. Mất kết nối chuyển sang `reconnecting` và native tự kết nối lại với backoff 1 đến 8 giây. Nếu đang giữ token, native gửi RESUME và chỉ báo `connected` khi có kết quả: thành công kèm `me`, thất bại kèm `sessionExpired:true` (JS phải đăng nhập lại). Request JS gửi khi chưa `connected` bị trả ngay `ERROR {"code":"DISCONNECTED"}` và không được gửi lại sau. RESUME không có trong whitelist của JS; native giữ token và xóa trường `token` khỏi mọi payload chuyển cho JS.
+`CONNECTION_STATE` là event cục bộ do native phát cho JS, không bao giờ đi trên TCP: `{status, me?, sessionExpired?}` với `status` là `connecting`, `connected` hoặc `reconnecting`. Mất kết nối chuyển sang `reconnecting` và native tự kết nối lại với backoff 1 đến 8 giây. Nếu đang giữ token, native gửi RESUME và chỉ báo `connected` khi có kết quả: thành công kèm `me`, thất bại kèm `sessionExpired:true` (JS phải đăng nhập lại). Khi nhận `reconnecting`, JS phải bỏ room, party, queue và cả game (trận có thể đã kết thúc khi offline), rồi dựng lại chỉ từ các snapshot tới sau RESUME OK; thành viên đã mất trong lúc offline không được báo riêng. Request JS gửi khi chưa `connected` bị trả ngay `ERROR {"code":"DISCONNECTED","message":"…"}` và không được gửi lại sau. RESUME không có trong whitelist của JS; native giữ token và xóa trường `token` khỏi mọi payload chuyển cho JS.
 
 ## Ownership của API C
 
