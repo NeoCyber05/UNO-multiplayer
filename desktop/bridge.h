@@ -35,10 +35,10 @@ void bridge_set_disconnect_callback(BridgeDisconnectCallback cb, void *ctx);
  * @p client_slot points at when each message arrives, so the host can swap
  * clients on reconnect without re-registering. A request that cannot be sent
  * because the session is not connected is answered at once with
- * {v:1,id:<js id>,type:"ERROR",payload:{code:"DISCONNECTED"}}; requests are
- * never queued, so nothing is replayed after a reconnect. Any other rejection
- * of a request with a positive id is answered the same way with the Status
- * name as code (e.g. "BAD_REQUEST").
+ * {v:1,id:<js id>,type:"ERROR",payload:{code:"DISCONNECTED",message}};
+ * requests are never queued, so nothing is replayed after a reconnect. Any
+ * other rejection of a request with a positive id is answered the same way
+ * with the Status name as code (e.g. "BAD_REQUEST") and a fixed message.
  * @param[in] web_view View whose JS talks to native; must outlive the bridge.
  * @param[in] session Session used to map ids; must outlive @p web_view.
  * @param[in] client_slot Address of the host's current client variable

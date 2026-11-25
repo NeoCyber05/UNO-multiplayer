@@ -392,6 +392,10 @@ void bridge_register_uri_scheme(WebKitWebContext *context, const char *assets_di
     g_scheme_registered = true;
 }
 
+/* Texts for the ERROR replies the bridge makes itself, without the server. */
+#define DISCONNECTED_MESSAGE "Not connected to the server; the request was not sent"
+#define REJECTED_MESSAGE "Request rejected before reaching the server"
+
 typedef struct {
     WebKitWebView *web_view;
     NetSession *session;
@@ -400,11 +404,14 @@ typedef struct {
 
 /* Answer a request natively so JS settles it now instead of after its own
  * response timeout. */
-static void emit_request_error(WebKitWebView *web_view, int32_t js_id, const char *code)
+static void emit_request_error(WebKitWebView *web_view, int32_t js_id, const char *code,
+                               const char *message)
 {
     struct json_object *payload = json_object_new_object();
     if (!payload) return;
+    /* Protocol: ERROR always carries both code and message, local ones too. */
     json_object_object_add(payload, "code", json_object_new_string(code));
+    json_object_object_add(payload, "message", json_object_new_string(message));
     Envelope error = {1, js_id, "ERROR", payload};
     bridge_emit(web_view, &error);
     json_object_put(payload);
@@ -435,10 +442,12 @@ static void on_script_message_uno(WebKitUserContentManager *manager,
      * the reconnect case: the request is dropped, never queued, so it cannot
      * be replayed later. */
     const char *code = status_code(s);
+    const char *message = REJECTED_MESSAGE;
     if (ns_state(state->session) != NS_CONNECTED) {
         code = "DISCONNECTED";
+        message = DISCONNECTED_MESSAGE;
     }
-    emit_request_error(state->web_view, jsId, code);
+    emit_request_error(state->web_view, jsId, code, message);
 }
 
 Status bridge_init(WebKitWebView *web_view, NetSession *session, Client **client_slot)
