@@ -116,7 +116,7 @@ static void testSideTwoParties(void) {
     queue_destroy(queue);
 }
 
-static void testGreedySkipsOversizedEntry(void) {
+static void testSkipsOversizedEntry(void) {
     Queue *queue = NULL;
     assert(queue_init(&queue) == OK);
     UserId seats[SEATS];
@@ -137,6 +137,69 @@ static void testGreedySkipsOversizedEntry(void) {
     queue_take(queue, SIDE, indexes, entryCount);
     assert(queue_contains(queue, 54) && queue_contains(queue, 55));
     assert(!queue_contains(queue, 51) && !queue_contains(queue, 56));
+    queue_destroy(queue);
+}
+
+/* Expects the earliest valid set by FIFO index: picked indexes and seat order. */
+static void assertPick(const Queue *queue, Mode mode, const size_t expectedIdx[],
+                       size_t expectedCount, const UserId expectedSeats[SEATS]) {
+    UserId seats[SEATS];
+    size_t indexes[SEATS];
+    size_t entryCount = 0;
+    assert(queue_pick(queue, mode, seats, indexes, &entryCount));
+    assert(entryCount == expectedCount);
+    for (size_t index = 0; index < expectedCount; index++) {
+        assert(indexes[index] == expectedIdx[index]);
+    }
+    for (size_t seat = 0; seat < SEATS; seat++) {
+        assert(seats[seat] == expectedSeats[seat]);
+    }
+}
+
+static void testPartySoloPartyMatchesBothParties(void) {
+    Queue *queue = NULL;
+    assert(queue_init(&queue) == OK);
+    addParty(queue, TWO_V_TWO, 81, 82);
+    addSolo(queue, TWO_V_TWO, 83);
+    addParty(queue, TWO_V_TWO, 84, 85);
+    const size_t expectedIdx[] = {0, 2};
+    const UserId expectedSeats[SEATS] = {81, 84, 82, 85};
+    assertPick(queue, TWO_V_TWO, expectedIdx, 2, expectedSeats);
+    queue_destroy(queue);
+}
+
+static void testLoneSoloDoesNotStallParties(void) {
+    Queue *queue = NULL;
+    assert(queue_init(&queue) == OK);
+    addSolo(queue, SIDE, 91);
+    addParty(queue, SIDE, 92, 93);
+    addParty(queue, SIDE, 94, 95);
+    addParty(queue, SIDE, 96, 97);
+    const size_t expectedIdx[] = {1, 2};
+    const UserId expectedSeats[SEATS] = {92, 93, 94, 95};
+    assertPick(queue, SIDE, expectedIdx, 2, expectedSeats);
+    queue_destroy(queue);
+}
+
+static void testOldestSoloKeptWhenPossible(void) {
+    Queue *queue = NULL;
+    assert(queue_init(&queue) == OK);
+    addSolo(queue, TWO_V_TWO, 101);
+    addParty(queue, TWO_V_TWO, 102, 103);
+    addSolo(queue, TWO_V_TWO, 104);
+    const size_t spsIdx[] = {0, 1, 2};
+    const UserId spsSeats[SEATS] = {102, 101, 103, 104};
+    assertPick(queue, TWO_V_TWO, spsIdx, 3, spsSeats);
+    queue_destroy(queue);
+
+    assert(queue_init(&queue) == OK);
+    addSolo(queue, SIDE, 111);
+    addSolo(queue, SIDE, 112);
+    addParty(queue, SIDE, 113, 114);
+    addSolo(queue, SIDE, 115);
+    const size_t sspsIdx[] = {0, 1, 2};
+    const UserId sspsSeats[SEATS] = {113, 114, 111, 112};
+    assertPick(queue, SIDE, sspsIdx, 3, sspsSeats);
     queue_destroy(queue);
 }
 
@@ -188,7 +251,10 @@ int main(void) {
     testTwoVTwoPartyTeam();
     testSoloBeforePartyStillTeamsParty();
     testSideTwoParties();
-    testGreedySkipsOversizedEntry();
+    testSkipsOversizedEntry();
+    testPartySoloPartyMatchesBothParties();
+    testLoneSoloDoesNotStallParties();
+    testOldestSoloKeptWhenPossible();
     testValidation();
     testRemoveDropsWholeParty();
     return 0;

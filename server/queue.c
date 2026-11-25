@@ -152,21 +152,33 @@ static void place_seats(const ModeQueue *modeQueue, Mode mode, const size_t pick
     }
 }
 
+/* Depth-first search in index order, so the first set that reaches exactly
+ * four players is the earliest one by FIFO index. A plain greedy scan would
+ * stall on [party, solo, party]: party + solo leaves no room for the second
+ * party, although the two parties can play each other (spec §5). Depth is at
+ * most four entries, so the search stays small even with a full queue. */
+static bool find_earliest_set(const ModeQueue *modeQueue, size_t start, size_t players,
+                              size_t picked[QUEUE_MATCH_SEATS], size_t *pickedCount) {
+    if (players == QUEUE_MATCH_SEATS) return true;
+    for (size_t index = start; index < modeQueue->count; index++) {
+        size_t entrySize = modeQueue->entries[index].count;
+        if (players + entrySize > QUEUE_MATCH_SEATS) continue;
+        picked[(*pickedCount)++] = index;
+        if (find_earliest_set(modeQueue, index + 1, players + entrySize, picked, pickedCount)) {
+            return true;
+        }
+        (*pickedCount)--;
+    }
+    return false;
+}
+
 bool queue_pick(const Queue *q, Mode mode, UserId seats_out[QUEUE_MATCH_SEATS],
                 size_t idx_out[QUEUE_MATCH_SEATS], size_t *n_entries) {
     if (!q || !valid_mode(mode) || !seats_out || !idx_out || !n_entries) return false;
     const ModeQueue *modeQueue = &q->modes[mode];
-    size_t players = 0;
     size_t pickedCount = 0;
-    /* Greedy FIFO: an entry that would overflow the table waits for the next match. */
-    for (size_t index = 0; index < modeQueue->count && players < QUEUE_MATCH_SEATS; index++) {
-        size_t entrySize = modeQueue->entries[index].count;
-        if (players + entrySize > QUEUE_MATCH_SEATS) continue;
-        idx_out[pickedCount++] = index;
-        players += entrySize;
-    }
     *n_entries = 0;
-    if (players != QUEUE_MATCH_SEATS) return false;
+    if (!find_earliest_set(modeQueue, 0, 0, idx_out, &pickedCount)) return false;
     *n_entries = pickedCount;
     place_seats(modeQueue, mode, idx_out, pickedCount, seats_out);
     return true;
@@ -262,6 +274,18 @@ static void broadcast_mode(App *app, Mode mode) {
     json_object_put(payload);
 }
 
+static bool is_online(App *app, UserId user) {
+    ConnId conn;
+    return sessions_find_conn(app, user, &conn) == OK;
+}
+
+static UserId first_offline_seat(App *app, const UserId seats[QUEUE_MATCH_SEATS]) {
+    for (size_t seat = 0; seat < QUEUE_MATCH_SEATS; seat++) {
+        if (!is_online(app, seats[seat])) return seats[seat];
+    }
+    return 0;
+}
+
 /* Start as many ranked matches as the mode can fill; on failure keep everyone
  * queued and let queue_tick retry, since the cause (storage busy, all match
  * slots taken) is usually transient. */
@@ -273,6 +297,13 @@ static void try_start(App *app, Mode mode, uint64_t nowMs) {
     bool started = false;
     modeQueue->retryPending = false;
     while (queue_pick(app->queue, mode, seats, picked, &pickedCount)) {
+        /* A LOGOUT earlier in this poll iteration has not been pruned yet;
+         * drop that entry (telling its members) and pick again. */
+        UserId offline = first_offline_seat(app, seats);
+        if (offline) {
+            queue_user_gone(app, offline);
+            continue;
+        }
         MatchId matchId = {0};
         if (rooms_make_match(app, mode, seats, &matchId) != OK) {
             modeQueue->retryPending = true;
@@ -294,11 +325,6 @@ void queue_user_gone(App *app, UserId u) {
     /* Spec: one member leaving drops the whole party entry, so both are told. */
     notify_inactive(app, mode, removed.users, removed.count, NULL);
     broadcast_mode(app, mode);
-}
-
-static bool is_online(App *app, UserId user) {
-    ConnId conn;
-    return sessions_find_conn(app, user, &conn) == OK;
 }
 
 /* LOGOUT keeps the socket but drops the session; such users cannot play. */

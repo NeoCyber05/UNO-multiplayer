@@ -61,10 +61,12 @@ bool queue_contains(const Queue *q, UserId u);
 bool queue_remove(Queue *q, UserId u, Mode *mode_out, QueueEntry *removed);
 
 /**
- * @brief Greedily choose the oldest entries that add up to exactly four players.
+ * @brief Choose the earliest entries by FIFO index that add up to exactly four players.
  *
- * Entries are scanned in FIFO order and taken while the total stays <= 4.
- * CLASSIC/DRAFT seat players in pick order; in 2v2 team A is seats {0,2} and
+ * Among all sets of entries totalling four, the one whose ascending index list
+ * is lexicographically smallest wins: the oldest entry plays whenever any valid
+ * set contains it, and a valid set is never missed (e.g. [party, solo, party]
+ * matches the two parties). CLASSIC/DRAFT seat players in pick order; in 2v2 team A is seats {0,2} and
  * B is {1,3}, in side A is {0,1} and B is {2,3}. The first party takes team A,
  * the second team B, and solos fill the remaining seats in FIFO order.
  * @param[in] q Queue to inspect (not modified).
