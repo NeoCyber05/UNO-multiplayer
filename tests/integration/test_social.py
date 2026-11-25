@@ -158,6 +158,26 @@ class TestSocial(unittest.TestCase):
             finally:
                 close_all([alice, bob])
 
+    def test_abort_presence_goes_straight_offline(self):
+        with ServerProcess(auth_limit=AUTH_LIMIT) as server:
+            alice, bob = login_many(server, 2)
+            try:
+                make_friends(self, alice, bob)
+                bob_id = bob.me["userId"]
+                assert_ok(self, bob.request("ROOM_CREATE", {"mode": "classic"}))
+                for seat in BOT_SEATS:
+                    assert_ok(self, bob.request("ROOM_BOT", {"seat": seat, "level": "easy"}))
+                assert_ok(self, bob.request("ROOM_START", {}))
+                wait_friend(alice, bob_id, lambda row: row["presence"] == "in_match")
+
+                # The last human leaving aborts the match; friends must not see
+                # a brief online/idle between in_match and offline.
+                bob.close()
+                after = wait_friend(alice, bob_id, lambda row: row["presence"] != "in_match")
+                self.assertEqual(after["presence"], "offline")
+            finally:
+                close_all([alice, bob])
+
     def test_profile_privacy(self):
         with ServerProcess(auth_limit=AUTH_LIMIT) as server:
             alice, bob = login_many(server, 2)

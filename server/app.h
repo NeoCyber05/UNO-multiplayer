@@ -55,6 +55,9 @@ struct App {
     Matches *matches;
     int heartbeat_ms;
     AppMatchRecord match_records[APP_MATCH_RECORDS];
+    /* Set only while app_user_leave runs: its own presence push replaces the
+     * one a match abort would send for this user. */
+    UserId leaving_user;
 };
 
 Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_path, int auth_limit);
@@ -72,6 +75,25 @@ int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_li
 void app_stop(App *app);
 void app_cleanup(App *app);
 void app_close_slot(App *app, int slot_idx);
+
+/**
+ * @brief Take a user off a connection: socket close, LOGOUT, or another
+ *        account binding the same socket.
+ *
+ * Spec §5: the match seat goes offline (aborting the match when no other
+ * human is connected), the queue entry and pending invites are dropped, the
+ * party dissolves and a waiting room loses the seat; a running match keeps
+ * the seat for RESUME or LOGIN. Pushes for those changes still reach the user
+ * because the session is detached (connected = false) only afterwards.
+ * Friends then get one presence update per user whose presence changed.
+ * The caller decides whether the detached session is also forgotten
+ * (sessions_logout) or kept for RESUME.
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] conn Connection the user is leaving.
+ * @param[in] user Account bound to @p conn; 0 is ignored.
+ */
+void app_user_leave(App *app, ConnId conn, UserId user);
+
 bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms);
 
 /**

@@ -201,7 +201,11 @@ static void app_match_ended(void *context, const char *roomId) {
         /* Shutdown aborts matches while closing slots; nobody is left to tell. */
         if (!app->running) continue;
         for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
-            if (record->users[seat]) social_presence(app, record->users[seat]);
+            UserId seated = record->users[seat];
+            /* A leaving user still reads as connected here; announcing that
+             * would flash online/idle before the offline push app_user_leave
+             * sends once the session is detached. */
+            if (seated && seated != app->leaving_user) social_presence(app, seated);
         }
     }
 }
@@ -323,28 +327,39 @@ bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms)
     return true;
 }
 
+void app_user_leave(App *app, ConnId conn, UserId user)
+{
+    if (!app || user == 0) return;
+    PresenceWatch watch;
+    memset(&watch, 0, sizeof watch);
+    /* Shutdown closes every slot; nobody is left to hear about it. */
+    if (app->running) watch_begin(app, &watch, user);
+    uint64_t nowMs = app_now_ms();
+    /* Mark the seat offline while the session still exists; the room keeps
+     * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
+     * NOT_FOUND just means the user is not in a match. */
+    app->leaving_user = user;
+    (void)matchesConnected(app->matches, user, false, nowMs);
+    app->leaving_user = 0;
+    /* Before rooms_disconnect dissolves the party: a dropped member takes
+     * the whole party entry out of the queue and the partner is told. */
+    queue_user_gone(app, user);
+    rooms_disconnect(app, user, nowMs);
+    sessions_disconnect(app, conn);
+    /* After sessions_disconnect, so the user now reads as offline. */
+    watch_end(app, &watch);
+}
+
 void app_close_slot(App *app, int slot_idx)
 {
     if (slot_idx < 0 || slot_idx >= APP_MAX_CONNS) return;
     AppConnSlot *s = &app->slots[slot_idx];
     if (!s->active) return;
+    ConnId conn = {(uint32_t)slot_idx, s->generation};
     UserId uid = 0;
-    PresenceWatch watch;
-    memset(&watch, 0, sizeof watch);
-    if (sessions_user(app, (ConnId){(uint32_t)slot_idx, s->generation}, &uid) == OK && uid != 0) {
-        /* Shutdown closes every slot; nobody is left to hear about it. */
-        if (app->running) watch_begin(app, &watch, uid);
-        uint64_t nowMs = app_now_ms();
-        /* Mark the seat offline while the session still exists; the room keeps
-         * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
-         * NOT_FOUND just means the user is not in a match. */
-        (void)matchesConnected(app->matches, uid, false, nowMs);
-        /* Before rooms_disconnect dissolves the party: a dropped member takes
-         * the whole party entry out of the queue and the partner is told. */
-        queue_user_gone(app, uid);
-        rooms_disconnect(app, uid, nowMs);
+    if (sessions_user(app, conn, &uid) == OK && uid != 0) {
+        app_user_leave(app, conn, uid);
     }
-    sessions_disconnect(app, (ConnId){(uint32_t)slot_idx, s->generation});
     conn_close(&s->conn);
     s->active = false;
     s->generation++;
@@ -353,8 +368,6 @@ void app_close_slot(App *app, int slot_idx)
     s->rate_tokens = 0.0;
     s->last_request_id = 0;
     s->last_frame_ms = 0;
-    /* After sessions_disconnect, so the user now reads as offline. */
-    watch_end(app, &watch);
 }
 
 static Status app_on_frame(const Envelope *e, void *ctx)
