@@ -10,8 +10,7 @@
 #include <strings.h>
 #include <unistd.h>
 
-static void cleanup_file(const char *path)
-{
+static void cleanupFile(const char *path) {
     unlink(path);
     char shm[512], wal[512];
     snprintf(shm, sizeof(shm), "%s-shm", path);
@@ -20,17 +19,16 @@ static void cleanup_file(const char *path)
     unlink(wal);
 }
 
-static void test_table_creation_and_migration(void)
-{
-    const char *db_path = "/tmp/test_uno_store_migration.db";
-    cleanup_file(db_path);
+static void testTableCreationAndMigration(void) {
+    const char *dbPath = "/tmp/test_uno_store_migration.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    Status st = store_open(&s, db_path);
-    assert(st == OK);
-    assert(s != NULL);
+    Store *store = NULL;
+    Status status = store_open(&store, dbPath);
+    assert(status == OK);
+    assert(store != NULL);
 
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     assert(db != NULL);
 
     const char *tables[] = {
@@ -65,17 +63,16 @@ static void test_table_creation_and_migration(void)
     assert(fk == 1);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_store_match_start_persisting(void)
-{
-    const char *db_path = "/tmp/test_uno_store_start.db";
-    cleanup_file(db_path);
+static void testStoreMatchStartPersisting(void) {
+    const char *dbPath = "/tmp/test_uno_store_start.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     MatchId mid = "00000000-0000-0000-0000-000000000001";
     PlayerSpec players[4] = {
@@ -85,21 +82,22 @@ static void test_store_match_start_persisting(void)
         {0, "BotDavid", "avatar_bot", HARD, true}
     };
 
-    Status st = store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true);
-    assert(st == OK);
+    Status status = store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true);
+    assert(status == OK);
 
     /* Duplicate call with identical parameters should be idempotent OK */
-    st = store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true);
-    assert(st == OK);
+    status = store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true);
+    assert(status == OK);
 
     /* Duplicate call with conflicting mode should return INVALID_ACTION */
-    st = store_match_start(s, (const MatchId *)&mid, players, TWO_V_TWO, true);
-    assert(st == INVALID_ACTION);
+    status = store_match_start(store, (const MatchId *)&mid, players, TWO_V_TWO, true);
+    assert(status == INVALID_ACTION);
 
     /* Verify persisted data via SQLite directly */
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     sqlite3_stmt *stmt = NULL;
-    assert(sqlite3_prepare_v2(db, "SELECT mode, ranked, status FROM matches WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT mode, ranked, status FROM matches WHERE match_id = ?;",
+                              -1, &stmt, NULL) == SQLITE_OK);
     sqlite3_bind_text(stmt, 1, mid, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == CLASSIC);
@@ -107,7 +105,9 @@ static void test_store_match_start_persisting(void)
     assert(sqlite3_column_int(stmt, 2) == MATCH_ACTIVE);
     sqlite3_finalize(stmt);
 
-    assert(sqlite3_prepare_v2(db, "SELECT seat, user_id, name, is_bot, bot_level FROM match_players WHERE match_id = ? ORDER BY seat ASC;", -1, &stmt, NULL) == SQLITE_OK);
+    const char *seatsSql =
+        "SELECT seat, user_id, name, is_bot, bot_level FROM match_players WHERE match_id = ? ORDER BY seat ASC;";
+    assert(sqlite3_prepare_v2(db, seatsSql, -1, &stmt, NULL) == SQLITE_OK);
     sqlite3_bind_text(stmt, 1, mid, -1, SQLITE_STATIC);
 
     for (int i = 0; i < 4; i++) {
@@ -121,17 +121,16 @@ static void test_store_match_start_persisting(void)
     assert(sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_store_events_uniqueness_and_idempotency(void)
-{
-    const char *db_path = "/tmp/test_uno_store_events.db";
-    cleanup_file(db_path);
+static void testStoreEventsUniquenessAndIdempotency(void) {
+    const char *dbPath = "/tmp/test_uno_store_events.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     MatchId mid = "00000000-0000-0000-0000-000000000002";
     PlayerSpec players[4] = {
@@ -140,7 +139,7 @@ static void test_store_events_uniqueness_and_idempotency(void)
         {103, "Charlie", "a3", EASY, false},
         {104, "David", "a4", EASY, false}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, false) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, false) == OK);
 
     EventBatch batch1;
     memset(&batch1, 0, sizeof(batch1));
@@ -158,43 +157,44 @@ static void test_store_events_uniqueness_and_idempotency(void)
     strncpy(batch1.events[1].payload, "{\"count\":1}", sizeof(batch1.events[1].payload) - 1);
 
     /* Insert batch 1 */
-    Status st = store_events(s, (const MatchId *)&mid, &batch1);
-    assert(st == OK);
+    Status status = store_events(store, (const MatchId *)&mid, &batch1);
+    assert(status == OK);
 
     /* Duplicate identical batch -> idempotent OK */
-    st = store_events(s, (const MatchId *)&mid, &batch1);
-    assert(st == OK);
+    status = store_events(store, (const MatchId *)&mid, &batch1);
+    assert(status == OK);
 
     /* Duplicate identical single event -> idempotent OK */
-    EventBatch batch_dup;
-    memset(&batch_dup, 0, sizeof(batch_dup));
-    batch_dup.count = 1;
-    batch_dup.events[0] = batch1.events[0];
-    st = store_events(s, (const MatchId *)&mid, &batch_dup);
-    assert(st == OK);
+    EventBatch batchDup;
+    memset(&batchDup, 0, sizeof(batchDup));
+    batchDup.count = 1;
+    batchDup.events[0] = batch1.events[0];
+    status = store_events(store, (const MatchId *)&mid, &batchDup);
+    assert(status == OK);
 
     /* Conflicting sequence: same seq=2, but different actor/type/payload -> INVALID_ACTION */
-    EventBatch batch_conflict;
-    memset(&batch_conflict, 0, sizeof(batch_conflict));
-    batch_conflict.count = 1;
-    batch_conflict.events[0].seq = 2;
-    batch_conflict.events[0].revision = 2;
-    batch_conflict.events[0].actor = 2; /* changed actor */
-    strncpy(batch_conflict.events[0].type, "PASS", sizeof(batch_conflict.events[0].type) - 1);
-    strncpy(batch_conflict.events[0].payload, "{}", sizeof(batch_conflict.events[0].payload) - 1);
+    EventBatch batchConflict;
+    memset(&batchConflict, 0, sizeof(batchConflict));
+    batchConflict.count = 1;
+    batchConflict.events[0].seq = 2;
+    batchConflict.events[0].revision = 2;
+    batchConflict.events[0].actor = 2; /* changed actor */
+    strncpy(batchConflict.events[0].type, "PASS", sizeof(batchConflict.events[0].type) - 1);
+    strncpy(batchConflict.events[0].payload, "{}", sizeof(batchConflict.events[0].payload) - 1);
 
-    st = store_events(s, (const MatchId *)&mid, &batch_conflict);
-    assert(st == INVALID_ACTION);
+    status = store_events(store, (const MatchId *)&mid, &batchConflict);
+    assert(status == INVALID_ACTION);
 
     /* Conflicting payload on same seq=1 -> INVALID_ACTION */
-    batch_conflict.events[0].seq = 1;
-    batch_conflict.events[0].revision = 1;
-    batch_conflict.events[0].actor = 0;
-    strncpy(batch_conflict.events[0].type, "CARD_PLAYED", sizeof(batch_conflict.events[0].type) - 1);
-    strncpy(batch_conflict.events[0].payload, "{\"card\":\"G5\"}", sizeof(batch_conflict.events[0].payload) - 1);
+    batchConflict.events[0].seq = 1;
+    batchConflict.events[0].revision = 1;
+    batchConflict.events[0].actor = 0;
+    strncpy(batchConflict.events[0].type, "CARD_PLAYED", sizeof(batchConflict.events[0].type) - 1);
+    strncpy(batchConflict.events[0].payload, "{\"card\":\"G5\"}",
+            sizeof(batchConflict.events[0].payload) - 1);
 
-    st = store_events(s, (const MatchId *)&mid, &batch_conflict);
-    assert(st == INVALID_ACTION);
+    status = store_events(store, (const MatchId *)&mid, &batchConflict);
+    assert(status == INVALID_ACTION);
 
     /* Append next event seq=3 -> OK */
     EventBatch batch2;
@@ -206,37 +206,37 @@ static void test_store_events_uniqueness_and_idempotency(void)
     strncpy(batch2.events[0].type, "CARD_PLAYED", sizeof(batch2.events[0].type) - 1);
     strncpy(batch2.events[0].payload, "{\"card\":\"R7\"}", sizeof(batch2.events[0].payload) - 1);
 
-    st = store_events(s, (const MatchId *)&mid, &batch2);
-    assert(st == OK);
+    status = store_events(store, (const MatchId *)&mid, &batch2);
+    assert(status == OK);
 
     /* Verify count in DB is exactly 3 */
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     sqlite3_stmt *stmt = NULL;
-    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM match_events WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM match_events WHERE match_id = ?;", -1,
+                              &stmt, NULL) == SQLITE_OK);
     sqlite3_bind_text(stmt, 1, mid, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == 3);
     sqlite3_finalize(stmt);
 
     /* Calling store_events with unknown match_id should return NOT_FOUND */
-    MatchId fake_mid = "99999999-9999-9999-9999-999999999999";
-    st = store_events(s, (const MatchId *)&fake_mid, &batch2);
-    assert(st == NOT_FOUND);
+    MatchId fakeMatchId = "99999999-9999-9999-9999-999999999999";
+    status = store_events(store, (const MatchId *)&fakeMatchId, &batch2);
+    assert(status == NOT_FOUND);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_store_finalize_idempotency_and_no_double_elo(void)
-{
-    const char *db_path = "/tmp/test_uno_store_finalize.db";
-    cleanup_file(db_path);
+static void testStoreFinalizeIdempotencyAndNoDoubleElo(void) {
+    const char *dbPath = "/tmp/test_uno_store_finalize.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     /* Seed test accounts */
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     assert(sqlite3_exec(db,
         "INSERT INTO accounts (id, email, password_hash, name, avatar, elo, created_at) VALUES "
         "(101, 'alice@test.com', 'h1', 'Alice', 'a1', 1500, 1000),"
@@ -251,7 +251,7 @@ static void test_store_finalize_idempotency_and_no_double_elo(void)
         {0, "Bot1", "bot", EASY, true},
         {0, "Bot2", "bot", EASY, true}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true) == OK);
 
     MatchResult res;
     memset(&res, 0, sizeof(res));
@@ -315,60 +315,63 @@ static void test_store_finalize_idempotency_and_no_double_elo(void)
     deltas[1].peakElo = 1500;
 
     /* First finalize -> should succeed */
-    Status st = store_finalize(s, &res, deltas);
-    assert(st == OK);
+    Status status = store_finalize(store, &res, deltas);
+    assert(status == OK);
 
     /* Check ELO and stats after first finalize */
     sqlite3_stmt *stmt = NULL;
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     int elo101 = sqlite3_column_int(stmt, 0);
     assert(elo101 == 1516);
     sqlite3_finalize(stmt);
 
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 102;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 102;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     int elo102 = sqlite3_column_int(stmt, 0);
     assert(elo102 == 1484);
     sqlite3_finalize(stmt);
 
     /* Second finalize with identical result -> idempotent OK, no doubling! */
-    st = store_finalize(s, &res, deltas);
-    assert(st == OK);
+    status = store_finalize(store, &res, deltas);
+    assert(status == OK);
 
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     elo101 = sqlite3_column_int(stmt, 0);
     assert(elo101 == 1516); /* NOT doubled to 1532! */
     sqlite3_finalize(stmt);
 
     /* Second finalize with conflicting result -> INVALID_ACTION */
-    MatchResult conflicting_res = res;
-    conflicting_res.winnerSeat = 1; /* different winner */
-    st = store_finalize(s, &conflicting_res, deltas);
-    assert(st == INVALID_ACTION);
+    MatchResult conflictingResult = res;
+    conflictingResult.winnerSeat = 1; /* different winner */
+    status = store_finalize(store, &conflictingResult, deltas);
+    assert(status == INVALID_ACTION);
 
     /* Check that ELO is still 1516 after conflicting finalize attempt */
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     elo101 = sqlite3_column_int(stmt, 0);
     assert(elo101 == 1516);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_crash_recovery_aborted(void)
-{
-    const char *db_path = "/tmp/test_uno_store_crash.db";
-    cleanup_file(db_path);
+static void testCrashRecoveryAborted(void) {
+    const char *dbPath = "/tmp/test_uno_store_crash.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
-    MatchId mid_active = "00000000-0000-0000-0000-000000000004";
-    MatchId mid_final = "00000000-0000-0000-0000-000000000005";
+    MatchId matchIdActive = "00000000-0000-0000-0000-000000000004";
+    MatchId matchIdFinal = "00000000-0000-0000-0000-000000000005";
 
     PlayerSpec players[4] = {
         {101, "Alice", "a1", EASY, false},
@@ -377,12 +380,13 @@ static void test_crash_recovery_aborted(void)
         {0, "Bot2", "bot", EASY, true}
     };
 
-    assert(store_match_start(s, (const MatchId *)&mid_active, players, CLASSIC, false) == OK);
-    assert(store_match_start(s, (const MatchId *)&mid_final, players, CLASSIC, false) == OK);
+    assert(store_match_start(store, (const MatchId *)&matchIdActive, players, CLASSIC,
+                             false) == OK);
+    assert(store_match_start(store, (const MatchId *)&matchIdFinal, players, CLASSIC, false) == OK);
 
     MatchResult res;
     memset(&res, 0, sizeof(res));
-    strncpy(res.matchId, mid_final, sizeof(res.matchId) - 1);
+    strncpy(res.matchId, matchIdFinal, sizeof(res.matchId) - 1);
     res.mode = CLASSIC;
     res.ranked = false;
     res.status = MATCH_FINALIZED;
@@ -394,47 +398,48 @@ static void test_crash_recovery_aborted(void)
         res.players[i].eloBefore = 1500;
         res.players[i].eloAfter = 1500;
     }
-    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_finalize(store, &res, NULL) == OK);
 
     /* Close the store abruptly */
-    store_close(s);
-    s = NULL;
+    store_close(store);
+    store = NULL;
 
     /* Reopen the store -> crash recovery should mark active matches as aborted */
-    assert(store_open(&s, db_path) == OK);
+    assert(store_open(&store, dbPath) == OK);
 
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     sqlite3_stmt *stmt = NULL;
 
-    /* mid_active should now be MATCH_ABORTED */
-    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
-    sqlite3_bind_text(stmt, 1, mid_active, -1, SQLITE_STATIC);
+    /* matchIdActive should now be MATCH_ABORTED */
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt,
+                              NULL) == SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, matchIdActive, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
-    int status_active = sqlite3_column_int(stmt, 0);
-    assert(status_active == MATCH_ABORTED);
+    int statusActive = sqlite3_column_int(stmt, 0);
+    assert(statusActive == MATCH_ABORTED);
     sqlite3_finalize(stmt);
 
-    /* mid_final should still be MATCH_FINALIZED */
-    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
-    sqlite3_bind_text(stmt, 1, mid_final, -1, SQLITE_STATIC);
+    /* matchIdFinal should still be MATCH_FINALIZED */
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt,
+                              NULL) == SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, matchIdFinal, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
-    int status_final = sqlite3_column_int(stmt, 0);
-    assert(status_final == MATCH_FINALIZED);
+    int statusFinal = sqlite3_column_int(stmt, 0);
+    assert(statusFinal == MATCH_FINALIZED);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_transaction_rollback_on_failure(void)
-{
-    const char *db_path = "/tmp/test_uno_store_rollback.db";
-    cleanup_file(db_path);
+static void testTransactionRollbackOnFailure(void) {
+    const char *dbPath = "/tmp/test_uno_store_rollback.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     assert(sqlite3_exec(db,
         "INSERT INTO accounts (id, email, password_hash, name, avatar, elo, created_at) VALUES "
         "(101, 'alice@test.com', 'h1', 'Alice', 'a1', 1500, 1000);",
@@ -447,7 +452,7 @@ static void test_transaction_rollback_on_failure(void)
         {0, "Bot2", "bot", EASY, true},
         {0, "Bot3", "bot", EASY, true}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true) == OK);
 
     /* Inject SQL abort trigger to fail finalize midway (e.g. on updating match_players) */
     assert(sqlite3_exec(db,
@@ -474,19 +479,21 @@ static void test_transaction_rollback_on_failure(void)
     deltas[0].add.wins = 1;
 
     /* store_finalize should encounter error and rollback entire transaction */
-    Status st = store_finalize(s, &res, deltas);
-    assert(st == STORAGE_ERROR);
+    Status status = store_finalize(store, &res, deltas);
+    assert(status == STORAGE_ERROR);
 
     /* Verify match status is STILL MATCH_ACTIVE */
     sqlite3_stmt *stmt = NULL;
-    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     sqlite3_bind_text(stmt, 1, mid, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == MATCH_ACTIVE);
     sqlite3_finalize(stmt);
 
     /* Verify accounts ELO was NOT updated */
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == 1500);
     sqlite3_finalize(stmt);
@@ -495,33 +502,34 @@ static void test_transaction_rollback_on_failure(void)
     assert(sqlite3_exec(db, "DROP TRIGGER test_fail_trigger;", NULL, NULL, NULL) == SQLITE_OK);
 
     /* Now finalize should succeed cleanly */
-    st = store_finalize(s, &res, deltas);
-    assert(st == OK);
+    status = store_finalize(store, &res, deltas);
+    assert(status == OK);
 
-    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     sqlite3_bind_text(stmt, 1, mid, -1, SQLITE_STATIC);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == MATCH_FINALIZED);
     sqlite3_finalize(stmt);
 
-    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT elo FROM accounts WHERE id = 101;", -1, &stmt,
+                              NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == 1530);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_store_export_match(void)
-{
-    const char *db_path = "/tmp/test_uno_store_export.db";
-    const char *export_path = "/tmp/test_uno_match_export.json";
-    cleanup_file(db_path);
-    unlink(export_path);
+static void testStoreExportMatch(void) {
+    const char *dbPath = "/tmp/test_uno_store_export.db";
+    const char *exportPath = "/tmp/test_uno_match_export.json";
+    cleanupFile(dbPath);
+    unlink(exportPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     MatchId mid = "00000000-0000-0000-0000-000000000007";
     PlayerSpec players[4] = {
@@ -530,7 +538,7 @@ static void test_store_export_match(void)
         {0, "Bot1", "avatar_bot", EASY, true},
         {0, "Bot2", "avatar_bot", HARD, true}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true) == OK);
 
     EventBatch batch;
     memset(&batch, 0, sizeof(batch));
@@ -546,7 +554,7 @@ static void test_store_export_match(void)
     batch.events[1].actor = 1;
     strncpy(batch.events[1].type, "DRAW", sizeof(batch.events[1].type) - 1);
     strncpy(batch.events[1].payload, "{\"count\":1}", sizeof(batch.events[1].payload) - 1);
-    assert(store_events(s, (const MatchId *)&mid, &batch) == OK);
+    assert(store_events(store, (const MatchId *)&mid, &batch) == OK);
 
     MatchResult res;
     memset(&res, 0, sizeof(res));
@@ -563,14 +571,14 @@ static void test_store_export_match(void)
         res.players[i].eloBefore = 1500;
         res.players[i].eloAfter = (i == 0) ? 1516 : 1484;
     }
-    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_finalize(store, &res, NULL) == OK);
 
     /* Export match */
-    Status st = store_export_match(s, (const MatchId *)&mid, export_path);
-    assert(st == OK);
+    Status status = store_export_match(store, (const MatchId *)&mid, exportPath);
+    assert(status == OK);
 
     /* Read exported JSON file */
-    FILE *f = fopen(export_path, "rb");
+    FILE *f = fopen(exportPath, "rb");
     assert(f != NULL);
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
@@ -607,12 +615,12 @@ static void test_store_export_match(void)
     assert(json_object_object_get_ex(root, "winnerSeat", &val));
     assert(json_object_get_int(val) == 0);
 
-    struct json_object *players_arr = NULL;
-    assert(json_object_object_get_ex(root, "players", &players_arr));
-    assert(json_object_get_type(players_arr) == json_type_array);
-    assert(json_object_array_length(players_arr) == 4);
+    struct json_object *playersJson = NULL;
+    assert(json_object_object_get_ex(root, "players", &playersJson));
+    assert(json_object_get_type(playersJson) == json_type_array);
+    assert(json_object_array_length(playersJson) == 4);
 
-    struct json_object *p0 = json_object_array_get_idx(players_arr, 0);
+    struct json_object *p0 = json_object_array_get_idx(playersJson, 0);
     assert(json_object_object_get_ex(p0, "userId", &val));
     assert((UserId)json_object_get_int64(val) == 101);
     assert(json_object_object_get_ex(p0, "name", &val));
@@ -620,18 +628,18 @@ static void test_store_export_match(void)
     assert(json_object_object_get_ex(p0, "points", &val));
     assert(json_object_get_int(val) == 50);
 
-    struct json_object *events_arr = NULL;
-    assert(json_object_object_get_ex(root, "events", &events_arr));
-    assert(json_object_get_type(events_arr) == json_type_array);
-    assert(json_object_array_length(events_arr) == 2);
+    struct json_object *eventsJson = NULL;
+    assert(json_object_object_get_ex(root, "events", &eventsJson));
+    assert(json_object_get_type(eventsJson) == json_type_array);
+    assert(json_object_array_length(eventsJson) == 2);
 
-    struct json_object *e0 = json_object_array_get_idx(events_arr, 0);
+    struct json_object *e0 = json_object_array_get_idx(eventsJson, 0);
     assert(json_object_object_get_ex(e0, "seq", &val));
     assert(json_object_get_int(val) == 1);
     assert(json_object_object_get_ex(e0, "type", &val));
     assert(strcmp(json_object_get_string(val), "CARD_PLAYED") == 0);
 
-    struct json_object *e1 = json_object_array_get_idx(events_arr, 1);
+    struct json_object *e1 = json_object_array_get_idx(eventsJson, 1);
     assert(json_object_object_get_ex(e1, "seq", &val));
     assert(json_object_get_int(val) == 2);
     assert(json_object_object_get_ex(e1, "type", &val));
@@ -639,24 +647,23 @@ static void test_store_export_match(void)
 
     json_object_put(root);
     free(content);
-    unlink(export_path);
+    unlink(exportPath);
 
     /* Exporting non-existent match should return NOT_FOUND */
-    MatchId fake_mid = "99999999-9999-9999-9999-999999999999";
-    st = store_export_match(s, (const MatchId *)&fake_mid, export_path);
-    assert(st == NOT_FOUND);
+    MatchId fakeMatchId = "99999999-9999-9999-9999-999999999999";
+    status = store_export_match(store, (const MatchId *)&fakeMatchId, exportPath);
+    assert(status == NOT_FOUND);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_profile_stats_initial_state(void)
-{
-    const char *db_path = "/tmp/test_uno_profile_stats_init.db";
-    cleanup_file(db_path);
+static void testProfileStatsInitialState(void) {
+    const char *dbPath = "/tmp/test_uno_profile_stats_init.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     AccountCreate c;
     memset(&c, 0, sizeof(c));
@@ -666,12 +673,12 @@ static void test_profile_stats_initial_state(void)
     strncpy(c.avatar, "avatar1", sizeof(c.avatar) - 1);
 
     UserId uid = 0;
-    assert(store_account_create(s, &c, &uid) == OK);
+    assert(store_account_create(store, &c, &uid) == OK);
     assert(uid > 0);
 
     ProfileStats stats;
     memset(&stats, 0xFF, sizeof(stats));
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.matches == 0);
     assert(stats.wins == 0);
     assert(stats.teamWins == 0);
@@ -682,19 +689,18 @@ static void test_profile_stats_initial_state(void)
     assert(stats.peakElo == 1500);
 
     /* Non-existent user returns NOT_FOUND */
-    assert(store_profile_stats(s, 999999, &stats) == NOT_FOUND);
+    assert(store_profile_stats(store, 999999, &stats) == NOT_FOUND);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_profile_stats_finalize_accumulation_and_overwrite(void)
-{
-    const char *db_path = "/tmp/test_uno_profile_stats_accum.db";
-    cleanup_file(db_path);
+static void testProfileStatsFinalizeAccumulationAndOverwrite(void) {
+    const char *dbPath = "/tmp/test_uno_profile_stats_accum.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
 
     AccountCreate c;
     memset(&c, 0, sizeof(c));
@@ -704,7 +710,7 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     strncpy(c.avatar, "avatar1", sizeof(c.avatar) - 1);
 
     UserId uid = 0;
-    assert(store_account_create(s, &c, &uid) == OK);
+    assert(store_account_create(store, &c, &uid) == OK);
     assert(uid > 0);
 
     PlayerSpec players[4] = {
@@ -716,7 +722,7 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
 
     /* Match 1: Win */
     MatchId mid1 = "00000000-0000-0000-0000-000000000011";
-    assert(store_match_start(s, (const MatchId *)&mid1, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid1, players, CLASSIC, true) == OK);
 
     MatchResult res1;
     memset(&res1, 0, sizeof(res1));
@@ -740,10 +746,10 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     deltas1[0].peakElo = 1516;
     deltas1[0].unlocked = BADGE_FIRST_WIN;
 
-    assert(store_finalize(s, &res1, deltas1) == OK);
+    assert(store_finalize(store, &res1, deltas1) == OK);
 
     ProfileStats stats;
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.matches == 1);
     assert(stats.wins == 1);
     assert(stats.streak == 1);
@@ -751,9 +757,10 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     assert(stats.peakElo == 1516);
 
     /* Verify badge in achievements table */
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     sqlite3_stmt *stmt = NULL;
-    assert(sqlite3_prepare_v2(db, "SELECT badge, match_id FROM achievements WHERE user_id = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT badge, match_id FROM achievements WHERE user_id = ?;", -1,
+                              &stmt, NULL) == SQLITE_OK);
     sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == BADGE_FIRST_WIN);
@@ -762,7 +769,7 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
 
     /* Match 2: Loss */
     MatchId mid2 = "00000000-0000-0000-0000-000000000012";
-    assert(store_match_start(s, (const MatchId *)&mid2, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid2, players, CLASSIC, true) == OK);
 
     MatchResult res2;
     memset(&res2, 0, sizeof(res2));
@@ -786,9 +793,9 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     deltas2[0].peakElo = 1516;
     deltas2[0].unlocked = 0;
 
-    assert(store_finalize(s, &res2, deltas2) == OK);
+    assert(store_finalize(store, &res2, deltas2) == OK);
 
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.matches == 2);
     assert(stats.wins == 1);
     assert(stats.streak == -1);     /* resets to negative! */
@@ -797,7 +804,7 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
 
     /* Match 3: Win with peak ELO 1805 */
     MatchId mid3 = "00000000-0000-0000-0000-000000000013";
-    assert(store_match_start(s, (const MatchId *)&mid3, players, CLASSIC, true) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid3, players, CLASSIC, true) == OK);
 
     MatchResult res3;
     memset(&res3, 0, sizeof(res3));
@@ -821,27 +828,28 @@ static void test_profile_stats_finalize_accumulation_and_overwrite(void)
     deltas3[0].peakElo = 1805;
     deltas3[0].unlocked = BADGE_DIAMOND;
 
-    assert(store_finalize(s, &res3, deltas3) == OK);
+    assert(store_finalize(store, &res3, deltas3) == OK);
 
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.matches == 3);
     assert(stats.wins == 2);
     assert(stats.peakElo == 1805);
 
     /* Verify BADGE_DIAMOND is unlocked in achievements */
-    assert(sqlite3_prepare_v2(db, "SELECT count(*) FROM achievements WHERE user_id = ? AND badge = ?;", -1, &stmt, NULL) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db,
+                              "SELECT count(*) FROM achievements WHERE user_id = ? AND badge = ?;",
+                              -1, &stmt, NULL) == SQLITE_OK);
     sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
     sqlite3_bind_int(stmt, 2, BADGE_DIAMOND);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == 1);
     sqlite3_finalize(stmt);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static int db_query_int(sqlite3 *db, const char *sql)
-{
+static int dbQueryInt(sqlite3 *db, const char *sql) {
     sqlite3_stmt *stmt = NULL;
     assert(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
@@ -850,15 +858,14 @@ static int db_query_int(sqlite3 *db, const char *sql)
     return v;
 }
 
-static void test_upgrade_from_v1_database(void)
-{
-    const char *db_path = "/tmp/test_uno_store_upgrade_v1.db";
-    cleanup_file(db_path);
+static void testUpgradeFromV1Database(void) {
+    const char *dbPath = "/tmp/test_uno_store_upgrade_v1.db";
+    cleanupFile(dbPath);
 
     /* Build a v1-shaped file: an existing account, the old key/progress
      * achievements table, no profile_stats rows and user_version 0. */
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
     AccountCreate c;
     memset(&c, 0, sizeof(c));
     strncpy(c.email, "legacy@test.com", sizeof(c.email) - 1);
@@ -866,8 +873,8 @@ static void test_upgrade_from_v1_database(void)
     strncpy(c.name, "Legacy", sizeof(c.name) - 1);
     strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
     UserId uid = 0;
-    assert(store_account_create(s, &c, &uid) == OK);
-    sqlite3 *db = store_get_db(s);
+    assert(store_account_create(store, &c, &uid) == OK);
+    sqlite3 *db = store_get_db(store);
     assert(sqlite3_exec(db,
                         "UPDATE accounts SET elo = 1620 WHERE id = 1;"
                         "DELETE FROM profile_stats;"
@@ -878,39 +885,40 @@ static void test_upgrade_from_v1_database(void)
                         "INSERT INTO achievements (user_id, key, progress) VALUES (1, 'wins', 3);"
                         "PRAGMA user_version = 0;",
                         NULL, NULL, NULL) == SQLITE_OK);
-    store_close(s);
+    store_close(store);
 
     /* Reopening must upgrade instead of failing to prepare statements. */
-    s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    db = store_get_db(s);
-    assert(db_query_int(db, "PRAGMA user_version;") == 3);
-    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'badge';") == 1);
-    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'key';") == 0);
+    store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    db = store_get_db(store);
+    assert(dbQueryInt(db, "PRAGMA user_version;") == 3);
+    assert(dbQueryInt(db,
+                      "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'badge';") == 1);
+    assert(dbQueryInt(db,
+                      "SELECT count(*) FROM pragma_table_info('achievements') WHERE name = 'key';") == 0);
 
     ProfileStats stats;
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.matches == 0);
     assert(stats.peakElo == 1620);
-    store_close(s);
+    store_close(store);
 
     /* A second open of a v2 file is a no-op and keeps data. */
-    s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    assert(store_profile_stats(s, uid, &stats) == OK);
+    store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    assert(store_profile_stats(store, uid, &stats) == OK);
     assert(stats.peakElo == 1620);
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_account_create_is_atomic(void)
-{
-    const char *db_path = "/tmp/test_uno_account_atomic.db";
-    cleanup_file(db_path);
+static void testAccountCreateIsAtomic(void) {
+    const char *dbPath = "/tmp/test_uno_account_atomic.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    sqlite3 *db = store_get_db(s);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    sqlite3 *db = store_get_db(store);
 
     /* Make the profile_stats insert fail after the account insert succeeded. */
     assert(sqlite3_exec(db,
@@ -925,21 +933,21 @@ static void test_account_create_is_atomic(void)
     strncpy(c.name, "Atomic", sizeof(c.name) - 1);
     strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
     UserId uid = 0;
-    assert(store_account_create(s, &c, &uid) == STORAGE_ERROR);
-    assert(db_query_int(db, "SELECT count(*) FROM accounts;") == 0);
+    assert(store_account_create(store, &c, &uid) == STORAGE_ERROR);
+    assert(dbQueryInt(db, "SELECT count(*) FROM accounts;") == 0);
 
     /* Once storage recovers, the same email can register. */
     assert(sqlite3_exec(db, "DROP TRIGGER fail_profile;", NULL, NULL, NULL) == SQLITE_OK);
-    assert(store_account_create(s, &c, &uid) == OK);
-    assert(db_query_int(db, "SELECT count(*) FROM accounts;") == 1);
-    assert(db_query_int(db, "SELECT count(*) FROM profile_stats;") == 1);
+    assert(store_account_create(store, &c, &uid) == OK);
+    assert(dbQueryInt(db, "SELECT count(*) FROM accounts;") == 1);
+    assert(dbQueryInt(db, "SELECT count(*) FROM profile_stats;") == 1);
 
     /* Duplicate email still maps to BAD_REQUEST and leaves no open transaction. */
-    assert(store_account_create(s, &c, &uid) == BAD_REQUEST);
+    assert(store_account_create(store, &c, &uid) == BAD_REQUEST);
     assert(sqlite3_get_autocommit(db) != 0);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
 enum {
@@ -953,16 +961,14 @@ enum {
     RANKED_LOSER_ELO = 1484
 };
 
-static MatchEvent abortEvent(void)
-{
+static MatchEvent abortEvent(void) {
     MatchEvent event = {.seq = ABORT_EVENT_SEQ, .revision = ABORT_EVENT_SEQ, .actor = -1};
     strncpy(event.type, "MATCH_ABORTED", sizeof(event.type) - 1);
     strncpy(event.payload, "{}", sizeof(event.payload) - 1);
     return event;
 }
 
-static int matchStatusOf(sqlite3 *db, const char *matchId)
-{
+static int matchStatusOf(sqlite3 *db, const char *matchId) {
     sqlite3_stmt *stmt = NULL;
     assert(sqlite3_prepare_v2(db, "SELECT status FROM matches WHERE match_id = ?;",
                               -1, &stmt, NULL) == SQLITE_OK);
@@ -973,14 +979,13 @@ static int matchStatusOf(sqlite3 *db, const char *matchId)
     return status;
 }
 
-static void test_abort_atomic_and_idempotent(void)
-{
-    const char *db_path = "/tmp/test_uno_store_abort.db";
-    cleanup_file(db_path);
+static void testAbortAtomicAndIdempotent(void) {
+    const char *dbPath = "/tmp/test_uno_store_abort.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    sqlite3 *db = store_get_db(s);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    sqlite3 *db = store_get_db(store);
 
     MatchId mid = "00000000-0000-0000-0000-000000000020";
     PlayerSpec players[4] = {
@@ -989,7 +994,7 @@ static void test_abort_atomic_and_idempotent(void)
         {0, "Bot2", "bot", EASY, true},
         {0, "Bot3", "bot", EASY, true}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, false) == OK);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, false) == OK);
     MatchEvent event = abortEvent();
 
     /* A failed event insert must not leave the match marked ABORTED. */
@@ -997,26 +1002,26 @@ static void test_abort_atomic_and_idempotent(void)
                         "CREATE TEMP TRIGGER fail_abort_event BEFORE INSERT ON match_events "
                         "BEGIN SELECT RAISE(ABORT, 'forced'); END;",
                         NULL, NULL, NULL) == SQLITE_OK);
-    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == STORAGE_ERROR);
+    assert(store_abort(store, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == STORAGE_ERROR);
     assert(matchStatusOf(db, mid) == MATCH_ACTIVE);
-    assert(db_query_int(db, "SELECT count(*) FROM match_events;") == 0);
+    assert(dbQueryInt(db, "SELECT count(*) FROM match_events;") == 0);
     assert(sqlite3_get_autocommit(db) != 0);
     assert(sqlite3_exec(db, "DROP TRIGGER fail_abort_event;", NULL, NULL, NULL) == SQLITE_OK);
 
     /* A retried abort after success is OK and writes nothing more. */
-    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
-    assert(store_abort(s, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(store_abort(store, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
+    assert(store_abort(store, (const MatchId *)&mid, &event, ABORT_DURATION_MS) == OK);
     assert(matchStatusOf(db, mid) == MATCH_ABORTED);
-    assert(db_query_int(db, "SELECT count(*) FROM match_events "
+    assert(dbQueryInt(db, "SELECT count(*) FROM match_events "
                             "WHERE type = 'MATCH_ABORTED';") == 1);
-    assert(db_query_int(db, "SELECT duration_ms FROM matches;") == ABORT_DURATION_MS);
+    assert(dbQueryInt(db, "SELECT duration_ms FROM matches;") == ABORT_DURATION_MS);
 
     MatchId unknown = "99999999-9999-9999-9999-999999999998";
-    assert(store_abort(s, (const MatchId *)&unknown, &event, 0) == NOT_FOUND);
+    assert(store_abort(store, (const MatchId *)&unknown, &event, 0) == NOT_FOUND);
 
     /* A finalized match cannot be turned into an aborted one. */
     MatchId finished = "00000000-0000-0000-0000-000000000021";
-    assert(store_match_start(s, (const MatchId *)&finished, players, CLASSIC, false) == OK);
+    assert(store_match_start(store, (const MatchId *)&finished, players, CLASSIC, false) == OK);
     MatchResult res;
     memset(&res, 0, sizeof(res));
     strncpy(res.matchId, finished, sizeof(res.matchId) - 1);
@@ -1024,23 +1029,22 @@ static void test_abort_atomic_and_idempotent(void)
     res.winnerSeat = 0;
     res.winnerTeam = -1;
     res.players[0].userId = 101;
-    assert(store_finalize(s, &res, NULL) == OK);
-    assert(store_abort(s, (const MatchId *)&finished, &event, 0) == INVALID_ACTION);
+    assert(store_finalize(store, &res, NULL) == OK);
+    assert(store_abort(store, (const MatchId *)&finished, &event, 0) == INVALID_ACTION);
     assert(matchStatusOf(db, finished) == MATCH_FINALIZED);
     assert(sqlite3_get_autocommit(db) != 0);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_ranked_finalize_updates_elo_once(void)
-{
-    const char *db_path = "/tmp/test_uno_store_ranked.db";
-    cleanup_file(db_path);
+static void testRankedFinalizeUpdatesEloOnce(void) {
+    const char *dbPath = "/tmp/test_uno_store_ranked.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    sqlite3 *db = store_get_db(s);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    sqlite3 *db = store_get_db(store);
 
     AccountCreate c;
     memset(&c, 0, sizeof(c));
@@ -1049,9 +1053,9 @@ static void test_ranked_finalize_updates_elo_once(void)
     strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
     UserId winner = 0, loser = 0;
     strncpy(c.email, "winner@test.com", sizeof(c.email) - 1);
-    assert(store_account_create(s, &c, &winner) == OK);
+    assert(store_account_create(store, &c, &winner) == OK);
     strncpy(c.email, "loser@test.com", sizeof(c.email) - 1);
-    assert(store_account_create(s, &c, &loser) == OK);
+    assert(store_account_create(store, &c, &loser) == OK);
 
     MatchId mid = "00000000-0000-0000-0000-000000000022";
     PlayerSpec players[4] = {
@@ -1060,8 +1064,8 @@ static void test_ranked_finalize_updates_elo_once(void)
         {0, "Bot1", "bot", EASY, true},
         {0, "Bot2", "bot", EASY, true}
     };
-    assert(store_match_start(s, (const MatchId *)&mid, players, CLASSIC, true) == OK);
-    assert(db_query_int(db, "SELECT ranked FROM matches;") == 1);
+    assert(store_match_start(store, (const MatchId *)&mid, players, CLASSIC, true) == OK);
+    assert(dbQueryInt(db, "SELECT ranked FROM matches;") == 1);
 
     MatchResult res;
     memset(&res, 0, sizeof(res));
@@ -1082,35 +1086,34 @@ static void test_ranked_finalize_updates_elo_once(void)
     res.players[1].eloAfter = RANKED_LOSER_ELO;
 
     Account account;
-    assert(store_finalize(s, &res, NULL) == OK);
-    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(store_finalize(store, &res, NULL) == OK);
+    assert(store_account_get_by_id(store, winner, &account) == OK);
     assert(account.elo == RANKED_WINNER_ELO);
-    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(store_account_get_by_id(store, loser, &account) == OK);
     assert(account.elo == RANKED_LOSER_ELO);
 
     /* Replaying the same finalize (storage retry) must not apply ELO twice. */
-    assert(store_finalize(s, &res, NULL) == OK);
-    assert(store_account_get_by_id(s, winner, &account) == OK);
+    assert(store_finalize(store, &res, NULL) == OK);
+    assert(store_account_get_by_id(store, winner, &account) == OK);
     assert(account.elo == RANKED_WINNER_ELO);
-    assert(store_account_get_by_id(s, loser, &account) == OK);
+    assert(store_account_get_by_id(store, loser, &account) == OK);
     assert(account.elo == RANKED_LOSER_ELO);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_leaderboard_order(void)
-{
-    const char *db_path = "/tmp/test_uno_store_leaderboard.db";
-    cleanup_file(db_path);
+static void testLeaderboardOrder(void) {
+    const char *dbPath = "/tmp/test_uno_store_leaderboard.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    sqlite3 *db = store_get_db(s);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    sqlite3 *db = store_get_db(store);
 
     LeaderboardEntry entries[STORE_LEADERBOARD_MAX];
     size_t count = 99;
-    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(store_leaderboard(store, entries, &count) == OK);
     assert(count == 0);
 
     UserId ids[LEADERBOARD_ACCOUNTS];
@@ -1121,7 +1124,7 @@ static void test_leaderboard_order(void)
         snprintf(c.name, sizeof(c.name), "Rank%d", i);
         snprintf(c.avatar, sizeof(c.avatar), "av%d", i);
         strncpy(c.hash, "hash", sizeof(c.hash) - 1);
-        assert(store_account_create(s, &c, &ids[i]) == OK);
+        assert(store_account_create(store, &c, &ids[i]) == OK);
 
         char sql[128];
         snprintf(sql, sizeof(sql), "UPDATE accounts SET elo = %d WHERE id = %lld;",
@@ -1134,7 +1137,7 @@ static void test_leaderboard_order(void)
              LEADERBOARD_TIE_ELO, (long long)ids[9], (long long)ids[4]);
     assert(sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK);
 
-    assert(store_leaderboard(s, entries, &count) == OK);
+    assert(store_leaderboard(store, entries, &count) == OK);
     assert(count == STORE_LEADERBOARD_MAX);
     assert(entries[0].userId == ids[4] && entries[0].elo == LEADERBOARD_TIE_ELO);
     assert(entries[1].userId == ids[9] && entries[1].elo == LEADERBOARD_TIE_ELO);
@@ -1151,8 +1154,8 @@ static void test_leaderboard_order(void)
         assert(entries[i].userId != ids[0] && entries[i].userId != ids[1]);
     }
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
 enum {
@@ -1165,8 +1168,7 @@ enum {
 
 static const char *INJECTION_NAME = "'; DROP TABLE accounts;--";
 
-static UserId createAccount(Store *s, const char *email, const char *name)
-{
+static UserId createAccount(Store *store, const char *email, const char *name) {
     AccountCreate c;
     memset(&c, 0, sizeof(c));
     strncpy(c.email, email, sizeof(c.email) - 1);
@@ -1174,140 +1176,135 @@ static UserId createAccount(Store *s, const char *email, const char *name)
     strncpy(c.name, name, sizeof(c.name) - 1);
     strncpy(c.avatar, "fox", sizeof(c.avatar) - 1);
     UserId id = 0;
-    assert(store_account_create(s, &c, &id) == OK);
+    assert(store_account_create(store, &c, &id) == OK);
     return id;
 }
 
-static const FriendRow *findFriend(const FriendRow *rows, size_t count, UserId id)
-{
+static const FriendRow *findFriend(const FriendRow *rows, size_t count, UserId id) {
     for (size_t i = 0; i < count; i++) {
         if (rows[i].userId == id) return &rows[i];
     }
     return NULL;
 }
 
-static FriendLink linkOf(Store *s, UserId me, UserId other)
-{
+static FriendLink linkOf(Store *store, UserId me, UserId other) {
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
-    assert(store_friend_list(s, me, rows, &count) == OK);
+    assert(store_friend_list(store, me, rows, &count) == OK);
     const FriendRow *row = findFriend(rows, count, other);
     return row ? row->link : FRIEND_NONE;
 }
 
-static void test_friend_request_rules(void)
-{
-    const char *db_path = "/tmp/test_uno_store_friend_request.db";
-    cleanup_file(db_path);
+static void testFriendRequestRules(void) {
+    const char *dbPath = "/tmp/test_uno_store_friend_request.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
-    UserId bob = createAccount(s, "bob@test.com", "Bob");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
+    UserId bob = createAccount(store, "bob@test.com", "Bob");
 
-    assert(store_friend_request(s, alice, alice) == BAD_REQUEST);
-    assert(store_friend_request(s, alice, UNKNOWN_ACCOUNT_ID) == NOT_FOUND);
+    assert(store_friend_request(store, alice, alice) == BAD_REQUEST);
+    assert(store_friend_request(store, alice, UNKNOWN_ACCOUNT_ID) == NOT_FOUND);
 
-    assert(store_friend_request(s, alice, bob) == OK);
-    assert(linkOf(s, alice, bob) == FRIEND_PENDING_OUT);
-    assert(linkOf(s, bob, alice) == FRIEND_PENDING_IN);
+    assert(store_friend_request(store, alice, bob) == OK);
+    assert(linkOf(store, alice, bob) == FRIEND_PENDING_OUT);
+    assert(linkOf(store, bob, alice) == FRIEND_PENDING_IN);
 
     /* A second request in either direction is refused, not merged. */
-    assert(store_friend_request(s, alice, bob) == INVALID_ACTION);
-    assert(store_friend_request(s, bob, alice) == INVALID_ACTION);
-    assert(db_query_int(store_get_db(s), "SELECT count(*) FROM friends;") == 1);
+    assert(store_friend_request(store, alice, bob) == INVALID_ACTION);
+    assert(store_friend_request(store, bob, alice) == INVALID_ACTION);
+    assert(dbQueryInt(store_get_db(store), "SELECT count(*) FROM friends;") == 1);
 
     /* The sender cannot answer its own request. */
-    assert(store_friend_reply(s, alice, bob, true) == NOT_FOUND);
-    assert(linkOf(s, alice, bob) == FRIEND_PENDING_OUT);
+    assert(store_friend_reply(store, alice, bob, true) == NOT_FOUND);
+    assert(linkOf(store, alice, bob) == FRIEND_PENDING_OUT);
 
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
-    assert(store_friend_list(s, bob, rows, &count) == OK);
+    assert(store_friend_list(store, bob, rows, &count) == OK);
     assert(count == 1);
     assert(rows[0].userId == alice);
     assert(strcmp(rows[0].name, "Alice") == 0);
     assert(strcmp(rows[0].avatar, "fox") == 0);
     assert(rows[0].elo == PROFILE_ELO_BEFORE);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_friend_reply_accept_and_reject(void)
-{
-    const char *db_path = "/tmp/test_uno_store_friend_reply.db";
-    cleanup_file(db_path);
+static void testFriendReplyAcceptAndReject(void) {
+    const char *dbPath = "/tmp/test_uno_store_friend_reply.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
-    UserId bob = createAccount(s, "bob@test.com", "Bob");
-    UserId carol = createAccount(s, "carol@test.com", "Carol");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
+    UserId bob = createAccount(store, "bob@test.com", "Bob");
+    UserId carol = createAccount(store, "carol@test.com", "Carol");
 
     /* No pending request at all. */
-    assert(store_friend_reply(s, bob, alice, true) == NOT_FOUND);
-    assert(store_friend_reply(s, bob, alice, false) == NOT_FOUND);
+    assert(store_friend_reply(store, bob, alice, true) == NOT_FOUND);
+    assert(store_friend_reply(store, bob, alice, false) == NOT_FOUND);
 
-    assert(store_friend_request(s, alice, bob) == OK);
-    assert(store_friend_reply(s, bob, alice, true) == OK);
-    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
-    assert(linkOf(s, bob, alice) == FRIEND_ACCEPTED);
+    assert(store_friend_request(store, alice, bob) == OK);
+    assert(store_friend_reply(store, bob, alice, true) == OK);
+    assert(linkOf(store, alice, bob) == FRIEND_ACCEPTED);
+    assert(linkOf(store, bob, alice) == FRIEND_ACCEPTED);
     /* Already accepted: nothing pending to answer, and no new request. */
-    assert(store_friend_reply(s, bob, alice, false) == NOT_FOUND);
-    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
-    assert(store_friend_request(s, bob, alice) == INVALID_ACTION);
+    assert(store_friend_reply(store, bob, alice, false) == NOT_FOUND);
+    assert(linkOf(store, alice, bob) == FRIEND_ACCEPTED);
+    assert(store_friend_request(store, bob, alice) == INVALID_ACTION);
 
     /* Reject removes the row, so the list is empty and a new request works. */
-    assert(store_friend_request(s, carol, alice) == OK);
-    assert(store_friend_reply(s, alice, carol, false) == OK);
+    assert(store_friend_request(store, carol, alice) == OK);
+    assert(store_friend_reply(store, alice, carol, false) == OK);
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 99;
-    assert(store_friend_list(s, carol, rows, &count) == OK);
+    assert(store_friend_list(store, carol, rows, &count) == OK);
     assert(count == 0);
-    assert(linkOf(s, alice, carol) == FRIEND_NONE);
-    assert(store_friend_request(s, carol, alice) == OK);
-    assert(linkOf(s, alice, carol) == FRIEND_PENDING_IN);
+    assert(linkOf(store, alice, carol) == FRIEND_NONE);
+    assert(store_friend_request(store, carol, alice) == OK);
+    assert(linkOf(store, alice, carol) == FRIEND_PENDING_IN);
 
     /* Alice now sees one accepted friend and one incoming request. */
-    assert(store_friend_list(s, alice, rows, &count) == OK);
+    assert(store_friend_list(store, alice, rows, &count) == OK);
     assert(count == 2);
     assert(rows[0].userId == bob && rows[0].link == FRIEND_ACCEPTED);
     assert(rows[1].userId == carol && rows[1].link == FRIEND_PENDING_IN);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
 enum { FRIEND_FLOOD_EXTRA = 6 };
 
-static void test_friend_list_accepted_before_pending(void)
-{
-    const char *db_path = "/tmp/test_uno_store_friend_flood.db";
-    cleanup_file(db_path);
+static void testFriendListAcceptedBeforePending(void) {
+    const char *dbPath = "/tmp/test_uno_store_friend_flood.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId me = createAccount(s, "me@test.com", "Me");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId me = createAccount(store, "me@test.com", "Me");
     /* More pending requests than the list can hold, all from lower ids than
      * the real friend, so ordering by id alone would push the friend out. */
     size_t flood = STORE_FRIEND_MAX + FRIEND_FLOOD_EXTRA;
     for (size_t i = 0; i < flood; i++) {
         char email[64];
         snprintf(email, sizeof(email), "spam%zu@test.com", i);
-        UserId spammer = createAccount(s, email, "Spam");
-        assert(store_friend_request(s, spammer, me) == OK);
+        UserId spammer = createAccount(store, email, "Spam");
+        assert(store_friend_request(store, spammer, me) == OK);
     }
-    UserId oldFriend = createAccount(s, "friend1@test.com", "Friend1");
-    UserId newFriend = createAccount(s, "friend2@test.com", "Friend2");
-    assert(store_friend_request(s, newFriend, me) == OK);
-    assert(store_friend_reply(s, me, newFriend, true) == OK);
-    assert(store_friend_request(s, me, oldFriend) == OK);
-    assert(store_friend_reply(s, oldFriend, me, true) == OK);
+    UserId oldFriend = createAccount(store, "friend1@test.com", "Friend1");
+    UserId newFriend = createAccount(store, "friend2@test.com", "Friend2");
+    assert(store_friend_request(store, newFriend, me) == OK);
+    assert(store_friend_reply(store, me, newFriend, true) == OK);
+    assert(store_friend_request(store, me, oldFriend) == OK);
+    assert(store_friend_reply(store, oldFriend, me, true) == OK);
 
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
-    assert(store_friend_list(s, me, rows, &count) == OK);
+    assert(store_friend_list(store, me, rows, &count) == OK);
     assert(count == STORE_FRIEND_MAX);
     /* Accepted rows come first, each group ordered by account id. */
     assert(rows[0].userId == oldFriend && rows[0].link == FRIEND_ACCEPTED);
@@ -1317,11 +1314,11 @@ static void test_friend_list_accepted_before_pending(void)
         assert(i == 2 || rows[i].userId > rows[i - 1].userId);
     }
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void startHumanMatch(Store *s, const char *matchId, Mode mode,
+static void startHumanMatch(Store *store, const char *matchId, Mode mode,
                             const UserId humans[4])
 {
     PlayerSpec players[4];
@@ -1332,12 +1329,11 @@ static void startHumanMatch(Store *s, const char *matchId, Mode mode,
         snprintf(players[i].name, sizeof(players[i].name), "P%d", i);
         strncpy(players[i].avatar, "fox", sizeof(players[i].avatar) - 1);
     }
-    assert(store_match_start(s, (const MatchId *)matchId, players, mode,
+    assert(store_match_start(store, (const MatchId *)matchId, players, mode,
                              mode == CLASSIC) == OK);
 }
 
-static MatchResult finishedResult(const char *matchId, Mode mode, const UserId humans[4])
-{
+static MatchResult finishedResult(const char *matchId, Mode mode, const UserId humans[4]) {
     MatchResult res;
     memset(&res, 0, sizeof(res));
     strncpy(res.matchId, matchId, sizeof(res.matchId) - 1);
@@ -1356,19 +1352,18 @@ static MatchResult finishedResult(const char *matchId, Mode mode, const UserId h
     return res;
 }
 
-static void test_profile_get_after_matches(void)
-{
-    const char *db_path = "/tmp/test_uno_store_profile.db";
-    cleanup_file(db_path);
+static void testProfileGetAfterMatches(void) {
+    const char *dbPath = "/tmp/test_uno_store_profile.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
-    UserId bob = createAccount(s, "bob@test.com", "Bob");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
+    UserId bob = createAccount(store, "bob@test.com", "Bob");
 
     Profile profile;
-    assert(store_profile_get(s, UNKNOWN_ACCOUNT_ID, &profile) == NOT_FOUND);
-    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(store_profile_get(store, UNKNOWN_ACCOUNT_ID, &profile) == NOT_FOUND);
+    assert(store_profile_get(store, alice, &profile) == OK);
     assert(profile.userId == alice);
     assert(profile.historyCount == 0);
     assert(profile.badges == 0);
@@ -1376,7 +1371,7 @@ static void test_profile_get_after_matches(void)
     /* Ranked CLASSIC win for Alice at seat 0. */
     const UserId classicSeats[4] = {alice, bob, 0, 0};
     const char *rankedId = "00000000-0000-0000-0000-000000000030";
-    startHumanMatch(s, rankedId, CLASSIC, classicSeats);
+    startHumanMatch(store, rankedId, CLASSIC, classicSeats);
     MatchResult ranked = finishedResult(rankedId, CLASSIC, classicSeats);
     ranked.winnerSeat = 0;
     ranked.players[0].eloAfter = PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN;
@@ -1392,26 +1387,26 @@ static void test_profile_get_after_matches(void)
     deltas[1].add.matches = 1;
     deltas[1].streak = -1;
     deltas[1].peakElo = PROFILE_ELO_BEFORE;
-    assert(store_finalize(s, &ranked, deltas) == OK);
+    assert(store_finalize(store, &ranked, deltas) == OK);
 
     /* Unranked TWO_V_TWO where Alice (seat 1, team 1) loses to team 0. */
     const UserId teamSeats[4] = {bob, alice, 0, 0};
     const char *teamId = "00000000-0000-0000-0000-000000000031";
-    startHumanMatch(s, teamId, TWO_V_TWO, teamSeats);
+    startHumanMatch(store, teamId, TWO_V_TWO, teamSeats);
     MatchResult team = finishedResult(teamId, TWO_V_TWO, teamSeats);
     team.winnerSeat = 0;
     team.winnerTeam = 0;
     for (int i = 0; i < 4; i++) team.players[i].team = i % 2;
-    assert(store_finalize(s, &team, NULL) == OK);
+    assert(store_finalize(store, &team, NULL) == OK);
 
     /* An aborted and an active match never reach the profile. */
     const char *abortedId = "00000000-0000-0000-0000-000000000032";
-    startHumanMatch(s, abortedId, DRAFT, classicSeats);
+    startHumanMatch(store, abortedId, DRAFT, classicSeats);
     MatchEvent event = abortEvent();
-    assert(store_abort(s, (const MatchId *)abortedId, &event, 0) == OK);
-    startHumanMatch(s, "00000000-0000-0000-0000-000000000033", SIDE, classicSeats);
+    assert(store_abort(store, (const MatchId *)abortedId, &event, 0) == OK);
+    startHumanMatch(store, "00000000-0000-0000-0000-000000000033", SIDE, classicSeats);
 
-    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(store_profile_get(store, alice, &profile) == OK);
     assert(profile.userId == alice);
     assert(strcmp(profile.name, "Alice") == 0);
     assert(strcmp(profile.avatar, "fox") == 0);
@@ -1435,38 +1430,37 @@ static void test_profile_get_after_matches(void)
     assert(profile.history[1].endedAt > 0);
 
     /* Bob: lost the ranked match, won the team match as team 0. */
-    assert(store_profile_get(s, bob, &profile) == OK);
+    assert(store_profile_get(store, bob, &profile) == OK);
     assert(profile.modes[CLASSIC].matches == 1 && profile.modes[CLASSIC].wins == 0);
     assert(profile.modes[TWO_V_TWO].wins == 1);
     assert(profile.history[0].won);
     assert(profile.history[1].eloDelta == -PROFILE_ELO_GAIN);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_profile_history_newest_twenty(void)
-{
-    const char *db_path = "/tmp/test_uno_store_history.db";
-    cleanup_file(db_path);
+static void testProfileHistoryNewestTwenty(void) {
+    const char *dbPath = "/tmp/test_uno_store_history.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
     const UserId seats[4] = {alice, 0, 0, 0};
 
     const int total = STORE_HISTORY_MAX + 2;
     for (int i = 0; i < total; i++) {
         char matchId[37];
         snprintf(matchId, sizeof(matchId), "00000000-0000-0000-0000-0000000001%02d", i);
-        startHumanMatch(s, matchId, DRAFT, seats);
+        startHumanMatch(store, matchId, DRAFT, seats);
         MatchResult res = finishedResult(matchId, DRAFT, seats);
         res.winnerSeat = 0;
-        assert(store_finalize(s, &res, NULL) == OK);
+        assert(store_finalize(store, &res, NULL) == OK);
     }
 
     Profile profile;
-    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(store_profile_get(store, alice, &profile) == OK);
     assert(profile.historyCount == STORE_HISTORY_MAX);
     assert(profile.modes[DRAFT].matches == (uint32_t)total);
     assert(profile.modes[DRAFT].wins == (uint32_t)total);
@@ -1474,69 +1468,67 @@ static void test_profile_history_newest_twenty(void)
     snprintf(newest, sizeof(newest), "00000000-0000-0000-0000-0000000001%02d", total - 1);
     assert(strcmp(profile.history[0].matchId, newest) == 0);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_profile_update_stores_text_verbatim(void)
-{
-    const char *db_path = "/tmp/test_uno_store_profile_update.db";
-    cleanup_file(db_path);
+static void testProfileUpdateStoresTextVerbatim(void) {
+    const char *dbPath = "/tmp/test_uno_store_profile_update.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
 
-    assert(store_profile_update(s, UNKNOWN_ACCOUNT_ID, "Ghost", "owl") == NOT_FOUND);
-    assert(store_profile_update(s, alice, NULL, "owl") == BAD_REQUEST);
+    assert(store_profile_update(store, UNKNOWN_ACCOUNT_ID, "Ghost", "owl") == NOT_FOUND);
+    assert(store_profile_update(store, alice, NULL, "owl") == BAD_REQUEST);
 
-    assert(store_profile_update(s, alice, "Alicia", "owl") == OK);
+    assert(store_profile_update(store, alice, "Alicia", "owl") == OK);
     Account account;
-    assert(store_account_get_by_id(s, alice, &account) == OK);
+    assert(store_account_get_by_id(store, alice, &account) == OK);
     assert(strcmp(account.name, "Alicia") == 0);
     assert(strcmp(account.avatar, "owl") == 0);
     assert(strcmp(account.email, "alice@test.com") == 0);
 
-    assert(store_profile_update(s, alice, INJECTION_NAME, "owl") == OK);
-    assert(store_account_get_by_id(s, alice, &account) == OK);
+    assert(store_profile_update(store, alice, INJECTION_NAME, "owl") == OK);
+    assert(store_account_get_by_id(store, alice, &account) == OK);
     assert(strcmp(account.name, INJECTION_NAME) == 0);
-    assert(db_query_int(store_get_db(s), "SELECT count(*) FROM accounts;") == 1);
+    assert(dbQueryInt(store_get_db(store), "SELECT count(*) FROM accounts;") == 1);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_friend_and_profile_survive_reopen(void)
-{
-    const char *db_path = "/tmp/test_uno_store_social_reopen.db";
-    cleanup_file(db_path);
+static void testFriendAndProfileSurviveReopen(void) {
+    const char *dbPath = "/tmp/test_uno_store_social_reopen.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
-    UserId bob = createAccount(s, "bob@test.com", "Bob");
-    UserId carol = createAccount(s, "carol@test.com", "Carol");
-    assert(store_friend_request(s, alice, bob) == OK);
-    assert(store_friend_reply(s, bob, alice, true) == OK);
-    assert(store_friend_request(s, carol, alice) == OK);
-    assert(store_profile_update(s, alice, "Alicia", "owl") == OK);
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
+    UserId bob = createAccount(store, "bob@test.com", "Bob");
+    UserId carol = createAccount(store, "carol@test.com", "Carol");
+    assert(store_friend_request(store, alice, bob) == OK);
+    assert(store_friend_reply(store, bob, alice, true) == OK);
+    assert(store_friend_request(store, carol, alice) == OK);
+    assert(store_profile_update(store, alice, "Alicia", "owl") == OK);
 
     const UserId seats[4] = {alice, bob, 0, 0};
     const char *matchId = "00000000-0000-0000-0000-000000000040";
-    startHumanMatch(s, matchId, CLASSIC, seats);
+    startHumanMatch(store, matchId, CLASSIC, seats);
     MatchResult res = finishedResult(matchId, CLASSIC, seats);
     res.winnerSeat = 0;
     res.players[0].eloAfter = PROFILE_ELO_BEFORE + PROFILE_ELO_GAIN;
-    assert(store_finalize(s, &res, NULL) == OK);
-    store_close(s);
+    assert(store_finalize(store, &res, NULL) == OK);
+    store_close(store);
 
-    s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    assert(linkOf(s, alice, bob) == FRIEND_ACCEPTED);
-    assert(linkOf(s, alice, carol) == FRIEND_PENDING_IN);
-    assert(linkOf(s, carol, alice) == FRIEND_PENDING_OUT);
+    store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    assert(linkOf(store, alice, bob) == FRIEND_ACCEPTED);
+    assert(linkOf(store, alice, carol) == FRIEND_PENDING_IN);
+    assert(linkOf(store, carol, alice) == FRIEND_PENDING_OUT);
     Profile profile;
-    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(store_profile_get(store, alice, &profile) == OK);
     assert(strcmp(profile.name, "Alicia") == 0);
     assert(strcmp(profile.avatar, "owl") == 0);
     assert(profile.historyCount == 1);
@@ -1544,75 +1536,73 @@ static void test_friend_and_profile_survive_reopen(void)
     assert(profile.history[0].eloDelta == PROFILE_ELO_GAIN);
     assert(profile.modes[CLASSIC].wins == 1);
 
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-static void test_upgrade_adds_match_end_time(void)
-{
-    const char *db_path = "/tmp/test_uno_store_upgrade_v2.db";
-    cleanup_file(db_path);
+static void testUpgradeAddsMatchEndTime(void) {
+    const char *dbPath = "/tmp/test_uno_store_upgrade_v2.db";
+    cleanupFile(dbPath);
 
-    Store *s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    UserId alice = createAccount(s, "alice@test.com", "Alice");
+    Store *store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    UserId alice = createAccount(store, "alice@test.com", "Alice");
     const UserId seats[4] = {alice, 0, 0, 0};
     const char *matchId = "00000000-0000-0000-0000-000000000050";
-    startHumanMatch(s, matchId, CLASSIC, seats);
+    startHumanMatch(store, matchId, CLASSIC, seats);
     MatchResult res = finishedResult(matchId, CLASSIC, seats);
     res.winnerSeat = 0;
-    assert(store_finalize(s, &res, NULL) == OK);
+    assert(store_finalize(store, &res, NULL) == OK);
 
     /* Rebuild the v2 shape: matches had no end-time column. */
-    sqlite3 *db = store_get_db(s);
+    sqlite3 *db = store_get_db(store);
     assert(sqlite3_exec(db,
                         "ALTER TABLE matches DROP COLUMN ended_at;"
                         "PRAGMA user_version = 2;",
                         NULL, NULL, NULL) == SQLITE_OK);
-    int createdAt = db_query_int(db, "SELECT created_at FROM matches;");
-    store_close(s);
+    int createdAt = dbQueryInt(db, "SELECT created_at FROM matches;");
+    store_close(store);
 
-    s = NULL;
-    assert(store_open(&s, db_path) == OK);
-    db = store_get_db(s);
-    assert(db_query_int(db, "PRAGMA user_version;") == 3);
-    assert(db_query_int(db, "SELECT count(*) FROM pragma_table_info('matches') "
+    store = NULL;
+    assert(store_open(&store, dbPath) == OK);
+    db = store_get_db(store);
+    assert(dbQueryInt(db, "PRAGMA user_version;") == 3);
+    assert(dbQueryInt(db, "SELECT count(*) FROM pragma_table_info('matches') "
                             "WHERE name = 'ended_at';") == 1);
 
     /* Old finalized rows get start + duration as their end time. */
     Profile profile;
-    assert(store_profile_get(s, alice, &profile) == OK);
+    assert(store_profile_get(store, alice, &profile) == OK);
     assert(profile.historyCount == 1);
     assert(profile.history[0].endedAt ==
            (int64_t)createdAt + PROFILE_DURATION_MS / MS_PER_SECOND);
-    store_close(s);
-    cleanup_file(db_path);
+    store_close(store);
+    cleanupFile(dbPath);
 }
 
-int main(void)
-{
-    test_friend_request_rules();
-    test_friend_reply_accept_and_reject();
-    test_friend_list_accepted_before_pending();
-    test_profile_get_after_matches();
-    test_profile_history_newest_twenty();
-    test_profile_update_stores_text_verbatim();
-    test_friend_and_profile_survive_reopen();
-    test_upgrade_adds_match_end_time();
-    test_abort_atomic_and_idempotent();
-    test_ranked_finalize_updates_elo_once();
-    test_leaderboard_order();
-    test_table_creation_and_migration();
-    test_upgrade_from_v1_database();
-    test_account_create_is_atomic();
-    test_store_match_start_persisting();
-    test_store_events_uniqueness_and_idempotency();
-    test_store_finalize_idempotency_and_no_double_elo();
-    test_crash_recovery_aborted();
-    test_transaction_rollback_on_failure();
-    test_store_export_match();
-    test_profile_stats_initial_state();
-    test_profile_stats_finalize_accumulation_and_overwrite();
+int main(void) {
+    testFriendRequestRules();
+    testFriendReplyAcceptAndReject();
+    testFriendListAcceptedBeforePending();
+    testProfileGetAfterMatches();
+    testProfileHistoryNewestTwenty();
+    testProfileUpdateStoresTextVerbatim();
+    testFriendAndProfileSurviveReopen();
+    testUpgradeAddsMatchEndTime();
+    testAbortAtomicAndIdempotent();
+    testRankedFinalizeUpdatesEloOnce();
+    testLeaderboardOrder();
+    testTableCreationAndMigration();
+    testUpgradeFromV1Database();
+    testAccountCreateIsAtomic();
+    testStoreMatchStartPersisting();
+    testStoreEventsUniquenessAndIdempotency();
+    testStoreFinalizeIdempotencyAndNoDoubleElo();
+    testCrashRecoveryAborted();
+    testTransactionRollbackOnFailure();
+    testStoreExportMatch();
+    testProfileStatsInitialState();
+    testProfileStatsFinalizeAccumulationAndOverwrite();
 
     puts("store: OK");
     return 0;

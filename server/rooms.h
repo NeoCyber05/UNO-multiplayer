@@ -30,7 +30,7 @@ typedef struct {
     PlayerSpec players[4];
 } RoomStart;
 
-typedef Status (*OnMatchStart)(App *app, const RoomStart *rs, MatchId *out_match_id);
+typedef Status (*OnMatchStart)(App *app, const RoomStart *roomStart, MatchId *outMatchId);
 
 typedef struct {
     bool occupied;
@@ -84,29 +84,114 @@ struct Rooms {
     uint32_t next_queue_room; /* serial for the next "Qnnnnn" queue match id */
 };
 
-/* Lifecycle */
-Status rooms_init(Rooms **out, App *app, OnMatchStart on_start);
-void rooms_destroy(Rooms *r);
+/**
+ * @brief Allocate the room, invite and party tables.
+ * @param[out] outRooms Receives the tables; free with rooms_destroy.
+ * @param[in] app Server state the tables push through; borrowed.
+ * @param[in] onStart Called by rooms_start/rooms_make_match to open a match.
+ * @return OK, BAD_REQUEST for NULL @p outRooms, or STORAGE_ERROR when out of memory.
+ */
+Status rooms_init(Rooms **outRooms, App *app, OnMatchStart onStart);
 
-/* Code generation & helpers */
-void rooms_generate_code(Rooms *r, char out_code[7]);
-Room *rooms_find_by_code(Rooms *r, const char *code);
-Room *rooms_find_by_user(Rooms *r, UserId user_id);
+/** @brief Free the tables; NULL is ignored. */
+void rooms_destroy(Rooms *rooms);
 
-/* Direct Room operations */
-Status rooms_create(Rooms *r, UserId host_id, const char *name, const char *avatar, Mode mode, char out_code[7]);
-Status rooms_join(Rooms *r, UserId user_id, const char *name, const char *avatar, const char *code, Seat *out_seat);
-Status rooms_leave(Rooms *r, UserId user_id);
-Status rooms_set_bot(Rooms *r, UserId requester_id, int seat, BotLevel level);
-Status rooms_kick(Rooms *r, UserId requester_id, int seat);
-Status rooms_set_mode(Rooms *r, UserId requester_id, Mode mode);
-Status rooms_start(App *app, const char *room_id);
+/**
+ * @brief Pick a random 6-character room code from [0-9A-Z].
+ *
+ * Codes that look like queue match ids ("Q" + 5 digits) or belong to another
+ * active room are drawn again.
+ *
+ * @param[in] rooms Tables to check for collisions, or NULL to skip that check.
+ * @param[out] outCode Buffer of 7 bytes, NUL-terminated on return.
+ */
+void rooms_generate_code(Rooms *rooms, char outCode[7]);
 
-/* Invite operations */
-Status rooms_invite_create(Rooms *r, UserId sender_id, UserId recipient_id, const char *kind, const char *room_code, char out_invite_id[37]);
+/** @brief Active room with this code (case-insensitive), or NULL. */
+Room *rooms_find_by_code(Rooms *rooms, const char *code);
 
-/* Disconnect handler */
-void rooms_disconnect(App *app, UserId user_id, uint64_t now_ms);
+/** @brief Active room where @p userId sits as a human, or NULL. */
+Room *rooms_find_by_user(Rooms *rooms, UserId userId);
+
+/**
+ * @brief Open a waiting, unranked room with @p hostId in seat 0.
+ * @param[in] name Display name, or NULL for "Host"; copied.
+ * @param[in] avatar Avatar id, or NULL for "fox"; copied.
+ * @param[out] outCode Receives the new code; may be NULL.
+ * @return OK; BAD_REQUEST for invalid arguments; BUSY when the host already
+ *         sits in a room; SERVER_FULL when all MAX_ROOMS are in use.
+ */
+Status rooms_create(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
+                    char outCode[7]);
+
+/**
+ * @brief Seat @p userId in the lowest free seat of the room named by @p code.
+ * @param[out] outSeat Receives the seat; may be NULL.
+ * @return OK; BAD_REQUEST for invalid arguments; BUSY when the user already sits
+ *         in a room; NOT_FOUND for an unknown code; ROOM_FULL with no free seat.
+ */
+Status rooms_join(Rooms *rooms, UserId userId, const char *name, const char *avatar,
+                  const char *code, Seat *outSeat);
+
+/**
+ * @brief Free the user's seat; the last human leaving closes the room and a
+ *        leaving host hands the host seat to the lowest remaining human.
+ * @return Always OK, also when the user sits in no room.
+ */
+Status rooms_leave(Rooms *rooms, UserId userId);
+
+/**
+ * @brief Put a bot of @p level in @p seat (host only).
+ * @return OK; BAD_REQUEST for a bad seat; NOT_FOUND without a room; FORBIDDEN
+ *         for a non-host; INVALID_ACTION for the host seat or a human's seat.
+ */
+Status rooms_set_bot(Rooms *rooms, UserId requesterId, int seat, BotLevel level);
+
+/**
+ * @brief Empty an occupied seat other than the host's (host only).
+ * @return OK; BAD_REQUEST for a bad seat; NOT_FOUND without a room; FORBIDDEN
+ *         for a non-host; INVALID_ACTION for the host seat or an empty seat.
+ */
+Status rooms_kick(Rooms *rooms, UserId requesterId, int seat);
+
+/**
+ * @brief Change the room's game mode (host only).
+ * @return OK, BAD_REQUEST, NOT_FOUND without a room, or FORBIDDEN for a non-host.
+ */
+Status rooms_set_mode(Rooms *rooms, UserId requesterId, Mode mode);
+
+/**
+ * @brief Start the match of a full waiting room through Rooms.on_start.
+ *
+ * The room only switches to ROOM_STATUS_IN_MATCH when the callback succeeds;
+ * on failure it stays waiting and unchanged.
+ *
+ * @return OK; BAD_REQUEST; NOT_FOUND for an unknown room; INVALID_ACTION when
+ *         the room is not waiting or a seat is empty; BUSY without a callback;
+ *         otherwise the callback's error.
+ */
+Status rooms_start(App *app, const char *roomId);
+
+/**
+ * @brief Store a room or party invite in a free or expired slot.
+ *
+ * A slot is reused once its invite is older than INVITE_TIMEOUT_MS.
+ *
+ * @param[in] kind "room" or "party"; copied.
+ * @param[in] roomCode Room the invite points at (room invites); copied.
+ * @param[out] outInviteId Receives a random UUID; buffer of 37 bytes.
+ * @return OK, BAD_REQUEST for missing users, or SERVER_FULL with no free slot.
+ */
+Status rooms_invite_create(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
+                           const char *roomCode, char outInviteId[37]);
+
+/**
+ * @brief Clean up after a user dropped: leave their party, cancel invites they
+ *        sent or received, and free a waiting-room seat (the room then gets a
+ *        fresh state push). A seat in a running match is kept for RESUME/LOGIN.
+ * @param[in] nowMs Currently unused.
+ */
+void rooms_disconnect(App *app, UserId userId, uint64_t nowMs);
 
 /**
  * @brief Start a ranked matchmaking match for four humans through Rooms.on_start.
@@ -117,15 +202,15 @@ void rooms_disconnect(App *app, UserId user_id, uint64_t now_ms);
  * @param[in,out] app Server state; app->rooms supplies on_start.
  * @param[in] mode Mode of the match.
  * @param[in] users Account per seat, already in seat order; 0 (bot) is rejected.
- * @param[out] out_match_id Receives the match id on success.
+ * @param[out] outMatchId Receives the match id on success.
  * @return OK on success; BAD_REQUEST for NULL arguments or a zero user;
  *         BUSY without an on_start callback; the store lookup error; or the
  *         on_start (matchesStart) error such as BUSY, SERVER_FULL or STORAGE_ERROR.
  */
-Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *out_match_id);
+Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *outMatchId);
 
 /* Envelope command dispatcher */
-Status rooms_handle(App *app, ConnId conn_id, const Envelope *e);
+Status rooms_handle(App *app, ConnId connId, const Envelope *envelope);
 
 /* Broadcast */
 Status rooms_broadcast_state(App *app, const Room *room);
@@ -133,11 +218,11 @@ Status rooms_broadcast_state(App *app, const Room *room);
 /**
  * @brief Release a room once its match is finalized so members may play again.
  * @param[in,out] app Server state; app->rooms owns the room table.
- * @param[in] room_id Room code carried by the finished match; an empty or unknown
+ * @param[in] roomId Room code carried by the finished match; an empty or unknown
  *            code (e.g. a queue match or a room every human already left) is ignored,
  *            as is a room not in ROOM_STATUS_IN_MATCH.
  */
-void rooms_match_ended(App *app, const char *room_id);
+void rooms_match_ended(App *app, const char *roomId);
 
 /**
  * @brief Push the user's current ROOM_STATE and PARTY_STATE to their live connection.
@@ -145,9 +230,9 @@ void rooms_match_ended(App *app, const char *room_id);
  * Used after LOGIN: a re-login moves the session to a new socket without leaving
  * the room or party, and that socket has not seen any snapshot yet.
  * @param[in,out] app Server state owned by the poll loop.
- * @param[in] user_id Account that just bound a connection.
+ * @param[in] userId Account that just bound a connection.
  */
-void rooms_sync_user(App *app, UserId user_id);
+void rooms_sync_user(App *app, UserId userId);
 
 /**
  * @brief Copy a renamed account's name and avatar into its waiting-room seat.
@@ -155,14 +240,14 @@ void rooms_sync_user(App *app, UserId user_id);
  * A room still WAITING bumps its revision and broadcasts ROOM_STATE; a room
  * whose match already started keeps the identity the match was created with.
  * @param[in,out] app Server state; app->rooms owns the room table.
- * @param[in] u Account that changed its profile; a user in no room is ignored.
+ * @param[in] userId Account that changed its profile; a user in no room is ignored.
  * @param[in] name New display name, already validated.
  * @param[in] avatar New avatar key, already validated.
  */
-void rooms_update_identity(App *app, UserId u, const char *name, const char *avatar);
+void rooms_update_identity(App *app, UserId userId, const char *name, const char *avatar);
 
 /* Party operations */
-Party *party_find_by_user(Rooms *r, UserId user_id);
-Status party_leave(Rooms *r, UserId user_id);
+Party *party_find_by_user(Rooms *rooms, UserId userId);
+Status party_leave(Rooms *rooms, UserId userId);
 
 #endif

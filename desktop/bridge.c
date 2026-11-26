@@ -7,47 +7,41 @@
 #include <strings.h>
 #include <unistd.h>
 
-static char g_assets_dir[512] = "./client/dist";
-static BridgeDoneCallback g_done_cb = NULL;
-static void *g_done_ctx = NULL;
-static BridgeDisconnectCallback g_disconnect_cb = NULL;
-static void *g_disconnect_ctx = NULL;
-static bool g_scheme_registered = false;
+static char gAssetsDir[512] = "./client/dist";
+static BridgeDoneCallback gDoneCallback = NULL;
+static void *gDoneContext = NULL;
+static BridgeDisconnectCallback gDisconnectCallback = NULL;
+static void *gDisconnectContext = NULL;
+static bool gSchemeRegistered = false;
 
-void bridge_set_assets_dir(const char *assets_dir)
-{
-    if (assets_dir && *assets_dir) {
-        strncpy(g_assets_dir, assets_dir, sizeof(g_assets_dir) - 1);
-        g_assets_dir[sizeof(g_assets_dir) - 1] = '\0';
+void bridge_set_assets_dir(const char *assetsDir) {
+    if (assetsDir && *assetsDir) {
+        strncpy(gAssetsDir, assetsDir, sizeof(gAssetsDir) - 1);
+        gAssetsDir[sizeof(gAssetsDir) - 1] = '\0';
     }
 }
 
-const char *bridge_get_assets_dir(void)
-{
-    return g_assets_dir;
+const char *bridge_get_assets_dir(void) {
+    return gAssetsDir;
 }
 
-void bridge_set_done_callback(BridgeDoneCallback cb, void *ctx)
-{
-    g_done_cb = cb;
-    g_done_ctx = ctx;
+void bridge_set_done_callback(BridgeDoneCallback callback, void *context) {
+    gDoneCallback = callback;
+    gDoneContext = context;
 }
 
-void bridge_set_disconnect_callback(BridgeDisconnectCallback cb, void *ctx)
-{
-    g_disconnect_cb = cb;
-    g_disconnect_ctx = ctx;
+void bridge_set_disconnect_callback(BridgeDisconnectCallback callback, void *context) {
+    gDisconnectCallback = callback;
+    gDisconnectContext = context;
 }
 
 /* A send can fail because the frame is unusable (connection still fine) or
  * because the socket broke; only the latter makes the client unusable. */
-static bool client_is_broken(const Client *client)
-{
+static bool clientIsBroken(const Client *client) {
     return !client->connected || client->conn.fd < 0 || client->conn.closing;
 }
 
-static bool is_whitelisted_type(const char *type)
-{
+static bool isWhitelistedType(const char *type) {
     if (!type || !*type) return false;
     /* RESUME is deliberately absent: only native code holds the token. */
     static const char *const whitelist[] = {
@@ -91,20 +85,20 @@ static bool is_whitelisted_type(const char *type)
     return false;
 }
 
-Status bridge_dispatch(NetSession *session, Client *client, const char *json_str, size_t len,
-                       int32_t *js_id_out)
+Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText, size_t length,
+                       int32_t *outJsId)
 {
-    if (js_id_out) *js_id_out = 0;
-    if (!json_str || len == 0) return BAD_REQUEST;
+    if (outJsId) *outJsId = 0;
+    if (!jsonText || length == 0) return BAD_REQUEST;
 
-    struct json_tokener *tok = json_tokener_new();
-    if (!tok) return BUSY;
+    struct json_tokener *tokener = json_tokener_new();
+    if (!tokener) return BUSY;
 
-    struct json_object *root = json_tokener_parse_ex(tok, json_str, (int)len);
-    enum json_tokener_error jerr = json_tokener_get_error(tok);
-    json_tokener_free(tok);
+    struct json_object *root = json_tokener_parse_ex(tokener, jsonText, (int)length);
+    enum json_tokener_error parseError = json_tokener_get_error(tokener);
+    json_tokener_free(tokener);
 
-    if (jerr != json_tokener_success || !root) {
+    if (parseError != json_tokener_success || !root) {
         if (root) json_object_put(root);
         return BAD_REQUEST;
     }
@@ -114,49 +108,49 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *json_str
         return BAD_REQUEST;
     }
 
-    struct json_object *v_obj = NULL;
-    struct json_object *id_obj = NULL;
-    struct json_object *type_obj = NULL;
-    struct json_object *payload_obj = NULL;
+    struct json_object *versionJson = NULL;
+    struct json_object *idJson = NULL;
+    struct json_object *typeJson = NULL;
+    struct json_object *payloadJson = NULL;
 
-    if (!json_object_object_get_ex(root, "v", &v_obj) ||
-        !json_object_object_get_ex(root, "id", &id_obj) ||
-        !json_object_object_get_ex(root, "type", &type_obj) ||
-        !json_object_object_get_ex(root, "payload", &payload_obj)) {
+    if (!json_object_object_get_ex(root, "v", &versionJson) ||
+        !json_object_object_get_ex(root, "id", &idJson) ||
+        !json_object_object_get_ex(root, "type", &typeJson) ||
+        !json_object_object_get_ex(root, "payload", &payloadJson)) {
         json_object_put(root);
         return BAD_REQUEST;
     }
 
-    if (!json_object_is_type(v_obj, json_type_int) ||
-        !json_object_is_type(id_obj, json_type_int) ||
-        !json_object_is_type(type_obj, json_type_string) ||
-        !json_object_is_type(payload_obj, json_type_object)) {
+    if (!json_object_is_type(versionJson, json_type_int) ||
+        !json_object_is_type(idJson, json_type_int) ||
+        !json_object_is_type(typeJson, json_type_string) ||
+        !json_object_is_type(payloadJson, json_type_object)) {
         json_object_put(root);
         return BAD_REQUEST;
     }
 
-    int v = json_object_get_int(v_obj);
-    if (v != 1) {
+    int version = json_object_get_int(versionJson);
+    if (version != 1) {
         json_object_put(root);
         return BAD_REQUEST;
     }
 
-    int32_t id = (int32_t)json_object_get_int(id_obj);
-    if (js_id_out) *js_id_out = id;
-    const char *type = json_object_get_string(type_obj);
+    int32_t id = (int32_t)json_object_get_int(idJson);
+    if (outJsId) *outJsId = id;
+    const char *type = json_object_get_string(typeJson);
     if (!type || strlen(type) == 0) {
         json_object_put(root);
         return BAD_REQUEST;
     }
 
-    if (!is_whitelisted_type(type)) {
+    if (!isWhitelistedType(type)) {
         json_object_put(root);
         return BAD_REQUEST;
     }
 
     if (strcmp(type, "SPIKE_DONE") == 0) {
-        if (g_done_cb) {
-            g_done_cb(g_done_ctx);
+        if (gDoneCallback) {
+            gDoneCallback(gDoneContext);
         } else if (gtk_main_level() > 0) {
             gtk_main_quit();
         }
@@ -168,136 +162,135 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *json_str
      * ids cannot guarantee across reconnects, so each request gets a fresh
      * wire id and ns_incoming maps the response back to the JS id. */
     int32_t wireId = 0;
-    Status s = ns_outgoing(session, id, type, &wireId);
-    if (s != OK) {
+    Status status = ns_outgoing(session, id, type, &wireId);
+    if (status != OK) {
         json_object_put(root);
-        return s;
+        return status;
     }
 
-    Envelope env;
-    env.v = v;
-    env.id = wireId;
-    env.type = type;
-    env.payload = payload_obj;
+    Envelope envelope;
+    envelope.v = version;
+    envelope.id = wireId;
+    envelope.type = type;
+    envelope.payload = payloadJson;
 
     if (client != NULL) {
-        s = client_send(client, &env);
+        status = client_send(client, &envelope);
     }
     json_object_put(root);
 
     /* Report a broken link now instead of one heartbeat later. The callback
      * may free @p client, so it is not touched afterwards. */
-    if (s != OK && client != NULL && client_is_broken(client) && g_disconnect_cb) {
-        g_disconnect_cb(g_disconnect_ctx);
+    if (status != OK && client != NULL && clientIsBroken(client) && gDisconnectCallback) {
+        gDisconnectCallback(gDisconnectContext);
     }
-    return s;
+    return status;
 }
 
-char *bridge_format_emit_script(const Envelope *e)
-{
-    if (!e) return NULL;
+char *bridge_format_emit_script(const Envelope *envelope) {
+    if (!envelope) return NULL;
 
     struct json_object *root = json_object_new_object();
     if (!root) return NULL;
 
-    json_object_object_add(root, "v", json_object_new_int(e->v));
-    json_object_object_add(root, "id", json_object_new_int(e->id));
-    json_object_object_add(root, "type", json_object_new_string(e->type ? e->type : ""));
+    json_object_object_add(root, "v", json_object_new_int(envelope->v));
+    json_object_object_add(root, "id", json_object_new_int(envelope->id));
+    json_object_object_add(root, "type",
+                           json_object_new_string(envelope->type ? envelope->type : ""));
 
-    struct json_object *payload_to_emit = NULL;
-    if (e->payload && json_object_is_type(e->payload, json_type_object)) {
-        if (json_object_object_get(e->payload, "token")) {
-            payload_to_emit = json_object_new_object();
-            json_object_object_foreach(e->payload, key, val) {
+    struct json_object *payloadToEmit = NULL;
+    if (envelope->payload && json_object_is_type(envelope->payload, json_type_object)) {
+        if (json_object_object_get(envelope->payload, "token")) {
+            payloadToEmit = json_object_new_object();
+            json_object_object_foreach(envelope->payload, key, value) {
                 if (strcmp(key, "token") != 0) {
-                    json_object_get(val);
-                    json_object_object_add(payload_to_emit, key, val);
+                    json_object_get(value);
+                    json_object_object_add(payloadToEmit, key, value);
                 }
             }
         } else {
-            json_object_get(e->payload);
-            payload_to_emit = e->payload;
+            json_object_get(envelope->payload);
+            payloadToEmit = envelope->payload;
         }
     } else {
-        payload_to_emit = json_object_new_object();
+        payloadToEmit = json_object_new_object();
     }
-    json_object_object_add(root, "payload", payload_to_emit);
+    json_object_object_add(root, "payload", payloadToEmit);
 
-    const char *json_str = json_object_to_json_string(root);
-    gchar *script = g_strdup_printf("window.dispatchEvent(new CustomEvent('uno:message', {detail: %s}));", json_str ? json_str : "{}");
+    const char *jsonText = json_object_to_json_string(root);
+    gchar *script = g_strdup_printf(
+        "window.dispatchEvent(new CustomEvent('uno:message', {detail: %s}));",
+        jsonText ? jsonText : "{}");
     json_object_put(root);
     return script;
 }
 
-void bridge_emit(WebKitWebView *web_view, const Envelope *e)
-{
-    if (!web_view || !e) return;
+void bridge_emit(WebKitWebView *webView, const Envelope *envelope) {
+    if (!webView || !envelope) return;
 
-    gchar *script = bridge_format_emit_script(e);
+    gchar *script = bridge_format_emit_script(envelope);
     if (!script) return;
 
-    webkit_web_view_evaluate_javascript(web_view, script, -1, NULL, NULL, NULL, NULL, NULL);
+    webkit_web_view_evaluate_javascript(webView, script, -1, NULL, NULL, NULL, NULL, NULL);
     g_free(script);
 }
 
-static int hex_val(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+static int hexValue(char character) {
+    if (character >= '0' && character <= '9') return character - '0';
+    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
     return -1;
 }
 
-static Status url_decode(const char *src, char *dst, size_t dst_len)
-{
-    size_t j = 0;
-    for (size_t i = 0; src[i] != '\0'; i++) {
-        if (src[i] == '%') {
-            if (src[i + 1] == '\0' || src[i + 2] == '\0') {
+static Status urlDecode(const char *source, char *destination, size_t destinationSize) {
+    size_t written = 0;
+    for (size_t i = 0; source[i] != '\0'; i++) {
+        if (source[i] == '%') {
+            if (source[i + 1] == '\0' || source[i + 2] == '\0') {
                 return BAD_REQUEST;
             }
-            int h1 = hex_val(src[i + 1]);
-            int h2 = hex_val(src[i + 2]);
-            if (h1 < 0 || h2 < 0) {
+            int highNibble = hexValue(source[i + 1]);
+            int lowNibble = hexValue(source[i + 2]);
+            if (highNibble < 0 || lowNibble < 0) {
                 return BAD_REQUEST;
             }
-            char ch = (char)((h1 << 4) | h2);
-            if (ch == '\0') {
+            char decodedByte = (char)((highNibble << 4) | lowNibble);
+            if (decodedByte == '\0') {
                 /* Reject null byte injection */
                 return BAD_REQUEST;
             }
-            if (j + 1 >= dst_len) return BAD_REQUEST;
-            dst[j++] = ch;
+            if (written + 1 >= destinationSize) return BAD_REQUEST;
+            destination[written++] = decodedByte;
             i += 2;
         } else {
-            if (j + 1 >= dst_len) return BAD_REQUEST;
-            dst[j++] = src[i];
+            if (written + 1 >= destinationSize) return BAD_REQUEST;
+            destination[written++] = source[i];
         }
     }
-    if (j >= dst_len) return BAD_REQUEST;
-    dst[j] = '\0';
+    if (written >= destinationSize) return BAD_REQUEST;
+    destination[written] = '\0';
     return OK;
 }
 
-Status bridge_resolve_path(const char *assets_dir, const char *uri, char *out_path, size_t max_len)
-{
-    if (!assets_dir || !uri || !out_path || max_len == 0) return BAD_REQUEST;
+Status bridge_resolve_path(const char *assetsDir, const char *uri, char *outPath,
+                           size_t maxLength) {
+    if (!assetsDir || !uri || !outPath || maxLength == 0) return BAD_REQUEST;
 
-    const char *p = uri;
-    if (strncmp(p, "uno://app/", 10) == 0) {
-        p += 10;
-    } else if (strncmp(p, "uno://app", 9) == 0) {
-        p += 9;
-        if (*p == '/') p++;
-    } else if (strncmp(p, "uno:", 4) == 0) {
-        p += 4;
-        while (*p == '/') p++;
-    } else if (*p == '/') {
-        while (*p == '/') p++;
+    const char *cursor = uri;
+    if (strncmp(cursor, "uno://app/", 10) == 0) {
+        cursor += 10;
+    } else if (strncmp(cursor, "uno://app", 9) == 0) {
+        cursor += 9;
+        if (*cursor == '/') cursor++;
+    } else if (strncmp(cursor, "uno:", 4) == 0) {
+        cursor += 4;
+        while (*cursor == '/') cursor++;
+    } else if (*cursor == '/') {
+        while (*cursor == '/') cursor++;
     }
 
     char decoded[512];
-    if (url_decode(p, decoded, sizeof(decoded)) != OK) {
+    if (urlDecode(cursor, decoded, sizeof(decoded)) != OK) {
         return BAD_REQUEST;
     }
 
@@ -311,29 +304,30 @@ Status bridge_resolve_path(const char *assets_dir, const char *uri, char *out_pa
         return BAD_REQUEST;
     }
 
-    const char *rel_path = decoded;
-    while (*rel_path == '/') rel_path++;
+    const char *relativePath = decoded;
+    while (*relativePath == '/') relativePath++;
 
-    if (*rel_path == '\0') {
-        rel_path = "index.html";
+    if (*relativePath == '\0') {
+        relativePath = "index.html";
     }
 
-    int n = snprintf(out_path, max_len, "%s/%s", assets_dir, rel_path);
-    if (n < 0 || (size_t)n >= max_len) {
+    int pathLength = snprintf(outPath, maxLength, "%s/%s", assetsDir, relativePath);
+    if (pathLength < 0 || (size_t)pathLength >= maxLength) {
         return BAD_REQUEST;
     }
 
     return OK;
 }
 
-const char *bridge_mime_type(const char *path)
-{
+const char *bridge_mime_type(const char *path) {
     if (!path) return "application/octet-stream";
     const char *dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
 
     if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) return "text/html";
-    if (strcasecmp(dot, ".js") == 0 || strcasecmp(dot, ".mjs") == 0) return "application/javascript";
+    if (strcasecmp(dot, ".js") == 0 || strcasecmp(dot, ".mjs") == 0) {
+        return "application/javascript";
+    }
     if (strcasecmp(dot, ".css") == 0) return "text/css";
     if (strcasecmp(dot, ".json") == 0) return "application/json";
     if (strcasecmp(dot, ".png") == 0) return "image/png";
@@ -345,51 +339,54 @@ const char *bridge_mime_type(const char *path)
     return "application/octet-stream";
 }
 
-static void on_uri_scheme_request(WebKitURISchemeRequest *request, gpointer user_data)
-{
-    const char *assets_dir = (const char *)user_data;
-    if (!assets_dir) assets_dir = bridge_get_assets_dir();
+static void onUriSchemeRequest(WebKitURISchemeRequest *request, gpointer userData) {
+    const char *assetsDir = (const char *)userData;
+    if (!assetsDir) assetsDir = bridge_get_assets_dir();
 
     const char *uri = webkit_uri_scheme_request_get_uri(request);
-    char file_path[512];
-    Status s = bridge_resolve_path(assets_dir, uri, file_path, sizeof(file_path));
-    if (s != OK) {
-        GError *err = g_error_new_literal(G_FILE_ERROR, G_FILE_ERROR_NOENT, "Invalid URI or access denied");
-        webkit_uri_scheme_request_finish_error(request, err);
-        g_error_free(err);
+    char filePath[512];
+    Status status = bridge_resolve_path(assetsDir, uri, filePath, sizeof(filePath));
+    if (status != OK) {
+        GError *error = g_error_new_literal(G_FILE_ERROR, G_FILE_ERROR_NOENT,
+                                            "Invalid URI or access denied");
+        webkit_uri_scheme_request_finish_error(request, error);
+        g_error_free(error);
         return;
     }
 
-    GFile *file = g_file_new_for_path(file_path);
-    GError *err = NULL;
-    GFileInputStream *stream = g_file_read(file, NULL, &err);
+    GFile *file = g_file_new_for_path(filePath);
+    GError *error = NULL;
+    GFileInputStream *stream = g_file_read(file, NULL, &error);
     if (!stream) {
-        webkit_uri_scheme_request_finish_error(request, err ? err : g_error_new_literal(G_FILE_ERROR, G_FILE_ERROR_NOENT, "File not found"));
-        if (err) g_error_free(err);
+        GError *reply = error ? error
+                              : g_error_new_literal(G_FILE_ERROR, G_FILE_ERROR_NOENT,
+                                                    "File not found");
+        webkit_uri_scheme_request_finish_error(request, reply);
+        if (error) g_error_free(error);
         g_object_unref(file);
         return;
     }
 
-    GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_SIZE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+    GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_SIZE,
+                                        G_FILE_QUERY_INFO_NONE, NULL, NULL);
     gint64 size = info ? g_file_info_get_size(info) : -1;
     if (info) g_object_unref(info);
 
-    const char *mime_type = bridge_mime_type(file_path);
-    webkit_uri_scheme_request_finish(request, G_INPUT_STREAM(stream), size, mime_type);
+    const char *mimeType = bridge_mime_type(filePath);
+    webkit_uri_scheme_request_finish(request, G_INPUT_STREAM(stream), size, mimeType);
 
     g_object_unref(stream);
     g_object_unref(file);
 }
 
-void bridge_register_uri_scheme(WebKitWebContext *context, const char *assets_dir)
-{
-    (void)assets_dir;
-    if (g_scheme_registered) return;
+void bridge_register_uri_scheme(WebKitWebContext *context, const char *assetsDir) {
+    (void)assetsDir;
+    if (gSchemeRegistered) return;
     if (!context) context = webkit_web_context_get_default();
     webkit_web_context_register_uri_scheme(context, "uno",
-                                           on_uri_scheme_request,
+                                           onUriSchemeRequest,
                                            (gpointer)bridge_get_assets_dir(), NULL);
-    g_scheme_registered = true;
+    gSchemeRegistered = true;
 }
 
 /* Texts for the ERROR replies the bridge makes itself, without the server. */
@@ -397,14 +394,14 @@ void bridge_register_uri_scheme(WebKitWebContext *context, const char *assets_di
 #define REJECTED_MESSAGE "Request rejected before reaching the server"
 
 typedef struct {
-    WebKitWebView *web_view;
+    WebKitWebView *webView;
     NetSession *session;
-    Client **client_slot; /* host-owned; points at NULL while disconnected */
+    Client **clientSlot; /* host-owned; points at NULL while disconnected */
 } BridgeState;
 
 /* Answer a request natively so JS settles it now instead of after its own
  * response timeout. */
-static void emit_request_error(WebKitWebView *web_view, int32_t js_id, const char *code,
+static void emitRequestError(WebKitWebView *webView, int32_t jsId, const char *code,
                                const char *message)
 {
     struct json_object *payload = json_object_new_object();
@@ -412,61 +409,60 @@ static void emit_request_error(WebKitWebView *web_view, int32_t js_id, const cha
     /* Protocol: ERROR always carries both code and message, local ones too. */
     json_object_object_add(payload, "code", json_object_new_string(code));
     json_object_object_add(payload, "message", json_object_new_string(message));
-    Envelope error = {1, js_id, "ERROR", payload};
-    bridge_emit(web_view, &error);
+    Envelope error = {1, jsId, "ERROR", payload};
+    bridge_emit(webView, &error);
     json_object_put(payload);
 }
 
-static void on_script_message_uno(WebKitUserContentManager *manager,
+static void onScriptMessageUno(WebKitUserContentManager *manager,
                                    WebKitJavascriptResult *result,
-                                   gpointer user_data)
+                                   gpointer userData)
 {
     (void)manager;
-    BridgeState *state = (BridgeState *)user_data;
+    BridgeState *state = (BridgeState *)userData;
     if (!state) return;
-    JSCValue *val = webkit_javascript_result_get_js_value(result);
-    if (!val) return;
+    JSCValue *value = webkit_javascript_result_get_js_value(result);
+    if (!value) return;
 
-    char *json_str = jsc_value_to_string(val);
-    if (!json_str) return;
+    char *jsonText = jsc_value_to_string(value);
+    if (!jsonText) return;
 
     int32_t jsId = 0;
-    Client *client = *state->client_slot;
-    Status s = bridge_dispatch(state->session, client, json_str, strlen(json_str), &jsId);
-    g_free(json_str);
+    Client *client = *state->clientSlot;
+    Status status = bridge_dispatch(state->session, client, jsonText, strlen(jsonText), &jsId);
+    g_free(jsonText);
 
     /* Without a positive id JS has nothing to match an answer against. */
-    if (s == OK || jsId <= 0) return;
+    if (status == OK || jsId <= 0) return;
 
     /* Not connected (or still resuming, or the send just broke the link) is
      * the reconnect case: the request is dropped, never queued, so it cannot
      * be replayed later. */
-    const char *code = status_code(s);
+    const char *code = status_code(status);
     const char *message = REJECTED_MESSAGE;
     if (ns_state(state->session) != NS_CONNECTED) {
         code = "DISCONNECTED";
         message = DISCONNECTED_MESSAGE;
     }
-    emit_request_error(state->web_view, jsId, code, message);
+    emitRequestError(state->webView, jsId, code, message);
 }
 
-Status bridge_init(WebKitWebView *web_view, NetSession *session, Client **client_slot)
-{
-    if (!web_view || !session || !client_slot) return BAD_REQUEST;
+Status bridge_init(WebKitWebView *webView, NetSession *session, Client **clientSlot) {
+    if (!webView || !session || !clientSlot) return BAD_REQUEST;
 
-    WebKitWebContext *context = webkit_web_view_get_context(web_view);
+    WebKitWebContext *context = webkit_web_view_get_context(webView);
     bridge_register_uri_scheme(context, bridge_get_assets_dir());
 
-    WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager(web_view);
+    WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager(webView);
     BridgeState *state = g_new0(BridgeState, 1);
-    state->web_view = web_view;
+    state->webView = webView;
     state->session = session;
-    state->client_slot = client_slot;
+    state->clientSlot = clientSlot;
 
-    g_object_set_data_full(G_OBJECT(web_view), "bridge_state", state, g_free);
+    g_object_set_data_full(G_OBJECT(webView), "bridge_state", state, g_free);
 
     g_signal_connect(manager, "script-message-received::uno",
-                     G_CALLBACK(on_script_message_uno), state);
+                     G_CALLBACK(onScriptMessageUno), state);
     webkit_user_content_manager_register_script_message_handler(manager, "uno");
 
     return OK;

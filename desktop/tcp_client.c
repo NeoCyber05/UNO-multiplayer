@@ -10,8 +10,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-Status client_connect(Client **out, const char *host, uint16_t port)
-{
+enum {
+    /* How long the blocking client_connect waits for each address's handshake. */
+    CONNECT_TIMEOUT_MS = 3000
+};
+
+Status client_connect(Client **out, const char *host, uint16_t port) {
     if (!out || !host || port == 0) return BAD_REQUEST;
     *out = NULL;
 
@@ -20,68 +24,77 @@ Status client_connect(Client **out, const char *host, uint16_t port)
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%u", port);
+    char portText[16];
+    snprintf(portText, sizeof(portText), "%u", port);
 
-    struct addrinfo *res = NULL;
-    int err = getaddrinfo(host, port_str, &hints, &res);
-    if (err != 0 || !res) {
+    struct addrinfo *addressList = NULL;
+    int lookupError = getaddrinfo(host, portText, &hints, &addressList);
+    if (lookupError != 0 || !addressList) {
         return NOT_FOUND;
     }
 
-    int fd = -1;
-    for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
-        fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        if (fd < 0) continue;
+    // Try each resolved address (IPv4 or IPv6) until one accepts the connection.
+    int connectionSocket = -1;
+    for (struct addrinfo *candidate = addressList; candidate != NULL;
+         candidate = candidate->ai_next) {
+        connectionSocket = socket(candidate->ai_family, candidate->ai_socktype,
+                                  candidate->ai_protocol);
+        if (connectionSocket < 0) continue;
 
-        int flags = fcntl(fd, F_GETFL, 0);
+        /* Non-blocking connect plus poll() bounds the wait by CONNECT_TIMEOUT_MS
+         * instead of the kernel's much longer SYN retry timeout.
+         * FIXME: fcntl(F_SETFL) failure is ignored, so connect() could block.
+         * Close this socket and try the next address instead. */
+        int flags = fcntl(connectionSocket, F_GETFL, 0);
         if (flags >= 0) {
-            fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            fcntl(connectionSocket, F_SETFL, flags | O_NONBLOCK);
         }
 
-        int ret = connect(fd, p->ai_addr, p->ai_addrlen);
-        if (ret == 0) {
+        int connectResult = connect(connectionSocket, candidate->ai_addr, candidate->ai_addrlen);
+        if (connectResult == 0) {
             break;
         }
 
-        if (ret < 0 && errno == EINPROGRESS) {
-            struct pollfd pfd;
-            pfd.fd = fd;
-            pfd.events = POLLOUT;
-            pfd.revents = 0;
-            int pr = poll(&pfd, 1, 3000);
-            if (pr > 0 && (pfd.revents & POLLOUT)) {
-                int sock_err = 0;
-                socklen_t len = sizeof(sock_err);
-                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &sock_err, &len) == 0 && sock_err == 0) {
+        if (connectResult < 0 && errno == EINPROGRESS) {
+            struct pollfd pollFd;
+            pollFd.fd = connectionSocket;
+            pollFd.events = POLLOUT;
+            pollFd.revents = 0;
+            int pollResult = poll(&pollFd, 1, CONNECT_TIMEOUT_MS);
+            if (pollResult > 0 && (pollFd.revents & POLLOUT)) {
+                /* Writable only means the handshake ended; SO_ERROR says how. */
+                int socketError = 0;
+                socklen_t length = sizeof(socketError);
+                if (getsockopt(connectionSocket, SOL_SOCKET, SO_ERROR, &socketError,
+                               &length) == 0 && socketError == 0) {
                     break;
                 }
             }
         }
 
-        close(fd);
-        fd = -1;
+        close(connectionSocket);
+        connectionSocket = -1;
     }
-    freeaddrinfo(res);
+    freeaddrinfo(addressList);
 
-    if (fd < 0) {
+    if (connectionSocket < 0) {
         return BAD_REQUEST;
     }
 
-    Client *c = calloc(1, sizeof(Client));
-    if (!c) {
-        close(fd);
+    Client *client = calloc(1, sizeof(Client));
+    if (!client) {
+        close(connectionSocket);
         return BUSY;
     }
 
-    conn_init(&c->conn, fd, 0, 0);
-    c->connected = true;
-    *out = c;
+    conn_init(&client->conn, connectionSocket, 0, 0);
+    client->connected = true;
+    *out = client;
     return OK;
 }
 
-static Status lookup_first(const char *host, const char *service, int flags, ClientAddress *out)
-{
+static Status lookupFirstAddress(const char *host, const char *service, int flags,
+                                 ClientAddress *out) {
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -103,73 +116,71 @@ static Status lookup_first(const char *host, const char *service, int flags, Cli
     return status;
 }
 
-Status client_resolve(const char *host, uint16_t port, ClientAddress *out)
-{
+Status client_resolve(const char *host, uint16_t port, ClientAddress *out) {
     if (!host || port == 0 || !out) return BAD_REQUEST;
 
     char service[16];
     snprintf(service, sizeof(service), "%u", port);
 
     /* Numeric first: an IP from the command line must never touch DNS. */
-    if (lookup_first(host, service, AI_NUMERICHOST | AI_NUMERICSERV, out) == OK) {
+    if (lookupFirstAddress(host, service, AI_NUMERICHOST | AI_NUMERICSERV, out) == OK) {
         return OK;
     }
     /* Only for host names, and only once per process (blocking lookup). */
-    return lookup_first(host, service, AI_NUMERICSERV | AI_ADDRCONFIG, out);
+    return lookupFirstAddress(host, service, AI_NUMERICSERV | AI_ADDRCONFIG, out);
 }
 
-Status client_connect_start(const ClientAddress *address, int *fd_out, bool *in_progress)
-{
-    if (!address || !fd_out || !in_progress || address->length == 0) return BAD_REQUEST;
-    *fd_out = -1;
-    *in_progress = false;
+Status client_connect_start(const ClientAddress *address, int *outFd, bool *outInProgress) {
+    if (!address || !outFd || !outInProgress || address->length == 0) return BAD_REQUEST;
+    *outFd = -1;
+    *outInProgress = false;
 
     const struct sockaddr *target = (const struct sockaddr *)&address->storage;
-    int fd = socket(target->sa_family, SOCK_STREAM, 0);
-    if (fd < 0) return BUSY;
+    int connectionSocket = socket(target->sa_family, SOCK_STREAM, 0);
+    if (connectionSocket < 0) return BUSY;
 
     /* Non-blocking before connect() so the call returns at once with
      * EINPROGRESS instead of waiting for the handshake. */
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        close(fd);
+    int flags = fcntl(connectionSocket, F_GETFL, 0);
+    if (flags < 0 || fcntl(connectionSocket, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(connectionSocket);
         return BUSY;
     }
 
-    if (connect(fd, target, address->length) == 0) {
-        *fd_out = fd;
+    if (connect(connectionSocket, target, address->length) == 0) {
+        *outFd = connectionSocket;
         return OK;
     }
     /* EINTR on a non-blocking connect also continues in the background. */
     if (errno == EINPROGRESS || errno == EINTR) {
-        *fd_out = fd;
-        *in_progress = true;
+        *outFd = connectionSocket;
+        *outInProgress = true;
         return OK;
     }
-    close(fd);
+    close(connectionSocket);
     return BAD_REQUEST;
 }
 
-Status client_connect_finish(int fd, Client **out)
-{
+Status client_connect_finish(int connectionSocket, Client **out) {
     if (out) *out = NULL;
-    if (fd < 0 || !out) return BAD_REQUEST;
+    if (connectionSocket < 0 || !out) return BAD_REQUEST;
 
     /* The pending connect's outcome is only visible through SO_ERROR. */
     int sockError = 0;
     socklen_t length = sizeof(sockError);
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &sockError, &length) != 0 || sockError != 0) {
-        close(fd);
+    if (getsockopt(connectionSocket, SOL_SOCKET, SO_ERROR, &sockError,
+                   &length) != 0 || sockError != 0) {
+        close(connectionSocket);
         return BAD_REQUEST;
     }
 
     Client *client = calloc(1, sizeof(Client));
     if (!client) {
-        close(fd);
+        close(connectionSocket);
         return BUSY;
     }
-    if (conn_init(&client->conn, fd, 0, 0) != OK) {
-        close(fd);
+    if (conn_init(&client->conn, connectionSocket, 0, 0) != OK) {
+        close(connectionSocket);
         free(client);
         return BAD_REQUEST;
     }
@@ -178,55 +189,48 @@ Status client_connect_finish(int fd, Client **out)
     return OK;
 }
 
-void client_connect_abort(int fd)
-{
-    if (fd >= 0) {
-        close(fd);
+void client_connect_abort(int connectionSocket) {
+    if (connectionSocket >= 0) {
+        close(connectionSocket);
     }
 }
 
-Status client_send(Client *client, const Envelope *e)
-{
-    if (!client || !client->connected || client->conn.fd < 0 || !e) return BAD_REQUEST;
-    Status s = conn_queue(&client->conn, e);
-    if (s != OK) return s;
-    Status ret = conn_flush(&client->conn);
+Status client_send(Client *client, const Envelope *envelope) {
+    if (!client || !client->connected || client->conn.fd < 0 || !envelope) return BAD_REQUEST;
+    Status status = conn_queue(&client->conn, envelope);
+    if (status != OK) return status;
+    Status flushStatus = conn_flush(&client->conn);
     if (client->on_pending_cb) {
         client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
     }
-    return ret;
+    return flushStatus;
 }
 
-Status client_flush(Client *client)
-{
+Status client_flush(Client *client) {
     if (!client || !client->connected || client->conn.fd < 0) return BAD_REQUEST;
-    Status s = conn_flush(&client->conn);
+    Status status = conn_flush(&client->conn);
     if (client->on_pending_cb) {
         client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
     }
-    return s;
+    return status;
 }
 
-void client_set_pending_callback(Client *client, ClientPendingCallback cb, void *ctx)
-{
+void client_set_pending_callback(Client *client, ClientPendingCallback callback, void *context) {
     if (!client) return;
-    client->on_pending_cb = cb;
-    client->pending_ctx = ctx;
+    client->on_pending_cb = callback;
+    client->pending_ctx = context;
 }
 
-Status client_read(Client *client, FrameCallback cb, void *ctx)
-{
+Status client_read(Client *client, FrameCallback callback, void *context) {
     if (!client || !client->connected || client->conn.fd < 0) return BAD_REQUEST;
-    return conn_read(&client->conn, cb, ctx);
+    return conn_read(&client->conn, callback, context);
 }
 
-int client_fd(const Client *client)
-{
+int client_fd(const Client *client) {
     return (client && client->connected) ? client->conn.fd : -1;
 }
 
-void client_close(Client *client)
-{
+void client_close(Client *client) {
     if (!client) return;
     conn_close(&client->conn);
     client->connected = false;

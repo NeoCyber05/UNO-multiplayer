@@ -8,29 +8,26 @@
 static const char *TEST_TOKEN = "tok-abc-123";
 
 /* Build an incoming envelope; the caller releases payload with json_object_put. */
-static Envelope make_envelope(int32_t wireId, const char *type, json_object *payload)
-{
+static Envelope makeEnvelope(int32_t wireId, const char *type, json_object *payload) {
     Envelope envelope = {1, wireId, type, payload};
     return envelope;
 }
 
-static const char *conn_state_status(json_object *connState)
-{
+static const char *conn_state_status(json_object *connState) {
     json_object *status = NULL;
     assert(json_object_object_get_ex(connState, "status", &status));
     return json_object_get_string(status);
 }
 
 /* Drive a LOGIN round trip so the session holds TEST_TOKEN. */
-static void login_with_token(NetSession *session)
-{
+static void loginWithToken(NetSession *session) {
     int32_t wireId = 0;
     assert(ns_outgoing(session, 3, "LOGIN", &wireId) == OK);
 
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "token", json_object_new_string(TEST_TOKEN));
     json_object_object_add(payload, "me", json_object_new_object());
-    Envelope response = make_envelope(wireId, "OK", payload);
+    Envelope response = makeEnvelope(wireId, "OK", payload);
 
     int32_t jsId = -1;
     json_object *connState = NULL;
@@ -40,8 +37,7 @@ static void login_with_token(NetSession *session)
     json_object_put(payload);
 }
 
-static void test_id_mapping(void)
-{
+static void testIdMapping(void) {
     NetSession *session = ns_create();
     assert(session != NULL);
     ns_on_connected(session);
@@ -51,7 +47,7 @@ static void test_id_mapping(void)
     assert(ns_outgoing(session, 7, "PING", &wireId) == OK);
     assert(wireId == 1);
 
-    Envelope response = make_envelope(1, "OK", NULL);
+    Envelope response = makeEnvelope(1, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
@@ -65,12 +61,11 @@ static void test_id_mapping(void)
     ns_destroy(session);
 }
 
-static void test_push_forwarded_with_zero_js_id(void)
-{
+static void testPushForwardedWithZeroJsId(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
-    Envelope push = make_envelope(0, "ROOM_UPDATE", NULL);
+    Envelope push = makeEnvelope(0, "ROOM_UPDATE", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &push, &jsId, &connState) == NS_FORWARD);
@@ -80,28 +75,26 @@ static void test_push_forwarded_with_zero_js_id(void)
     ns_destroy(session);
 }
 
-static void test_login_token_captured_not_forwarded_logic(void)
-{
+static void testLoginTokenCapturedNotForwardedLogic(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
     assert(!ns_has_token(session));
 
-    login_with_token(session);
+    loginWithToken(session);
     assert(ns_has_token(session));
     assert(strcmp(ns_token(session), TEST_TOKEN) == 0);
 
     ns_destroy(session);
 }
 
-static void test_logout_clears_token(void)
-{
+static void testLogoutClearsToken(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
-    login_with_token(session);
+    loginWithToken(session);
 
     int32_t wireId = 0;
     assert(ns_outgoing(session, 4, "LOGOUT", &wireId) == OK);
-    Envelope response = make_envelope(wireId, "OK", NULL);
+    Envelope response = makeEnvelope(wireId, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
@@ -111,11 +104,10 @@ static void test_logout_clears_token(void)
     ns_destroy(session);
 }
 
-static void test_logout_wipes_token_bytes(void)
-{
+static void testLogoutWipesTokenBytes(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
-    login_with_token(session);
+    loginWithToken(session);
 
     /* The token lives in session-owned storage that stays valid until
      * ns_destroy, so its bytes can be inspected after LOGOUT. */
@@ -125,7 +117,7 @@ static void test_logout_wipes_token_bytes(void)
 
     int32_t wireId = 0;
     assert(ns_outgoing(session, 4, "LOGOUT", &wireId) == OK);
-    Envelope response = make_envelope(wireId, "OK", NULL);
+    Envelope response = makeEnvelope(wireId, "OK", NULL);
     int32_t jsId = -1;
     assert(ns_incoming(session, &response, &jsId, NULL) == NS_FORWARD);
     assert(!ns_has_token(session));
@@ -139,8 +131,7 @@ static void test_logout_wipes_token_bytes(void)
     ns_destroy(session);
 }
 
-static void test_non_positive_js_id_rejected(void)
-{
+static void testNonPositiveJsIdRejected(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
@@ -154,8 +145,7 @@ static void test_non_positive_js_id_rejected(void)
     ns_destroy(session);
 }
 
-static void test_js_resume_rejected(void)
-{
+static void testJsResumeRejected(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
@@ -165,8 +155,7 @@ static void test_js_resume_rejected(void)
     ns_destroy(session);
 }
 
-static void test_send_while_disconnected_rejects(void)
-{
+static void testSendWhileDisconnectedRejects(void) {
     NetSession *session = ns_create();
     int32_t wireId = 0;
     assert(ns_outgoing(session, 1, "PING", &wireId) == BUSY);
@@ -181,8 +170,7 @@ static void test_send_while_disconnected_rejects(void)
     ns_destroy(session);
 }
 
-static void test_pending_table_full(void)
-{
+static void testPendingTableFull(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
@@ -194,7 +182,7 @@ static void test_pending_table_full(void)
     assert(ns_internal(session, "PING") == 0);
 
     /* Answering one request frees its slot for the next one. */
-    Envelope response = make_envelope(1, "OK", NULL);
+    Envelope response = makeEnvelope(1, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
@@ -203,11 +191,10 @@ static void test_pending_table_full(void)
     ns_destroy(session);
 }
 
-static void test_resume_flow(void)
-{
+static void testResumeFlow(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
-    login_with_token(session);
+    loginWithToken(session);
     ns_on_disconnected(session);
     assert(ns_has_token(session));
 
@@ -223,7 +210,7 @@ static void test_resume_flow(void)
     json_object *me = json_object_new_object();
     json_object_object_add(me, "name", json_object_new_string("son"));
     json_object_object_add(payload, "me", me);
-    Envelope okResponse = make_envelope(resumeId, "OK", payload);
+    Envelope okResponse = makeEnvelope(resumeId, "OK", payload);
 
     int32_t jsId = -1;
     json_object *connState = NULL;
@@ -249,7 +236,7 @@ static void test_resume_flow(void)
     json_object *errorPayload = json_object_new_object();
     json_object_object_add(errorPayload, "code", json_object_new_string("UNAUTHENTICATED"));
     json_object_object_add(errorPayload, "message", json_object_new_string("expired"));
-    Envelope errorResponse = make_envelope(resumeId, "ERROR", errorPayload);
+    Envelope errorResponse = makeEnvelope(resumeId, "ERROR", errorPayload);
 
     connState = NULL;
     assert(ns_incoming(session, &errorResponse, &jsId, &connState) == NS_DROP);
@@ -266,14 +253,13 @@ static void test_resume_flow(void)
     ns_destroy(session);
 }
 
-static void test_internal_ping_dropped(void)
-{
+static void testInternalPingDropped(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
     int32_t pingId = ns_internal(session, "PING");
     assert(pingId == 1);
-    Envelope response = make_envelope(pingId, "OK", NULL);
+    Envelope response = makeEnvelope(pingId, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &response, &jsId, &connState) == NS_DROP);
@@ -282,8 +268,7 @@ static void test_internal_ping_dropped(void)
     ns_destroy(session);
 }
 
-static void test_backoff_sequence(void)
-{
+static void testBackoffSequence(void) {
     NetSession *session = ns_create();
     assert(ns_next_backoff_ms(session) == 1000);
     assert(ns_next_backoff_ms(session) == 2000);
@@ -297,11 +282,10 @@ static void test_backoff_sequence(void)
     ns_destroy(session);
 }
 
-static void test_backoff_kept_until_resumed(void)
-{
+static void testBackoffKeptUntilResumed(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
-    login_with_token(session);
+    loginWithToken(session);
     ns_on_disconnected(session);
     assert(ns_next_backoff_ms(session) == 1000);
     assert(ns_next_backoff_ms(session) == 2000);
@@ -317,7 +301,7 @@ static void test_backoff_kept_until_resumed(void)
     ns_on_connected(session);
     int32_t resumeId = ns_internal(session, "RESUME");
     assert(resumeId > 0);
-    Envelope okResponse = make_envelope(resumeId, "OK", NULL);
+    Envelope okResponse = makeEnvelope(resumeId, "OK", NULL);
     json_object *connState = NULL;
     assert(ns_incoming(session, &okResponse, NULL, &connState) == NS_DROP);
     json_object_put(connState);
@@ -328,8 +312,7 @@ static void test_backoff_kept_until_resumed(void)
     ns_destroy(session);
 }
 
-static void test_wire_ids_reset_per_connection(void)
-{
+static void testWireIdsResetPerConnection(void) {
     NetSession *session = ns_create();
     ns_on_connected(session);
 
@@ -345,7 +328,7 @@ static void test_wire_ids_reset_per_connection(void)
     assert(wireId == 1);
 
     /* A response for the previous connection's id 2 must not map to js 2. */
-    Envelope stale = make_envelope(2, "OK", NULL);
+    Envelope stale = makeEnvelope(2, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
     assert(ns_incoming(session, &stale, &jsId, &connState) == NS_DROP);
@@ -353,22 +336,21 @@ static void test_wire_ids_reset_per_connection(void)
     ns_destroy(session);
 }
 
-int main(void)
-{
-    test_id_mapping();
-    test_push_forwarded_with_zero_js_id();
-    test_login_token_captured_not_forwarded_logic();
-    test_logout_clears_token();
-    test_logout_wipes_token_bytes();
-    test_non_positive_js_id_rejected();
-    test_js_resume_rejected();
-    test_send_while_disconnected_rejects();
-    test_pending_table_full();
-    test_resume_flow();
-    test_internal_ping_dropped();
-    test_backoff_sequence();
-    test_backoff_kept_until_resumed();
-    test_wire_ids_reset_per_connection();
+int main(void) {
+    testIdMapping();
+    testPushForwardedWithZeroJsId();
+    testLoginTokenCapturedNotForwardedLogic();
+    testLogoutClearsToken();
+    testLogoutWipesTokenBytes();
+    testNonPositiveJsIdRejected();
+    testJsResumeRejected();
+    testSendWhileDisconnectedRejects();
+    testPendingTableFull();
+    testResumeFlow();
+    testInternalPingDropped();
+    testBackoffSequence();
+    testBackoffKeptUntilResumed();
+    testWireIdsResetPerConnection();
     ns_destroy(NULL);
     puts("net_session: OK");
     return 0;

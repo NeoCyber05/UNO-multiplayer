@@ -8,8 +8,7 @@
 #include <unistd.h>
 
 /* A session that accepts JS requests, as after connecting without a token. */
-static NetSession *connected_session(void)
-{
+static NetSession *connectedSession(void) {
     NetSession *session = ns_create();
     assert(session != NULL);
     ns_on_connected(session);
@@ -17,9 +16,8 @@ static NetSession *connected_session(void)
     return session;
 }
 
-static void test_bridge_dispatch_validation(void)
-{
-    NetSession *session = connected_session();
+static void testBridgeDispatchValidation(void) {
+    NetSession *session = connectedSession();
     int32_t jsId = -1;
 
     /* Null or empty */
@@ -27,84 +25,86 @@ static void test_bridge_dispatch_validation(void)
     assert(bridge_dispatch(session, NULL, "", 0, &jsId) == BAD_REQUEST);
 
     /* Malformed JSON */
-    const char *bad_json = "{\"v\": 1, \"id\":";
-    assert(bridge_dispatch(session, NULL, bad_json, strlen(bad_json), &jsId) == BAD_REQUEST);
+    const char *badJson = "{\"v\": 1, \"id\":";
+    assert(bridge_dispatch(session, NULL, badJson, strlen(badJson), &jsId) == BAD_REQUEST);
 
     /* Valid JSON, but not an object */
-    const char *not_obj1 = "123";
-    assert(bridge_dispatch(session, NULL, not_obj1, strlen(not_obj1), &jsId) == BAD_REQUEST);
-    const char *not_obj2 = "[\"HELLO\"]";
-    assert(bridge_dispatch(session, NULL, not_obj2, strlen(not_obj2), &jsId) == BAD_REQUEST);
-    const char *not_obj3 = "\"hello\"";
-    assert(bridge_dispatch(session, NULL, not_obj3, strlen(not_obj3), &jsId) == BAD_REQUEST);
+    const char *notObj1 = "123";
+    assert(bridge_dispatch(session, NULL, notObj1, strlen(notObj1), &jsId) == BAD_REQUEST);
+    const char *notObj2 = "[\"HELLO\"]";
+    assert(bridge_dispatch(session, NULL, notObj2, strlen(notObj2), &jsId) == BAD_REQUEST);
+    const char *notObj3 = "\"hello\"";
+    assert(bridge_dispatch(session, NULL, notObj3, strlen(notObj3), &jsId) == BAD_REQUEST);
 
     /* Missing or wrong 'v' */
-    const char *no_v = "{\"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, no_v, strlen(no_v), &jsId) == BAD_REQUEST);
-    const char *wrong_v = "{\"v\": 2, \"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, wrong_v, strlen(wrong_v), &jsId) == BAD_REQUEST);
+    const char *noV = "{\"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, noV, strlen(noV), &jsId) == BAD_REQUEST);
+    const char *wrongV = "{\"v\": 2, \"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, wrongV, strlen(wrongV), &jsId) == BAD_REQUEST);
 
     /* Missing 'id' */
-    const char *no_id = "{\"v\": 1, \"type\": \"HELLO\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, no_id, strlen(no_id), &jsId) == BAD_REQUEST);
+    const char *noId = "{\"v\": 1, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, noId, strlen(noId), &jsId) == BAD_REQUEST);
 
     /* Missing or wrong 'type' */
-    const char *no_type = "{\"v\": 1, \"id\": 1, \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, no_type, strlen(no_type), &jsId) == BAD_REQUEST);
-    const char *empty_type = "{\"v\": 1, \"id\": 1, \"type\": \"\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, empty_type, strlen(empty_type), &jsId) == BAD_REQUEST);
-    const char *numeric_type = "{\"v\": 1, \"id\": 1, \"type\": 123, \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, numeric_type, strlen(numeric_type), &jsId) == BAD_REQUEST);
+    const char *noType = "{\"v\": 1, \"id\": 1, \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, noType, strlen(noType), &jsId) == BAD_REQUEST);
+    const char *emptyType = "{\"v\": 1, \"id\": 1, \"type\": \"\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, emptyType, strlen(emptyType), &jsId) == BAD_REQUEST);
+    const char *numericType = "{\"v\": 1, \"id\": 1, \"type\": 123, \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, numericType, strlen(numericType), &jsId) == BAD_REQUEST);
 
     /* Payload not an object */
-    const char *array_payload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": []}";
-    assert(bridge_dispatch(session, NULL, array_payload, strlen(array_payload), &jsId) == BAD_REQUEST);
-    const char *num_payload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": 42}";
-    assert(bridge_dispatch(session, NULL, num_payload, strlen(num_payload), &jsId) == BAD_REQUEST);
-    const char *no_payload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\"}";
-    assert(bridge_dispatch(session, NULL, no_payload, strlen(no_payload), &jsId) == BAD_REQUEST);
+    const char *arrayPayload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": []}";
+    assert(bridge_dispatch(session, NULL, arrayPayload, strlen(arrayPayload),
+                           &jsId) == BAD_REQUEST);
+    const char *numPayload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": 42}";
+    assert(bridge_dispatch(session, NULL, numPayload, strlen(numPayload), &jsId) == BAD_REQUEST);
+    const char *noPayload = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\"}";
+    assert(bridge_dispatch(session, NULL, noPayload, strlen(noPayload), &jsId) == BAD_REQUEST);
 
     /* Unknown message type not in whitelist */
-    const char *unknown_type = "{\"v\": 1, \"id\": 1, \"type\": \"UNKNOWN_MSG\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, unknown_type, strlen(unknown_type), &jsId) == BAD_REQUEST);
-    const char *malicious_type = "{\"v\": 1, \"id\": 1, \"type\": \"DROP_TABLE\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, malicious_type, strlen(malicious_type), &jsId) == BAD_REQUEST);
+    const char *unknownType = "{\"v\": 1, \"id\": 1, \"type\": \"UNKNOWN_MSG\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, unknownType, strlen(unknownType), &jsId) == BAD_REQUEST);
+    const char *maliciousType = "{\"v\": 1, \"id\": 1, \"type\": \"DROP_TABLE\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, maliciousType, strlen(maliciousType),
+                           &jsId) == BAD_REQUEST);
 
     /* Valid messages in whitelist */
-    const char *valid_hello = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, valid_hello, strlen(valid_hello), &jsId) == OK);
+    const char *validHello = "{\"v\": 1, \"id\": 1, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, validHello, strlen(validHello), &jsId) == OK);
 
-    const char *valid_ping = "{\"v\": 1, \"id\": 2, \"type\": \"PING\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, valid_ping, strlen(valid_ping), &jsId) == OK);
+    const char *validPing = "{\"v\": 1, \"id\": 2, \"type\": \"PING\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, validPing, strlen(validPing), &jsId) == OK);
 
-    const char *valid_spike_done = "{\"v\": 1, \"id\": 999, \"type\": \"SPIKE_DONE\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, valid_spike_done, strlen(valid_spike_done), &jsId) == OK);
+    const char *validSpikeDone =
+        "{\"v\": 1, \"id\": 999, \"type\": \"SPIKE_DONE\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, validSpikeDone, strlen(validSpikeDone), &jsId) == OK);
 
     /* Without a session nothing can be mapped to a wire id. */
-    assert(bridge_dispatch(NULL, NULL, valid_hello, strlen(valid_hello), &jsId) == BAD_REQUEST);
+    assert(bridge_dispatch(NULL, NULL, validHello, strlen(validHello), &jsId) == BAD_REQUEST);
 
     /* JS ids must be positive: 0 is reserved for server pushes. */
-    const char *zero_id = "{\"v\": 1, \"id\": 0, \"type\": \"HELLO\", \"payload\": {}}";
-    assert(bridge_dispatch(session, NULL, zero_id, strlen(zero_id), &jsId) == BAD_REQUEST);
+    const char *zeroId = "{\"v\": 1, \"id\": 0, \"type\": \"HELLO\", \"payload\": {}}";
+    assert(bridge_dispatch(session, NULL, zeroId, strlen(zeroId), &jsId) == BAD_REQUEST);
 
     ns_destroy(session);
 }
 
-static void test_js_resume_blocked(void)
-{
-    NetSession *session = connected_session();
+static void testJsResumeBlocked(void) {
+    NetSession *session = connectedSession();
     int32_t jsId = -1;
 
     /* Only native code holds the token, so JS must never send RESUME. */
-    const char *resume = "{\"v\": 1, \"id\": 4, \"type\": \"RESUME\", \"payload\": {\"token\": \"x\"}}";
+    const char *resume =
+        "{\"v\": 1, \"id\": 4, \"type\": \"RESUME\", \"payload\": {\"token\": \"x\"}}";
     assert(bridge_dispatch(session, NULL, resume, strlen(resume), &jsId) == BAD_REQUEST);
 
     ns_destroy(session);
 }
 
-static void test_dispatch_while_disconnected(void)
-{
-    NetSession *session = connected_session();
+static void testDispatchWhileDisconnected(void) {
+    NetSession *session = connectedSession();
     ns_on_disconnected(session);
 
     /* The caller needs the JS id to answer with ERROR DISCONNECTED. */
@@ -118,14 +118,12 @@ static void test_dispatch_while_disconnected(void)
 
 static int g_disconnect_reports = 0;
 
-static void count_disconnect(void *ctx)
-{
+static void countDisconnect(void *ctx) {
     (void)ctx;
     g_disconnect_reports++;
 }
 
-static void test_send_failure_reports_disconnect(void)
-{
+static void testSendFailureReportsDisconnect(void) {
     /* A client whose peer is gone: the send fails with EPIPE. */
     int fds[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
@@ -135,8 +133,8 @@ static void test_send_failure_reports_disconnect(void)
     client->connected = true;
     assert(close(fds[1]) == 0);
 
-    NetSession *session = connected_session();
-    bridge_set_disconnect_callback(count_disconnect, NULL);
+    NetSession *session = connectedSession();
+    bridge_set_disconnect_callback(countDisconnect, NULL);
     g_disconnect_reports = 0;
 
     /* The host must hear about it now, not one heartbeat later. */
@@ -156,8 +154,7 @@ static void test_send_failure_reports_disconnect(void)
     ns_destroy(session);
 }
 
-static void test_dispatch_while_resuming(void)
-{
+static void testDispatchWhileResuming(void) {
     NetSession *session = ns_create();
     int32_t wireId = 0;
 
@@ -182,46 +179,57 @@ static void test_dispatch_while_resuming(void)
     ns_destroy(session);
 }
 
-static void test_scheme_path_traversal(void)
-{
-    char out_path[512];
+static void testSchemePathTraversal(void) {
+    char outPath[512];
 
     /* Valid paths */
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/index.html", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "tests/fixtures/index.html") == 0);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/index.html", outPath,
+                               sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "tests/fixtures/index.html") == 0);
 
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/spike_test.html", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "tests/fixtures/spike_test.html") == 0);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/spike_test.html", outPath,
+                               sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "tests/fixtures/spike_test.html") == 0);
 
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "tests/fixtures/index.html") == 0);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/", outPath, sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "tests/fixtures/index.html") == 0);
 
-    assert(bridge_resolve_path("tests/fixtures", "uno://app", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "tests/fixtures/index.html") == 0);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app", outPath, sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "tests/fixtures/index.html") == 0);
 
-    assert(bridge_resolve_path("tests/fixtures", "/index.html", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "tests/fixtures/index.html") == 0);
+    assert(bridge_resolve_path("tests/fixtures", "/index.html", outPath, sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "tests/fixtures/index.html") == 0);
 
-    assert(bridge_resolve_path("client/dist", "uno://app/assets/main.js", out_path, sizeof(out_path)) == OK);
-    assert(strcmp(out_path, "client/dist/assets/main.js") == 0);
+    assert(bridge_resolve_path("client/dist", "uno://app/assets/main.js", outPath,
+                               sizeof(outPath)) == OK);
+    assert(strcmp(outPath, "client/dist/assets/main.js") == 0);
 
     /* Path traversal rejection */
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/../secret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/..%2fsecret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/..%2Fsecret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2e%2e/secret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2e%2e%2fsecret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2E%2E%2Fsecret.txt", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/foo/../../etc/passwd", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/foo/%2e%2e/%2e%2e/etc/passwd", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/something/..", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "../Makefile", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "..%2fMakefile", out_path, sizeof(out_path)) != OK);
-    assert(bridge_resolve_path("tests/fixtures", "uno://app/%00hidden.html", out_path, sizeof(out_path)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/../secret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/..%2fsecret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/..%2Fsecret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2e%2e/secret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2e%2e%2fsecret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/%2E%2E%2Fsecret.txt", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/foo/../../etc/passwd", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/foo/%2e%2e/%2e%2e/etc/passwd", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/something/..", outPath,
+                               sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "../Makefile", outPath, sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "..%2fMakefile", outPath, sizeof(outPath)) != OK);
+    assert(bridge_resolve_path("tests/fixtures", "uno://app/%00hidden.html", outPath,
+                               sizeof(outPath)) != OK);
 }
 
-static void test_mime_types(void)
-{
+static void testMimeTypes(void) {
     assert(strcmp(bridge_mime_type("index.html"), "text/html") == 0);
     assert(strcmp(bridge_mime_type("app.js"), "application/javascript") == 0);
     assert(strcmp(bridge_mime_type("style.css"), "text/css") == 0);
@@ -230,13 +238,12 @@ static void test_mime_types(void)
     assert(strcmp(bridge_mime_type("unknown.xyz"), "application/octet-stream") == 0);
 }
 
-static void test_bridge_opcode_whitelist(void)
-{
-    NetSession *session = connected_session();
+static void testBridgeOpcodeWhitelist(void) {
+    NetSession *session = connectedSession();
     int32_t jsId = -1;
 
     /* Valid spec §3 opcodes (+ SPIKE_DONE for smoke test) must return OK */
-    static const char *const valid_opcodes[] = {
+    static const char *const validOpcodes[] = {
         "LOGIN", "REGISTER", "ROOM_MODE", "LOGOUT", "QUEUE_JOIN",
         "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "CHAT",
         "HELLO", "PING", "PROFILE_GET", "PROFILE_UPDATE",
@@ -248,39 +255,40 @@ static void test_bridge_opcode_whitelist(void)
     };
 
     char buf[256];
-    for (int i = 0; valid_opcodes[i] != NULL; i++) {
-        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}", i + 1, valid_opcodes[i]);
+    for (int i = 0; validOpcodes[i] != NULL; i++) {
+        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}",
+                 i + 1, validOpcodes[i]);
         assert(bridge_dispatch(session, NULL, buf, strlen(buf), &jsId) == OK);
     }
 
     /* Invalid or obsolete opcodes must return BAD_REQUEST */
-    static const char *const invalid_opcodes[] = {
+    static const char *const invalidOpcodes[] = {
         "AUTH_LOGIN", "AUTH_REGISTER", "AUTH_GUEST", "AUTH_LOGOUT",
         "INVITE_RESPOND", "GAME_ACTION", "PARTY_INVITE", "MATCH_CONFIRM",
         "REMATCH_REQUEST", "MATCH_SURRENDER", "CHAT_SEND", "RESUME", NULL
     };
 
-    for (int i = 0; invalid_opcodes[i] != NULL; i++) {
-        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}", i + 100, invalid_opcodes[i]);
+    for (int i = 0; invalidOpcodes[i] != NULL; i++) {
+        snprintf(buf, sizeof(buf), "{\"v\": 1, \"id\": %d, \"type\": \"%s\", \"payload\": {}}",
+                 i + 100, invalidOpcodes[i]);
         assert(bridge_dispatch(session, NULL, buf, strlen(buf), &jsId) == BAD_REQUEST);
     }
 
     ns_destroy(session);
 }
 
-static void test_bridge_emit_strips_token(void)
-{
+static void testBridgeEmitStripsToken(void) {
     struct json_object *payload = json_object_new_object();
     json_object_object_add(payload, "token", json_object_new_string("secret_token_123"));
     json_object_object_add(payload, "user", json_object_new_string("alice"));
 
-    Envelope e;
-    e.v = 1;
-    e.id = 42;
-    e.type = "OK";
-    e.payload = payload;
+    Envelope envelope;
+    envelope.v = 1;
+    envelope.id = 42;
+    envelope.type = "OK";
+    envelope.payload = payload;
 
-    char *script = bridge_format_emit_script(&e);
+    char *script = bridge_format_emit_script(&envelope);
     assert(script != NULL);
     assert(strstr(script, "secret_token_123") == NULL);
     assert(strstr(script, "\"token\"") == NULL);
@@ -290,17 +298,16 @@ static void test_bridge_emit_strips_token(void)
     json_object_put(payload);
 }
 
-int main(void)
-{
-    test_bridge_dispatch_validation();
-    test_js_resume_blocked();
-    test_dispatch_while_disconnected();
-    test_dispatch_while_resuming();
-    test_send_failure_reports_disconnect();
-    test_bridge_opcode_whitelist();
-    test_bridge_emit_strips_token();
-    test_scheme_path_traversal();
-    test_mime_types();
+int main(void) {
+    testBridgeDispatchValidation();
+    testJsResumeBlocked();
+    testDispatchWhileDisconnected();
+    testDispatchWhileResuming();
+    testSendFailureReportsDisconnect();
+    testBridgeOpcodeWhitelist();
+    testBridgeEmitStripsToken();
+    testSchemePathTraversal();
+    testMimeTypes();
     printf("bridge: OK\n");
     return 0;
 }

@@ -13,20 +13,20 @@ typedef enum { PRESENCE_OFFLINE, PRESENCE_IDLE, PRESENCE_ONLINE, PRESENCE_IN_MAT
 /**
  * @brief Derive a user's presence from server state.
  * @param[in] app Server state owned by the poll loop.
- * @param[in] u Account to inspect.
+ * @param[in] user Account to inspect.
  * @return PRESENCE_OFFLINE without a connected session; PRESENCE_IN_MATCH while
  *         matchesContains holds a seat; PRESENCE_ONLINE in a room, the queue or a
  *         party; PRESENCE_IDLE otherwise.
  */
-Presence social_presence_of(App *app, UserId u);
+Presence social_presence_of(App *app, UserId user);
 
 /**
  * @brief Return the wire key of a presence value.
- * @param[in] p Presence value.
+ * @param[in] presence Presence value.
  * @return Static "offline", "idle", "online" or "in_match"; "offline" for an
  *         out-of-range value.
  */
-const char *social_presence_key(Presence p);
+const char *social_presence_key(Presence presence);
 
 /**
  * @brief Parse a public friend tag of the exact form "UNO#<id>".
@@ -35,22 +35,22 @@ const char *social_presence_key(Presence p);
  * whitespace, sign, leading zero, zero id or value above INT64_MAX (SQLite ids
  * are signed 64-bit).
  * @param[in] tag Text from the client.
- * @param[out] out Receives the id on success; untouched on failure.
+ * @param[out] outUserId Receives the id on success; untouched on failure.
  * @return true when tag is valid, false otherwise (including NULL arguments).
  */
-bool social_parse_tag(const char *tag, UserId *out);
+bool social_parse_tag(const char *tag, UserId *outUserId);
 
 /**
  * @brief Handle FRIEND_LIST, FRIEND_REQUEST, FRIEND_REPLY, PROFILE_GET,
  *        PROFILE_UPDATE, LEADERBOARD_GET and LOBBY_GET for the session's account.
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] conn Connection that sent the request.
- * @param[in] e Request envelope borrowed for the call.
+ * @param[in] envelope Request envelope borrowed for the call.
  * @return OK once a reply was sent (errors travel as ERROR replies:
  *         UNAUTHENTICATED, BAD_REQUEST, FORBIDDEN, NOT_FOUND, INVALID_ACTION,
  *         STORAGE_ERROR), BAD_REQUEST if the arguments are NULL.
  */
-Status social_handle(App *app, ConnId conn, const Envelope *e);
+Status social_handle(App *app, ConnId conn, const Envelope *envelope);
 
 /**
  * @brief Push a fresh FRIEND_STATE to a user and to each accepted friend online.
@@ -58,8 +58,8 @@ Status social_handle(App *app, ConnId conn, const Envelope *e);
  * Call after anything that changes the user's presence or public identity.
  * Offline recipients simply miss the push; their next LOGIN sends a new list.
  * @param[in,out] app Server state owned by the poll loop.
- * @param[in] u Account whose presence or identity changed.
+ * @param[in] user Account whose presence or identity changed.
  */
-void social_presence(App *app, UserId u);
+void social_presence(App *app, UserId user);
 
 #endif
