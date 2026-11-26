@@ -60,21 +60,63 @@ struct App {
     UserId leaving_user;
 };
 
-Status app_init(App *app, const char *bind_ip, uint16_t port, const char *db_path, int auth_limit);
+/**
+ * @brief Prepare server state and open the non-blocking listening socket.
+ *
+ * Also starts the auth worker thread with its wake-up pipe, ignores SIGPIPE and
+ * installs the SIGINT/SIGTERM handler. The store and match coordinator are
+ * opened later by app_run, so tests can inject their own.
+ *
+ * @param[out] app State to initialize; zeroed first.
+ * @param[in] bindIp IPv4 address in dotted form, or NULL for "0.0.0.0".
+ * @param[in] port TCP port in host byte order; 0 picks an ephemeral port
+ *            stored in `bound_port`.
+ * @param[in] dbPath SQLite path, or NULL for "uno.db".
+ * @param[in] authLimit Auth requests allowed per IP per minute.
+ * @return OK; BAD_REQUEST for an unparsable @p bindIp; BUSY when socket(),
+ *         bind() or listen() fails (the socket is closed again), or an error
+ *         from queue_init.
+ */
+Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath, int authLimit);
+
 /**
  * @brief Run the server poll loop until SIGINT/SIGTERM.
- * @param[in] bind_ip IPv4 address to listen on.
+ * @param[in] bindIp IPv4 address to listen on.
  * @param[in] port TCP port, 0 for an ephemeral port printed as "PORT n".
- * @param[in] db_path SQLite path or ":memory:".
- * @param[in] auth_limit Auth requests allowed per IP per minute.
- * @param[in] heartbeat_ms Idle time after which a connection is closed.
+ * @param[in] dbPath SQLite path or ":memory:".
+ * @param[in] authLimit Auth requests allowed per IP per minute.
+ * @param[in] heartbeatMs Idle time after which a connection is closed.
  * @return 0 after a clean shutdown, 1 if startup failed.
  */
-int app_run(const char *bind_ip, uint16_t port, const char *db_path, int auth_limit,
-            int heartbeat_ms);
+int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
+            int heartbeatMs);
+/**
+ * @brief Ask the poll loop to exit after the current iteration.
+ * @param[in,out] app Server state; NULL is ignored.
+ */
 void app_stop(App *app);
+
+/**
+ * @brief Close every connection, the listening socket and the auth pipe, then
+ *        free queue, rooms, sessions, matches and store (in that order).
+ *
+ * Safe on a partially initialized App. Presence pushes are suppressed because
+ * `running` is cleared first.
+ *
+ * @param[in,out] app Server state; the App struct itself is not freed.
+ */
 void app_cleanup(App *app);
-void app_close_slot(App *app, int slot_idx);
+
+/**
+ * @brief Detach the session, close the socket and free the slot for reuse.
+ *
+ * The slot generation is bumped so ConnIds and frames for the old socket are
+ * rejected afterwards. Safe to call on an inactive slot.
+ *
+ * @param[in,out] app Server state owned by the poll loop.
+ * @param[in] slotIndex Index into `slots`; out-of-range values are ignored.
+ */
+void app_close_slot(App *app, int slotIndex);
 
 /**
  * @brief Take a user off a connection: socket close, LOGOUT, or another
@@ -94,7 +136,17 @@ void app_close_slot(App *app, int slot_idx);
  */
 void app_user_leave(App *app, ConnId conn, UserId user);
 
-bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t now_ms);
+/**
+ * @brief Spend one token from the connection's request bucket.
+ *
+ * The bucket refills at 0.03 tokens/ms and holds at most 60, so a client may
+ * burst 60 requests and then sustain 30 per second.
+ *
+ * @param[in,out] slot Connection whose bucket is updated.
+ * @param[in] nowMs Monotonic time from app_now_ms.
+ * @return true if the request may run, false if it must get RATE_LIMITED.
+ */
+bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t nowMs);
 
 /**
  * @brief Read the clock shared by the poll loop, heartbeat and match timers.
@@ -118,9 +170,9 @@ Status app_push(App *app, UserId user, const char *type, json_object *payload);
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] conn Connection that sent the request; ignored if already closed.
  * @param[in] id Request id echoed back to the client.
- * @param[in] st OK sends an empty OK; any other value sends ERROR with status_code(st).
+ * @param[in] status OK sends an empty OK; any other value sends ERROR with status_code(status).
  */
-void app_reply_status(App *app, ConnId conn, int32_t id, Status st);
+void app_reply_status(App *app, ConnId conn, int32_t id, Status status);
 
 /**
  * @brief Answer a request with OK and a result object.

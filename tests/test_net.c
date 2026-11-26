@@ -87,7 +87,7 @@ static void testPartialWriteAndFlush(void) {
     status = conn_flush(&connection);
     assert(status == OK);
 
-    /* If still remaining, drain and flush until fully sentTotal */
+    /* If still remaining, drain and flush until fully sent */
     while (connection.out_pos < connection.out_len) {
         ssize_t byteCount = recv(socketPair[1], receiveBuffer + totalReceived,
                                  sizeof(receiveBuffer) - totalReceived, 0);
@@ -307,7 +307,7 @@ static void testClientConnectStartFinish(void) {
         assert(started == BAD_REQUEST);
     }
 
-    /* Abort closes a pending attempt'status fd. */
+    /* Abort closes a pending attempt's fd. */
     listenFd = openListener(&port);
     assert(client_resolve("127.0.0.1", port, &address) == OK);
     assert(client_connect_start(&address, &fd, &inProgress) == OK);

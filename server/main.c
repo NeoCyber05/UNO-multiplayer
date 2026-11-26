@@ -3,26 +3,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main(int argc, char **argv)
-{
-    const char *bind_ip = "0.0.0.0";
-    uint16_t port = 9090;
-    const char *db_path = "uno.db";
-    int auth_limit = 5;
-    int heartbeat_ms = APP_DEFAULT_HEARTBEAT_MS;
+enum {
+    DEFAULT_SERVER_PORT = 9090,
+    /* Auth requests (REGISTER/LOGIN/RESUME) allowed per client IP per minute. */
+    DEFAULT_AUTH_LIMIT = 5
+};
+
+/* Every interface, so LAN clients can reach the server. */
+static const char DEFAULT_BIND_IP[] = "0.0.0.0";
+
+int main(int argc, char **argv) {
+    const char *bindIp = DEFAULT_BIND_IP;
+    uint16_t port = DEFAULT_SERVER_PORT;
+    const char *dbPath = "uno.db";
+    int authLimit = DEFAULT_AUTH_LIMIT;
+    int heartbeatMs = APP_DEFAULT_HEARTBEAT_MS;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc) {
-            bind_ip = argv[++i];
+            bindIp = argv[++i];
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = (uint16_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--db") == 0 && i + 1 < argc) {
-            db_path = argv[++i];
+            dbPath = argv[++i];
         } else if (strcmp(argv[i], "--auth-limit") == 0 && i + 1 < argc) {
-            auth_limit = atoi(argv[++i]);
+            authLimit = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--heartbeat-ms") == 0 && i + 1 < argc) {
             /* Test-only knob; non-positive values fall back to the spec default. */
-            heartbeat_ms = atoi(argv[++i]);
+            heartbeatMs = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [--bind <ip>] [--port <port>] [--db <path>] "
                    "[--auth-limit <num>] [--heartbeat-ms <ms>]\n", argv[0]);
@@ -30,5 +38,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return app_run(bind_ip, port, db_path, auth_limit, heartbeat_ms);
+    return app_run(bindIp, port, dbPath, authLimit, heartbeatMs);
 }
