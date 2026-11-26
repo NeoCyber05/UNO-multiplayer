@@ -119,6 +119,20 @@ void app_cleanup(App *app);
 void app_close_slot(App *app, int slotIndex);
 
 /**
+ * @brief Refuse a freshly accepted connection because every slot is taken.
+ *
+ * Sends one ERROR frame {code: "SERVER_FULL"} with id 0 and closes the socket.
+ * The attempt is best effort: a single send() with MSG_NOSIGNAL, no retry, so
+ * it never raises SIGPIPE and blocks at most once. A failed or short send is
+ * logged to stderr (stdout carries the "PORT n" line).
+ *
+ * @param[in] connectionSocket Socket returned by accept(); always closed here.
+ * @return OK when the whole frame was handed to the kernel, BAD_REQUEST when
+ *         encoding failed or send() failed or wrote only part of the frame.
+ */
+Status appRejectConnection(int connectionSocket);
+
+/**
  * @brief Take a user off a connection: socket close, LOGOUT, or another
  *        account binding the same socket.
  *

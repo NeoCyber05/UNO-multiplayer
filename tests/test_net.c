@@ -348,6 +348,73 @@ static void testTokenBucketRateLimiter(void) {
     assert(app_conn_check_rate_limit(&slot, nowMs) == false);
 }
 
+/* Copy of the one envelope a rejected client receives; the decoder frees its own. */
+typedef struct {
+    int count;
+    int version;
+    int32_t id;
+    char type[16];
+    char code[32];
+    char message[64];
+} RejectFrame;
+
+static void copyPayloadString(json_object *payload, const char *key, char *out, size_t size) {
+    json_object *value = NULL;
+    assert(json_object_object_get_ex(payload, key, &value));
+    snprintf(out, size, "%s", json_object_get_string(value));
+}
+
+static Status onRejectFrame(const Envelope *envelope, void *context) {
+    RejectFrame *frame = (RejectFrame *)context;
+    frame->count++;
+    frame->version = envelope->v;
+    frame->id = envelope->id;
+    snprintf(frame->type, sizeof(frame->type), "%s", envelope->type);
+    copyPayloadString(envelope->payload, "code", frame->code, sizeof(frame->code));
+    copyPayloadString(envelope->payload, "message", frame->message, sizeof(frame->message));
+    return OK;
+}
+
+static void testRejectConnectionSendsServerFull(void) {
+    int socketPair[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, socketPair) == 0);
+    assert(appRejectConnection(socketPair[0]) == OK);
+    /* The call owns the socket and must have closed it. */
+    assert(fcntl(socketPair[0], F_GETFD) == -1 && errno == EBADF);
+
+    /* Read until EOF: the server side is closed, so recv() ends with 0. */
+    uint8_t receiveBuffer[512];
+    size_t totalReceived = 0;
+    while (totalReceived < sizeof(receiveBuffer)) {
+        ssize_t byteCount = recv(socketPair[1], receiveBuffer + totalReceived,
+                                 sizeof(receiveBuffer) - totalReceived, 0);
+        assert(byteCount >= 0);
+        if (byteCount == 0) break;
+        totalReceived += (size_t)byteCount;
+    }
+
+    FrameReader reader;
+    frame_reader_reset(&reader);
+    RejectFrame frame = {0};
+    assert(frame_feed(&reader, receiveBuffer, totalReceived, onRejectFrame, &frame) == OK);
+    assert(reader.used == 0);
+    assert(frame.count == 1);
+    assert(frame.version == 1 && frame.id == 0);
+    assert(strcmp(frame.type, "ERROR") == 0);
+    assert(strcmp(frame.code, "SERVER_FULL") == 0);
+    assert(strcmp(frame.message, "Server connection limit reached") == 0);
+    close(socketPair[1]);
+}
+
+static void testRejectConnectionReportsBrokenPeer(void) {
+    int socketPair[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, socketPair) == 0);
+    close(socketPair[1]);
+    /* MSG_NOSIGNAL: EPIPE comes back as an error instead of killing the test. */
+    assert(appRejectConnection(socketPair[0]) == BAD_REQUEST);
+    assert(fcntl(socketPair[0], F_GETFD) == -1 && errno == EBADF);
+}
+
 int main(void) {
     testTokenBucketRateLimiter();
     testPartialWriteAndFlush();
@@ -357,6 +424,8 @@ int main(void) {
     testClientConnectFail();
     testClientResolve();
     testClientConnectStartFinish();
+    testRejectConnectionSendsServerFull();
+    testRejectConnectionReportsBrokenPeer();
     puts("net: OK");
     return 0;
 }

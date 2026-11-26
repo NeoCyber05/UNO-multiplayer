@@ -626,6 +626,36 @@ void app_cleanup(App *app) {
     app->running = false;
 }
 
+Status appRejectConnection(int connectionSocket) {
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "code", json_object_new_string("SERVER_FULL"));
+    const char *fullMessage = "Server connection limit reached";
+    json_object_object_add(payload, "message", json_object_new_string(fullMessage));
+    Envelope fullEnvelope = {1, 0, "ERROR", payload};
+    uint8_t fullFrame[SERVER_FULL_FRAME_SIZE];
+    size_t frameLength = 0;
+    Status status = frame_encode(&fullEnvelope, fullFrame, sizeof(fullFrame), &frameLength);
+    json_object_put(payload);
+
+    if (status == OK) {
+        /* One send only: the socket from accept() is still blocking and the frame
+         * is far below any socket buffer, so a short write means the peer is gone.
+         * MSG_NOSIGNAL reports a reset peer as EPIPE instead of raising SIGPIPE. */
+        ssize_t bytesSent = send(connectionSocket, fullFrame, frameLength, MSG_NOSIGNAL);
+        if (bytesSent < 0) {
+            fprintf(stderr, "SERVER_FULL reject: send failed: %s\n", strerror(errno));
+            status = BAD_REQUEST;
+        } else if ((size_t)bytesSent < frameLength) {
+            fprintf(stderr, "SERVER_FULL reject: sent %zd of %zu bytes\n", bytesSent, frameLength);
+            status = BAD_REQUEST;
+        }
+    } else {
+        status = BAD_REQUEST;
+    }
+    close(connectionSocket);
+    return status;
+}
+
 /* Tell every authenticated client the server is going away before sockets close. */
 static void announceShutdown(App *app) {
     json_object *payload = json_object_new_object();
@@ -760,20 +790,8 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
                 }
 
                 if (freeSlot < 0) {
-                    /* Server capacity reached: reject client */
-                    struct json_object *payload = json_object_new_object();
-                    json_object_object_add(payload, "code", json_object_new_string("SERVER_FULL"));
-                    const char *fullMessage = "Server connection limit reached";
-                    json_object_object_add(payload, "message", json_object_new_string(fullMessage));
-                    Envelope fullEnvelope = {1, 0, "ERROR", payload};
-                    uint8_t fullFrame[SERVER_FULL_FRAME_SIZE];
-                    size_t frameLength = 0;
-                    Status encoded = frame_encode(&fullEnvelope, fullFrame, sizeof(fullFrame), &frameLength);
-                    if (encoded == OK) {
-                        send(connectionSocket, fullFrame, frameLength, MSG_NOSIGNAL);
-                    }
-                    json_object_put(payload);
-                    close(connectionSocket);
+                    /* Best effort: the outcome is logged inside; the loop goes on. */
+                    (void)appRejectConnection(connectionSocket);
                     continue;
                 }
 
