@@ -19,7 +19,7 @@ ifeq ($(origin NAME),environment)
 NAME :=
 endif
 gtk_test_names := bridge
-test_dirs := tests tests/unit
+test_dirs := tests/unit
 test_sources := $(wildcard $(addsuffix /test_*.c,$(test_dirs)))
 test_names := $(patsubst test_%.c,%,$(notdir $(test_sources)))
 vpath test_%.c $(test_dirs)
@@ -42,7 +42,7 @@ $(BUILD)/uno-desktop: desktop/main.c $(desktop_modules) $(shared) $(headers) Mak
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
-$(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(headers) Makefile
+$(BUILD)/tests/test_bridge: tests/unit/test_bridge.c $(desktop_modules) $(shared) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
