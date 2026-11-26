@@ -1,4 +1,4 @@
-#include "desktop/net_session.h"
+#include "net_session.h"
 #include <sodium.h>
 #include <stdlib.h>
 #include <string.h>

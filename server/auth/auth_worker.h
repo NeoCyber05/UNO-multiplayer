@@ -2,7 +2,7 @@
 #define UNO_AUTH_WORKER_H
 
 #include "shared/contracts.h"
-#include "server/store.h"
+#include "server/storage/store.h"
 #include <stdbool.h>
 #include <stdint.h>
 

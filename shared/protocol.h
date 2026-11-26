@@ -1,7 +1,7 @@
 #ifndef UNO_PROTOCOL_H
 #define UNO_PROTOCOL_H
 
-#include "contracts.h"
+#include "shared/contracts.h"
 #include <json-c/json.h>
 
 /* A frame is a 4-byte big-endian body length followed by that many JSON bytes. */

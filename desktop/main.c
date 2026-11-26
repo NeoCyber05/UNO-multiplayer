@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
-#include "bridge.h"
-#include "net_session.h"
-#include "tcp_client.h"
+#include "desktop/bridge.h"
+#include "desktop/net_session.h"
+#include "desktop/tcp_client.h"
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 #include <stdio.h>

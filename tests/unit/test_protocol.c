@@ -1,4 +1,4 @@
-#include "protocol.h"
+#include "shared/protocol.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

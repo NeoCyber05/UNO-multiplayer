@@ -1,4 +1,4 @@
-#include "server/rating.h"
+#include "rating.h"
 
 #include <math.h>
 

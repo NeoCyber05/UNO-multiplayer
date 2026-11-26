@@ -1,4 +1,4 @@
-#include "server/social.h"
+#include "server/lobby/social.h"
 
 #include <assert.h>
 #include <stdio.h>

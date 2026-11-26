@@ -1,5 +1,5 @@
 #include "profile.h"
-#include "server/store.h"
+#include "server/storage/store.h"
 
 #include <string.h>
 

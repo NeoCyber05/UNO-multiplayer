@@ -1,5 +1,5 @@
 #include "server/game/profile.h"
-#include "server/store.h"
+#include "server/storage/store.h"
 
 #include <assert.h>
 #include <stdio.h>

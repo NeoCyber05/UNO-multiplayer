@@ -1,7 +1,7 @@
 #ifndef UNO_MATCH_H
 #define UNO_MATCH_H
 
-#include "server/rooms.h"
+#include "server/lobby/rooms.h"
 
 typedef void (*MatchPush)(void *context, UserId userId, const char *type, json_object *payload);
 typedef void (*MatchEnded)(void *context, const char *roomId);

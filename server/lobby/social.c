@@ -1,11 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 #include "social.h"
-#include "accounts.h"
+#include "server/auth/accounts.h"
 #include "server/game/match.h"
-#include "queue.h"
-#include "rating.h"
-#include "rooms.h"
-#include "store.h"
+#include "server/lobby/queue.h"
+#include "server/game/rating.h"
+#include "server/lobby/rooms.h"
+#include "server/storage/store.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

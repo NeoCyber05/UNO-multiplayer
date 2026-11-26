@@ -6,12 +6,12 @@ ifeq ($(HAVE_GTK),1)
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.1)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
 endif
-CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium)
+CPPFLAGS += -I. $(shell pkg-config --cflags json-c sqlite3 libsodium)
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread -lm
 
 shared := $(wildcard shared/*.c)
-server_dirs := server server/game
+server_dirs := server server/auth server/game server/lobby server/storage
 modules := $(filter-out server/main.c,$(wildcard $(addsuffix /*.c,$(server_dirs))))
 desktop_modules := $(filter-out desktop/main.c,$(wildcard desktop/*.c))
 headers := $(wildcard shared/*.h $(addsuffix /*.h,$(server_dirs)) desktop/*.h)
@@ -19,7 +19,7 @@ ifeq ($(origin NAME),environment)
 NAME :=
 endif
 gtk_test_names := bridge
-test_dirs := tests tests/unit
+test_dirs := tests/unit
 test_sources := $(wildcard $(addsuffix /test_*.c,$(test_dirs)))
 test_names := $(patsubst test_%.c,%,$(notdir $(test_sources)))
 vpath test_%.c $(test_dirs)
@@ -42,7 +42,7 @@ $(BUILD)/uno-desktop: desktop/main.c $(desktop_modules) $(shared) $(headers) Mak
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
-$(BUILD)/tests/test_bridge: tests/test_bridge.c $(desktop_modules) $(shared) $(headers) Makefile
+$(BUILD)/tests/test_bridge: tests/unit/test_bridge.c $(desktop_modules) $(shared) $(headers) Makefile
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(GTK_CFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) $(LDLIBS) $(GTK_LIBS) -o $@
 
