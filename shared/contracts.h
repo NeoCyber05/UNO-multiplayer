@@ -5,38 +5,51 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Result of every operation. The enum names double as wire error codes
- * (see statusCode), so the order must not change. */
+/* Kết quả của mọi thao tác. Tên enum cũng là mã lỗi gửi trên wire (xem
+ * statusCode), nên không được đổi thứ tự. */
 typedef enum {
     OK, BAD_REQUEST, UNAUTHENTICATED, FORBIDDEN, BUSY, NOT_FOUND, ROOM_FULL,
     INVALID_ACTION, NOT_YOUR_TURN, STALE_TURN, STALE_REQUEST, RATE_LIMITED,
     STORAGE_ERROR, SERVER_FULL
 } Status;
 
+enum {
+    /* UUID dạng chuỗi 36 ký tự cộng NUL. */
+    MATCH_ID_SIZE = 37,
+    /* Tên hiển thị tối đa 64 byte UTF-8 cộng NUL. */
+    PLAYER_NAME_SIZE = 65,
+    AVATAR_ID_SIZE = 32,
+    EVENT_TYPE_SIZE = 32,
+    /* Đủ chứa danh sách cả 112 mã lá bài trong một payload JSON. */
+    EVENT_PAYLOAD_SIZE = 2048,
+    EVENT_BATCH_CAPACITY = 32,
+    MATCH_SEAT_COUNT = 4
+};
+
 typedef uint64_t UserId;
 typedef uint8_t Seat;
-typedef char MatchId[37];
-/* Logical connection handle: slot index plus reuse counter, never the socket fd. */
+typedef char MatchId[MATCH_ID_SIZE];
+/* Định danh kết nối logic: chỉ số slot cộng bộ đếm tái sử dụng, không bao giờ là fd. */
 typedef struct { uint32_t slot, generation; } ConnId;
 typedef enum { CLASSIC, TWO_V_TWO, SIDE, DRAFT } Mode;
 typedef enum { EASY, NORMAL, HARD } BotLevel;
 
 typedef struct {
     UserId userId;
-    char name[65], avatar[32];
+    char name[PLAYER_NAME_SIZE], avatar[AVATAR_ID_SIZE];
     BotLevel botLevel;
     bool isBot;
 } PlayerSpec;
 
 typedef struct {
     uint64_t seq, revision;
-    int actor; /* -1 for server events */
-    char type[32], payload[2048]; /* JSON object; fits a list of all 112 card IDs */
+    int actor; /* -1 cho sự kiện do server sinh ra */
+    char type[EVENT_TYPE_SIZE], payload[EVENT_PAYLOAD_SIZE]; /* payload là một object JSON */
 } MatchEvent;
 
 typedef struct {
     size_t count;
-    MatchEvent events[32];
+    MatchEvent events[EVENT_BATCH_CAPACITY];
 } EventBatch;
 
 typedef struct {
@@ -57,9 +70,9 @@ typedef struct {
     Mode mode;
     bool ranked;
     MatchStatus status;
-    int winnerSeat, winnerTeam; /* -1 if absent */
+    int winnerSeat, winnerTeam; /* -1 khi không có */
     uint64_t durationMs;
-    PlayerResult players[4];
+    PlayerResult players[MATCH_SEAT_COUNT];
 } MatchResult;
 
 typedef enum {

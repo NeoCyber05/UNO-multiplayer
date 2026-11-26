@@ -7,11 +7,11 @@
 #include <stdint.h>
 
 enum {
-    /* Unsent bytes allowed per connection before it counts as a slow consumer. */
+    /* Số byte chưa gửi tối đa cho mỗi kết nối trước khi coi là client đọc quá chậm. */
     CONN_OUT_BUF_SIZE = 262144 /* 256 KiB */
 };
 
-/* One non-blocking TCP stream with its frame reader and pending output. */
+/* Một luồng TCP non-blocking kèm bộ ghép frame và phần dữ liệu chờ gửi. */
 typedef struct {
     int fd;
     uint32_t slot;
@@ -24,56 +24,58 @@ typedef struct {
 } Conn;
 
 /**
- * @brief Take ownership of a connected socket and switch it to non-blocking.
- * @param[out] connection Connection to initialize.
- * @param[in] fd Connected socket, or -1 for an unconnected placeholder.
- * @param[in] slot Logical slot index; not the fd.
- * @param[in] generation Slot reuse counter so stale references can be detected.
- * @return OK, or BAD_REQUEST when @p connection is NULL.
+ * @brief Nhận quyền sở hữu socket đã kết nối và chuyển nó sang non-blocking.
+ * @param[out] connection Kết nối cần khởi tạo.
+ * @param[in] fd Socket đã kết nối, hoặc -1 cho chỗ trống chưa có kết nối.
+ * @param[in] slot Chỉ số slot logic; không phải fd.
+ * @param[in] generation Bộ đếm tái sử dụng slot để phát hiện tham chiếu cũ.
+ * @return OK; BAD_REQUEST khi @p connection là NULL hoặc fcntl() không đặt được
+ *         O_NONBLOCK. Khi fcntl() lỗi, struct vẫn được khởi tạo đủ nên caller
+ *         phải gọi connClose để đóng socket.
  */
 Status connInit(Conn *connection, int fd, uint32_t slot, uint32_t generation);
 
 /**
- * @brief Read until the socket would block and decode every complete frame.
- * @param[in,out] connection Connection with a readable socket.
- * @param[in] onFrame Called for each frame; see frameFeed for envelope lifetime.
- * @param[in] context Passed through to @p onFrame.
- * @return OK once recv() reports EAGAIN/EWOULDBLOCK. BAD_REQUEST on EOF
- *         (recv() returned 0) or a socket error; a framing error or a non-OK
- *         callback result is returned as is; all of these set `closing`.
- *         RATE_LIMITED without reading when the connection is already
- *         `closing`, and BAD_REQUEST for a NULL argument or a closed fd.
+ * @brief Đọc cho tới khi socket báo hết dữ liệu và giải mã mọi frame đầy đủ.
+ * @param[in,out] connection Kết nối có socket đang đọc được.
+ * @param[in] onFrame Được gọi cho mỗi frame; xem frameFeed về vòng đời envelope.
+ * @param[in] context Chuyển nguyên cho @p onFrame.
+ * @return OK khi recv() báo EAGAIN/EWOULDBLOCK. BAD_REQUEST khi gặp EOF (recv()
+ *         trả 0) hoặc lỗi socket; lỗi frame hoặc kết quả khác OK của callback
+ *         được trả nguyên; mọi trường hợp này đều bật `closing`. Trả
+ *         RATE_LIMITED mà không đọc khi kết nối đã `closing`, và BAD_REQUEST
+ *         khi đối số NULL hoặc fd đã đóng.
  */
 Status connRead(Conn *connection, FrameCallback onFrame, void *context);
 
 /**
- * @brief Encode an envelope and append it to the pending output.
+ * @brief Mã hóa envelope và nối vào phần dữ liệu chờ gửi.
  *
- * Nothing is sent here; call connFlush or wait for POLLOUT.
+ * Hàm không gửi gì; hãy gọi connFlush hoặc chờ POLLOUT.
  *
- * @param[in,out] connection Destination connection.
- * @param[in] envelope Message to queue; the payload is not consumed.
- * @return OK, an encode error, or RATE_LIMITED when the output buffer would
- *         exceed CONN_OUT_BUF_SIZE (the connection is then marked `closing`).
+ * @param[in,out] connection Kết nối đích.
+ * @param[in] envelope Thông điệp cần xếp hàng; payload không bị chiếm quyền sở hữu.
+ * @return OK, lỗi mã hóa, hoặc RATE_LIMITED khi buffer gửi sẽ vượt
+ *         CONN_OUT_BUF_SIZE (kết nối khi đó bị đánh dấu `closing`).
  */
 Status connQueue(Conn *connection, const Envelope *envelope);
 
 /**
- * @brief Send pending output until it is empty or the socket would block.
+ * @brief Gửi phần dữ liệu chờ cho tới khi hết hoặc socket báo sẽ chặn.
  *
- * send() may accept fewer bytes than offered; the rest stays queued and
- * `outPos` records how much the kernel has accepted so far.
+ * send() có thể nhận ít byte hơn số được đưa; phần còn lại vẫn nằm trong hàng
+ * đợi và `outPos` ghi lại số byte kernel đã nhận.
  *
- * @param[in,out] connection Connection with pending output.
- * @return OK when everything was sent or the socket would block (check
- *         `outLen > outPos` to know whether to wait for POLLOUT).
- *         BAD_REQUEST on a socket error, which also sets `closing`.
+ * @param[in,out] connection Kết nối có dữ liệu chờ gửi.
+ * @return OK khi đã gửi hết hoặc socket sẽ chặn (xem `outLen > outPos` để biết
+ *         có cần chờ POLLOUT không). BAD_REQUEST khi lỗi socket, đồng thời bật
+ *         `closing`.
  */
 Status connFlush(Conn *connection);
 
 /**
- * @brief Close the socket and reset the connection; safe to call twice.
- * @param[in,out] connection Connection to close; the fd is closed at most once.
+ * @brief Đóng socket và đặt lại kết nối; gọi hai lần vẫn an toàn.
+ * @param[in,out] connection Kết nối cần đóng; fd chỉ bị đóng tối đa một lần.
  */
 void connClose(Conn *connection);
 

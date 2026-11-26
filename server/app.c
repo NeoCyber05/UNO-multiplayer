@@ -802,7 +802,12 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                 slot->lastRequestId = 0;
                 /* Cho kết nối mới đủ một khoảng heartbeat để gửi frame đầu tiên. */
                 slot->lastFrameMs = slot->rateLastMs;
-                connInit(&slot->conn, connectionSocket, (uint32_t)freeSlot, slot->generation);
+                /* Socket không chuyển được sang non-blocking sẽ làm treo vòng poll,
+                 * nên đóng ngay thay vì phục vụ nó. */
+                if (connInit(&slot->conn, connectionSocket, (uint32_t)freeSlot,
+                             slot->generation) != OK) {
+                    appCloseSlot(app, freeSlot);
+                }
             }
         }
 

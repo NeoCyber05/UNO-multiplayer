@@ -4,16 +4,23 @@
 #include "shared/contracts.h"
 #include <json-c/json.h>
 
-/* A frame is a 4-byte big-endian body length followed by that many JSON bytes. */
+/* Một frame gồm 4 byte độ dài (big-endian) rồi tới đúng chừng ấy byte JSON. */
 enum { FRAME_MAX_JSON = 65536, FRAME_CAPACITY = 4 + FRAME_MAX_JSON };
 
-/* Holds at most one partial frame between reads from a stream socket. */
+enum {
+    /* Giá trị trường "v" của mọi envelope UNOP/1. */
+    PROTOCOL_VERSION = 1,
+    /* Push từ server luôn mang id 0 để client không ghép nhầm với request nào. */
+    PUSH_ENVELOPE_ID = 0
+};
+
+/* Giữ tối đa một frame còn dở giữa các lần đọc từ socket dạng luồng. */
 typedef struct {
     uint8_t buffer[FRAME_CAPACITY];
     size_t used;
 } FrameReader;
 
-/* One UNOP/1 message: {"v":1,"id":n,"type":"...","payload":{...}}. */
+/* Một thông điệp UNOP/1: {"v":1,"id":n,"type":"...","payload":{...}}. */
 typedef struct {
     int v;
     int32_t id;
@@ -21,51 +28,51 @@ typedef struct {
     struct json_object *payload;
 } Envelope;
 
-/* Receives a decoded envelope; a non-OK result stops frameFeed. */
+/* Nhận một envelope đã giải mã; trả khác OK thì frameFeed dừng lại. */
 typedef Status (*FrameCallback)(const Envelope *, void *);
 
 /**
- * @brief Drop any partial frame, e.g. after a connection is reused.
- * @param[out] reader Reader to clear.
+ * @brief Bỏ frame còn dở, ví dụ khi một kết nối được dùng lại.
+ * @param[out] reader Bộ đọc cần xóa trạng thái.
  */
 void frameReaderReset(FrameReader *reader);
 
 /**
- * @brief Append received bytes and decode every frame they complete.
+ * @brief Nối các byte vừa nhận và giải mã mọi frame đã đủ.
  *
- * Bytes may arrive split or coalesced in any way; a frame that is still
- * incomplete stays in @p reader for the next call.
+ * Byte có thể đến bị cắt nhỏ hoặc dính nhau tùy ý; frame chưa đủ được giữ lại
+ * trong @p reader cho lần gọi sau.
  *
- * @param[in,out] reader Per-connection reassembly buffer.
- * @param[in] data Bytes just received (may be NULL when @p length is 0).
- * @param[in] length Number of bytes in @p data.
- * @param[in] onFrame Called once per complete frame, in order. The envelope and
- *            its payload are owned by the decoder and only valid during the call.
- * @param[in] context Passed through to @p onFrame.
- * @return OK after consuming all bytes; BAD_REQUEST for a zero or oversized
- *         length prefix or an invalid envelope; otherwise the first non-OK
- *         callback result. After an error the connection should be closed.
+ * @param[in,out] reader Bộ đệm ghép frame của riêng từng kết nối.
+ * @param[in] data Các byte vừa nhận (được phép NULL khi @p length là 0).
+ * @param[in] length Số byte trong @p data.
+ * @param[in] onFrame Được gọi đúng thứ tự cho mỗi frame đủ. Envelope và payload
+ *            thuộc bộ giải mã và chỉ hợp lệ trong lúc callback chạy.
+ * @param[in] context Chuyển nguyên cho @p onFrame.
+ * @return OK khi đã dùng hết byte; BAD_REQUEST khi tiền tố độ dài bằng 0 hoặc quá
+ *         lớn, hoặc envelope sai; nếu không là kết quả khác OK đầu tiên của
+ *         callback. Sau khi lỗi, caller nên đóng kết nối.
  */
 Status frameFeed(FrameReader *reader, const uint8_t *data, size_t length, FrameCallback onFrame,
-                  void *context);
+                 void *context);
 
 /**
- * @brief Serialize an envelope into one length-prefixed frame.
- * @param[in] envelope Message to encode; the payload is not consumed.
- * @param[out] out Caller-owned buffer.
- * @param[in] capacity Size of @p out; FRAME_CAPACITY always fits a valid frame.
- * @param[out] written Frame size on success, 0 otherwise.
- * @return OK, BAD_REQUEST for an invalid envelope or a frame that does not fit,
- *         or BUSY when json-c cannot allocate.
+ * @brief Tuần tự hóa một envelope thành một frame có tiền tố độ dài.
+ * @param[in] envelope Thông điệp cần mã hóa; payload không bị chiếm quyền sở hữu.
+ * @param[out] out Buffer do caller sở hữu.
+ * @param[in] capacity Kích thước @p out; FRAME_CAPACITY luôn đủ cho frame hợp lệ.
+ * @param[out] written Kích thước frame khi thành công, 0 nếu thất bại.
+ * @return OK; BAD_REQUEST khi envelope sai hoặc frame không vừa buffer; BUSY khi
+ *         json-c không cấp phát được bộ nhớ.
  */
 Status frameEncode(const Envelope *envelope, uint8_t *out, size_t capacity, size_t *written);
 
 /**
- * @brief Map a Status to the wire error code string used in ERROR payloads.
- * @param[in] status Any Status value, including ones outside the enum.
- * @return A static string equal to the enum name (OK -> "OK",
- *         STALE_REQUEST -> "STALE_REQUEST", ...). A value outside the enum
- *         returns "BAD_REQUEST" so a corrupted status never leaks to the wire.
+ * @brief Đổi Status thành chuỗi mã lỗi dùng trong payload của ERROR.
+ * @param[in] status Giá trị Status bất kỳ, kể cả giá trị nằm ngoài enum.
+ * @return Chuỗi tĩnh trùng tên enum (OK -> "OK", STALE_REQUEST ->
+ *         "STALE_REQUEST", ...). Giá trị ngoài enum trả "BAD_REQUEST" để một
+ *         status hỏng không bao giờ lọt ra ngoài wire.
  */
 const char *statusCode(Status status);
 
