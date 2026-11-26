@@ -31,8 +31,8 @@ Rank rating_rank(int elo) {
     return RANK_BRONZE;
 }
 
-const char *rating_rank_key(Rank r) {
-    switch (r) {
+const char *rating_rank_key(Rank rank) {
+    switch (rank) {
     case RANK_SILVER:
         return "silver";
     case RANK_GOLD:
@@ -45,12 +45,12 @@ const char *rating_rank_key(Rank r) {
     }
 }
 
-static bool rating_is_team_mode(Mode mode) {
+static bool isTeamMode(Mode mode) {
     return mode == TWO_V_TWO || mode == SIDE;
 }
 
 /* Average eloBefore over seats that are (or are not) on `team`, skipping `exclude`. */
-static bool rating_average(const MatchResult *r, int team, bool sameTeam,
+static bool averageRating(const MatchResult *result, int team, bool sameTeam,
                            int exclude, double *average) {
     double total = 0.0;
     int count = 0;
@@ -58,10 +58,10 @@ static bool rating_average(const MatchResult *r, int team, bool sameTeam,
         if (seat == exclude) {
             continue;
         }
-        if (team >= 0 && (r->players[seat].team == team) != sameTeam) {
+        if (team >= 0 && (result->players[seat].team == team) != sameTeam) {
             continue;
         }
-        total += r->players[seat].eloBefore;
+        total += result->players[seat].eloBefore;
         count++;
     }
     if (count == 0) {
@@ -71,42 +71,42 @@ static bool rating_average(const MatchResult *r, int team, bool sameTeam,
     return true;
 }
 
-static int rating_seat_delta(const MatchResult *r, int seat) {
-    double own = r->players[seat].eloBefore;
+static int seatDelta(const MatchResult *result, int seat) {
+    double own = result->players[seat].eloBefore;
     double opposition = 0.0;
     bool won = false;
-    if (rating_is_team_mode(r->mode)) {
-        int team = r->players[seat].team;
+    if (isTeamMode(result->mode)) {
+        int team = result->players[seat].team;
         /* Both teammates read the same two averages, so they get the same delta. */
-        if (!rating_average(r, team, true, -1, &own) ||
-            !rating_average(r, team, false, -1, &opposition)) {
+        if (!averageRating(result, team, true, -1, &own) ||
+            !averageRating(result, team, false, -1, &opposition)) {
             return 0;
         }
-        won = team == r->winnerTeam;
+        won = team == result->winnerTeam;
     } else {
         /* team < 0 disables the team filter: every other seat is an opponent. */
-        if (!rating_average(r, -1, false, seat, &opposition)) {
+        if (!averageRating(result, -1, false, seat, &opposition)) {
             return 0;
         }
-        won = seat == r->winnerSeat;
+        won = seat == result->winnerSeat;
     }
     return rating_delta(own, opposition, won);
 }
 
-void rating_apply(MatchResult *r, const bool is_bot[4]) {
-    if (r == NULL) {
+void rating_apply(MatchResult *result, const bool isBot[4]) {
+    if (result == NULL) {
         return;
     }
-    bool changes = r->ranked && r->status == MATCH_FINALIZED;
+    bool changes = result->ranked && result->status == MATCH_FINALIZED;
     /* Compute every delta from eloBefore only, so seat order cannot matter. */
     for (int seat = 0; seat < RATING_SEAT_COUNT; seat++) {
-        PlayerResult *player = &r->players[seat];
-        bool isBotSeat = is_bot != NULL && is_bot[seat];
+        PlayerResult *player = &result->players[seat];
+        bool isBotSeat = isBot != NULL && isBot[seat];
         if (!changes || isBotSeat) {
             player->eloAfter = player->eloBefore;
             continue;
         }
-        int eloAfter = player->eloBefore + rating_seat_delta(r, seat);
+        int eloAfter = player->eloBefore + seatDelta(result, seat);
         player->eloAfter = eloAfter < RATING_ELO_FLOOR ? RATING_ELO_FLOOR : eloAfter;
     }
 }

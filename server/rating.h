@@ -33,22 +33,22 @@ Rank rating_rank(int elo);
 
 /**
  * @brief Return the wire key used for a rank in protocol messages.
- * @param[in] r Rank tier.
+ * @param[in] rank Rank tier.
  * @return Static string "bronze", "silver", "gold" or "diamond";
  *         "bronze" for an out-of-range value.
  */
-const char *rating_rank_key(Rank r);
+const char *rating_rank_key(Rank rank);
 
 /**
  * @brief Fill eloAfter for every seat of a match result.
- * @param[in,out] r Result whose eloBefore, mode, team and winner fields are read.
- * @param[in] is_bot Per-seat bot flags, or NULL when every seat is human.
+ * @param[in,out] result Result whose eloBefore, mode, team and winner fields are read.
+ * @param[in] isBot Per-seat bot flags, or NULL when every seat is human.
  *
  * Only a ranked, finalized match changes ELO; otherwise (and for bot seats)
  * eloAfter equals eloBefore. Solo modes compare each player with the average
  * of the three others; team modes compare team averages and give both
  * teammates the same delta. The result is clamped to be >= 0.
  */
-void rating_apply(MatchResult *r, const bool is_bot[4]);
+void rating_apply(MatchResult *result, const bool isBot[4]);
 
 #endif
