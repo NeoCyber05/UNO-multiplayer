@@ -90,10 +90,10 @@ Status store_export_match(Store *store, const MatchId *matchId, const char *path
 
 /**
  * @brief Mark an active match ABORTED and record its abort event atomically.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] id Match to abort.
  * @param[in] event Abort event appended to the match log (e.g. MATCH_ABORTED).
- * @param[in] duration_ms Played duration saved with the aborted match.
+ * @param[in] durationMs Played duration saved with the aborted match.
  * @return OK when the match is now ABORTED, including a retry on a match that
  *         is already ABORTED (nothing more is written);
  *         BAD_REQUEST for NULL arguments; NOT_FOUND for an unknown match;
@@ -108,7 +108,7 @@ typedef struct { UserId userId; char name[65], avatar[32]; int elo; } Leaderboar
 
 /**
  * @brief Read the top accounts by ELO.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[out] out Receives up to STORE_LEADERBOARD_MAX rows, highest ELO first;
  *                 equal ELO is ordered by the lower account id first.
  * @param[out] count Number of rows written to out.
@@ -132,7 +132,7 @@ typedef struct { UserId userId; char name[65], avatar[32]; int elo; FriendLink l
 
 /**
  * @brief Send a friend request from one account to another.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] from Account sending the request.
  * @param[in] to Account receiving the request.
  * @return OK when a pending request from -> to was stored;
@@ -146,7 +146,7 @@ Status store_friend_request(Store *store, UserId from, UserId to);
 
 /**
  * @brief Accept or reject a pending request sent by requester to me.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] me Account that received the request.
  * @param[in] requester Account that sent the request.
  * @param[in] accept true marks the link accepted, false deletes the request so
@@ -160,7 +160,7 @@ Status store_friend_reply(Store *store, UserId me, UserId requester, bool accept
 
 /**
  * @brief List every friend and pending request involving an account.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] me Account whose links are listed.
  * @param[out] out Receives up to STORE_FRIEND_MAX rows: accepted friends first,
  *                 then pending requests, each group ordered by user id, so a
@@ -186,7 +186,7 @@ typedef struct {
 
 /**
  * @brief Read an account's public profile, mode totals and recent history.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] id Account to read.
  * @param[out] out Filled profile; modes and history count FINALIZED matches
  *                 only, and a player who left never counts as a winner.
@@ -198,7 +198,7 @@ Status store_profile_get(Store *store, UserId id, Profile *out);
 
 /**
  * @brief Change an account's display name and avatar.
- * @param[in] s Open store.
+ * @param[in] store Open store.
  * @param[in] id Account to update.
  * @param[in] name New name, already checked by accounts_validate_name.
  * @param[in] avatar New avatar key, already checked by accounts_validate_avatar.

@@ -596,8 +596,8 @@ Party *party_find_by_user(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return NULL;
     for (int i = 0; i < MAX_PARTIES; i++) {
         if (rooms->parties[i].active) {
-            for (size_t modeNumber = 0; modeNumber < rooms->parties[i].member_count; modeNumber++) {
-                if (rooms->parties[i].members[modeNumber] == userId) {
+            for (size_t member = 0; member < rooms->parties[i].member_count; member++) {
+                if (rooms->parties[i].members[member] == userId) {
                     return &rooms->parties[i];
                 }
             }

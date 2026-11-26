@@ -5,7 +5,7 @@
 
 enum {
     DEFAULT_SERVER_PORT = 9090,
-    /* Auth requests (REGISTER/LOGIN/RESUME) allowed per client IP per minute. */
+    /* REGISTER and LOGIN requests allowed per client IP per minute. */
     DEFAULT_AUTH_LIMIT = 5
 };
 

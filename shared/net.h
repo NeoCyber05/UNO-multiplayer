@@ -39,8 +39,10 @@ Status conn_init(Conn *connection, int fd, uint32_t slot, uint32_t generation);
  * @param[in] onFrame Called for each frame; see frame_feed for envelope lifetime.
  * @param[in] context Passed through to @p onFrame.
  * @return OK once recv() reports EAGAIN/EWOULDBLOCK. BAD_REQUEST on EOF
- *         (recv() returned 0) or a socket error. A framing error or a non-OK
- *         callback result is returned as is. Every error sets `closing`.
+ *         (recv() returned 0) or a socket error; a framing error or a non-OK
+ *         callback result is returned as is; all of these set `closing`.
+ *         RATE_LIMITED without reading when the connection is already
+ *         `closing`, and BAD_REQUEST for a NULL argument or a closed fd.
  */
 Status conn_read(Conn *connection, FrameCallback onFrame, void *context);
 
@@ -60,7 +62,7 @@ Status conn_queue(Conn *connection, const Envelope *envelope);
  * @brief Send pending output until it is empty or the socket would block.
  *
  * send() may accept fewer bytes than offered; the rest stays queued and
- * `out_pos` records how far the peer has read.
+ * `out_pos` records how much the kernel has accepted so far.
  *
  * @param[in,out] connection Connection with pending output.
  * @return OK when everything was sent or the socket would block (check

@@ -11,8 +11,12 @@ typedef enum {
     AUTH_LOGIN
 } AuthJobKind;
 
-/* One request copied by value into the worker queue; the plaintext password
- * is wiped as soon as the worker has hashed or verified it. */
+/* One request copied by value into the worker queue. The worker wipes its own
+ * copy of the plaintext password after hashing or verifying it.
+ * FIXME: the queue slot it was copied from and the caller's stack AuthJob in
+ * accounts_handle keep the plaintext until overwritten. Wipe the slot with
+ * sodium_memzero under the lock when dequeuing, and wipe job.password in
+ * accounts_handle right after auth_submit. */
 typedef struct {
     AuthJobKind kind;
     ConnId conn_id;
