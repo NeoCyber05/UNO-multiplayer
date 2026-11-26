@@ -5,65 +5,59 @@
 
 #define HELLO "{\"v\":1,\"id\":1,\"type\":\"HELLO\",\"payload\":{}}"
 
-static Status count_hello(const Envelope *e, void *ctx)
-{
-    assert(e->v == 1 && e->id == 1 && strcmp(e->type, "HELLO") == 0);
-    assert(json_object_is_type(e->payload, json_type_object));
-    ++*(int *)ctx;
+static Status countHello(const Envelope *envelope, void *context) {
+    assert(envelope->v == 1 && envelope->id == 1 && strcmp(envelope->type, "HELLO") == 0);
+    assert(json_object_is_type(envelope->payload, json_type_object));
+    ++*(int *)context;
     return OK;
 }
 
-static Status feed_body(const char *body, size_t n, FrameCallback cb, void *ctx)
-{
-    FrameReader r = {0};
-    uint8_t prefix[] = {0, (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n};
-    Status s = frame_feed(&r, prefix, sizeof prefix, cb, ctx);
-    return s == OK ? frame_feed(&r, (const uint8_t *)body, n, cb, ctx) : s;
+static Status feedBody(const char *body, size_t length, FrameCallback onFrame, void *context) {
+    FrameReader reader = {0};
+    uint8_t prefix[] = {0, (uint8_t)(length >> 16), (uint8_t)(length >> 8), (uint8_t)length};
+    Status status = frame_feed(&reader, prefix, sizeof prefix, onFrame, context);
+    if (status != OK) return status;
+    return frame_feed(&reader, (const uint8_t *)body, length, onFrame, context);
 }
 
-static void test_fragmented_and_coalesced(void)
-{
+static void testFragmentedAndCoalesced(void) {
     Envelope hello = {1, 1, "HELLO", json_object_new_object()};
     uint8_t pair[256];
-    size_t n;
-    assert(frame_encode(&hello, pair, sizeof pair / 2, &n) == OK);
-    assert(n == sizeof HELLO + 3 && pair[3] == n - 4);
+    size_t length;
+    assert(frame_encode(&hello, pair, sizeof pair / 2, &length) == OK);
+    assert(length == sizeof HELLO + 3 && pair[3] == length - 4);
     json_object_put(hello.payload);
-    FrameReader r;
-    frame_reader_reset(&r);
+    FrameReader reader;
+    frame_reader_reset(&reader);
     int callbacks = 0;
-    for (size_t i = 0; i < n; i++)
-        assert(frame_feed(&r, pair + i, 1, count_hello, &callbacks) == OK);
-    memcpy(pair + n, pair, n);
-    assert(frame_feed(&r, pair, 2 * n, count_hello, &callbacks) == OK);
+    for (size_t i = 0; i < length; i++)
+        assert(frame_feed(&reader, pair + i, 1, countHello, &callbacks) == OK);
+    memcpy(pair + length, pair, length);
+    assert(frame_feed(&reader, pair, 2 * length, countHello, &callbacks) == OK);
     assert(callbacks == 3);
 }
 
-static bool reject_length(size_t n)
-{
-    FrameReader r = {0};
-    uint8_t prefix[] = {0, (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n};
-    return frame_feed(&r, prefix, 4, count_hello, NULL) == BAD_REQUEST;
+static bool rejectLength(size_t length) {
+    FrameReader reader = {0};
+    uint8_t prefix[] = {0, (uint8_t)(length >> 16), (uint8_t)(length >> 8), (uint8_t)length};
+    return frame_feed(&reader, prefix, 4, countHello, NULL) == BAD_REQUEST;
 }
 
-static Status observed(const Envelope *e, void *ctx)
-{
-    (void)e;
-    ++*(int *)ctx;
+static Status observed(const Envelope *envelope, void *context) {
+    (void)envelope;
+    ++*(int *)context;
     return OK;
 }
 
-static Status parse(const char *s, size_t n)
-{
+static Status parse(const char *body, size_t length) {
     int calls = 0;
-    Status status = feed_body(s, n, observed, &calls);
+    Status status = feedBody(body, length, observed, &calls);
     assert(calls == (status == OK));
     return status;
 }
 
-static void test_frame_limits(void)
-{
-    assert(reject_length(0) && reject_length(65537));
+static void testFrameLimits(void) {
+    assert(rejectLength(0) && rejectLength(65537));
     char json[FRAME_MAX_JSON];
     memset(json, ' ', sizeof json);
     memcpy(json + sizeof json - strlen(HELLO), HELLO, strlen(HELLO));
@@ -82,8 +76,7 @@ static void test_frame_limits(void)
     }
 }
 
-static void test_invalid_json(void)
-{
+static void testInvalidJson(void) {
     const char *invalid[] = {
         HELLO "x", HELLO "{}", "null", "[]", "{}",
         "{\"v\":2,\"id\":1,\"type\":\"A\",\"payload\":{}}",
@@ -110,50 +103,48 @@ static void test_invalid_json(void)
     assert(parse(number, strlen(number)) == OK);
 }
 
-static Status match_fixture(const Envelope *e, void *ctx)
-{
-    struct json_object *j = ctx;
-    assert(e->v == json_object_get_int(json_object_object_get(j, "v")));
-    assert(e->id == json_object_get_int(json_object_object_get(j, "id")));
-    assert(strcmp(e->type, json_object_get_string(json_object_object_get(j, "type"))) == 0);
-    assert(json_object_equal(e->payload, json_object_object_get(j, "payload")));
+static Status matchFixture(const Envelope *envelope, void *context) {
+    struct json_object *fixture = context;
+    assert(envelope->v == json_object_get_int(json_object_object_get(fixture, "v")));
+    assert(envelope->id == json_object_get_int(json_object_object_get(fixture, "id")));
+    const char *expectedType = json_object_get_string(json_object_object_get(fixture, "type"));
+    assert(strcmp(envelope->type, expectedType) == 0);
+    assert(json_object_equal(envelope->payload, json_object_object_get(fixture, "payload")));
     return BUSY; /* also verify callback errors reach the caller */
 }
 
-static void test_fixtures(void)
-{
+static void testFixtures(void) {
     struct json_object *rows = json_object_from_file("tests/fixtures/requests.json");
     assert(rows && json_object_array_length(rows) >= 4);
     for (size_t i = 0; i < json_object_array_length(rows); i++) {
-        struct json_object *j = json_object_array_get_idx(rows, i);
-        Envelope e = {json_object_get_int(json_object_object_get(j, "v")),
-                      json_object_get_int(json_object_object_get(j, "id")),
-                      json_object_get_string(json_object_object_get(j, "type")),
-                      json_object_object_get(j, "payload")};
+        struct json_object *fixture = json_object_array_get_idx(rows, i);
+        Envelope envelope = {json_object_get_int(json_object_object_get(fixture, "v")),
+                      json_object_get_int(json_object_object_get(fixture, "id")),
+                      json_object_get_string(json_object_object_get(fixture, "type")),
+                      json_object_object_get(fixture, "payload")};
         uint8_t out[FRAME_CAPACITY];
-        size_t n;
-        assert(frame_encode(&e, out, 4, &n) == BAD_REQUEST && n == 0);
-        assert(frame_encode(&e, out, sizeof out, &n) == OK);
-        FrameReader r = {0};
-        assert(frame_feed(&r, out, n, match_fixture, j) == BUSY);
+        size_t length;
+        assert(frame_encode(&envelope, out, 4, &length) == BAD_REQUEST && length == 0);
+        assert(frame_encode(&envelope, out, sizeof out, &length) == OK);
+        FrameReader reader = {0};
+        assert(frame_feed(&reader, out, length, matchFixture, fixture) == BUSY);
     }
     json_object_put(rows);
 }
 
-static void test_status_code(void) {
+static void testStatusCode(void) {
     assert(strcmp(status_code(OK), "OK") == 0);
     assert(strcmp(status_code(STALE_REQUEST), "STALE_REQUEST") == 0);
     assert(strcmp(status_code(SERVER_FULL), "SERVER_FULL") == 0);
     assert(strcmp(status_code((Status)99), "BAD_REQUEST") == 0);
 }
 
-int main(void)
-{
-    test_fragmented_and_coalesced();
-    test_frame_limits();
-    test_invalid_json();
-    test_fixtures();
-    test_status_code();
+int main(void) {
+    testFragmentedAndCoalesced();
+    testFrameLimits();
+    testInvalidJson();
+    testFixtures();
+    testStatusCode();
     puts("protocol: OK");
     return 0;
 }

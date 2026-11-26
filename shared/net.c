@@ -9,122 +9,138 @@
 #define MSG_NOSIGNAL 0
 #endif
 
-Status conn_init(Conn *c, int fd, uint32_t slot, uint32_t generation)
-{
-    if (!c) return BAD_REQUEST;
-    c->fd = fd;
-    c->slot = slot;
-    c->generation = generation;
-    c->out_len = 0;
-    c->out_pos = 0;
-    c->closing = false;
-    frame_reader_reset(&c->reader);
+enum {
+    /* One recv() call drains up to this many bytes before frame_feed runs. */
+    RECEIVE_BUFFER_SIZE = 16384
+};
 
+Status conn_init(Conn *connection, int fd, uint32_t slot, uint32_t generation) {
+    if (!connection) return BAD_REQUEST;
+    connection->fd = fd;
+    connection->slot = slot;
+    connection->generation = generation;
+    connection->out_len = 0;
+    connection->out_pos = 0;
+    connection->closing = false;
+    frame_reader_reset(&connection->reader);
+
+    /* The poll loop serves every client on one thread, so a blocking read or
+     * write on one socket would stall all others. */
     if (fd >= 0) {
         int flags = fcntl(fd, F_GETFL, 0);
         if (flags >= 0) {
+            /* FIXME: fcntl(F_SETFL) failure is ignored, leaving a blocking socket in the
+             * poll loop. Return BAD_REQUEST and let the caller close. */
             fcntl(fd, F_SETFL, flags | O_NONBLOCK);
         }
     }
     return OK;
 }
 
-Status conn_read(Conn *c, FrameCallback cb, void *ctx)
-{
-    if (!c || c->fd < 0 || !cb) return BAD_REQUEST;
-    if (c->closing) return RATE_LIMITED;
+Status conn_read(Conn *connection, FrameCallback onFrame, void *context) {
+    if (!connection || connection->fd < 0 || !onFrame) return BAD_REQUEST;
+    /* A connection already marked for closing must not dispatch more requests. */
+    if (connection->closing) return RATE_LIMITED;
 
-    uint8_t buf[16384];
+    uint8_t receiveBuffer[RECEIVE_BUFFER_SIZE];
     while (1) {
-        ssize_t n = recv(c->fd, buf, sizeof(buf), 0);
-        if (n < 0) {
+        ssize_t bytesReceived = recv(connection->fd, receiveBuffer, sizeof(receiveBuffer), 0);
+        if (bytesReceived < 0) {
+            /* A signal interrupted the call before any data arrived; just retry. */
             if (errno == EINTR) continue;
+            /* Non-blocking socket drained: wait for the next POLLIN. */
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return OK;
             }
-            c->closing = true;
+            connection->closing = true;
             return BAD_REQUEST;
         }
-        if (n == 0) {
-            c->closing = true;
+        if (bytesReceived == 0) {
+            /* recv() returns 0 only when the peer has closed its side. */
+            connection->closing = true;
             return BAD_REQUEST;
         }
-        Status s = frame_feed(&c->reader, buf, (size_t)n, cb, ctx);
-        if (s != OK) {
-            c->closing = true;
-            return s;
+        Status status = frame_feed(&connection->reader, receiveBuffer, (size_t)bytesReceived,
+                                   onFrame, context);
+        if (status != OK) {
+            connection->closing = true;
+            return status;
         }
     }
 }
 
-Status conn_queue(Conn *c, const Envelope *e)
-{
-    if (!c || c->fd < 0 || !e) return BAD_REQUEST;
-    if (c->closing) return RATE_LIMITED;
+Status conn_queue(Conn *connection, const Envelope *envelope) {
+    if (!connection || connection->fd < 0 || !envelope) return BAD_REQUEST;
+    if (connection->closing) return RATE_LIMITED;
 
-    if (c->out_pos > 0) {
-        if (c->out_len > c->out_pos) {
-            memmove(c->out_buf, c->out_buf + c->out_pos, c->out_len - c->out_pos);
-            c->out_len -= c->out_pos;
+    /* Move the unsent tail to the front so the free space is contiguous. */
+    if (connection->out_pos > 0) {
+        if (connection->out_len > connection->out_pos) {
+            memmove(connection->out_buf, connection->out_buf + connection->out_pos,
+                    connection->out_len - connection->out_pos);
+            connection->out_len -= connection->out_pos;
         } else {
-            c->out_len = 0;
+            connection->out_len = 0;
         }
-        c->out_pos = 0;
+        connection->out_pos = 0;
     }
 
-    uint8_t tmp[FRAME_CAPACITY];
-    size_t written = 0;
-    Status s = frame_encode(e, tmp, sizeof(tmp), &written);
-    if (s != OK) return s;
+    uint8_t frameBuffer[FRAME_CAPACITY];
+    size_t frameLength = 0;
+    Status status = frame_encode(envelope, frameBuffer, sizeof(frameBuffer), &frameLength);
+    if (status != OK) return status;
 
-    if (c->out_len + written > CONN_OUT_BUF_SIZE) {
-        c->closing = true;
+    /* A peer that stops reading must not grow server memory without bound. */
+    if (connection->out_len + frameLength > CONN_OUT_BUF_SIZE) {
+        connection->closing = true;
         return RATE_LIMITED;
     }
 
-    memcpy(c->out_buf + c->out_len, tmp, written);
-    c->out_len += written;
+    memcpy(connection->out_buf + connection->out_len, frameBuffer, frameLength);
+    connection->out_len += frameLength;
     return OK;
 }
 
-Status conn_flush(Conn *c)
-{
-    if (!c || c->fd < 0) return BAD_REQUEST;
+Status conn_flush(Conn *connection) {
+    if (!connection || connection->fd < 0) return BAD_REQUEST;
 
-    while (c->out_len > c->out_pos) {
-        size_t to_send = c->out_len - c->out_pos;
-        ssize_t sent = send(c->fd, c->out_buf + c->out_pos, to_send, MSG_NOSIGNAL);
-        if (sent < 0) {
+    while (connection->out_len > connection->out_pos) {
+        size_t bytesToSend = connection->out_len - connection->out_pos;
+        /* MSG_NOSIGNAL turns a write to a closed peer into EPIPE instead of SIGPIPE. */
+        ssize_t bytesSent = send(connection->fd, connection->out_buf + connection->out_pos,
+                                 bytesToSend, MSG_NOSIGNAL);
+        if (bytesSent < 0) {
             if (errno == EINTR) continue;
+            /* Kernel send buffer is full; the rest goes out on the next POLLOUT. */
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return OK;
             }
-            c->closing = true;
+            connection->closing = true;
             return BAD_REQUEST;
         }
-        if (sent == 0) {
-            c->closing = true;
+        if (bytesSent == 0) {
+            connection->closing = true;
             return BAD_REQUEST;
         }
-        c->out_pos += (size_t)sent;
+        /* A partial send is normal for TCP; keep the position and loop. */
+        connection->out_pos += (size_t)bytesSent;
     }
 
-    c->out_pos = 0;
-    c->out_len = 0;
+    connection->out_pos = 0;
+    connection->out_len = 0;
     return OK;
 }
 
-void conn_close(Conn *c)
-{
-    if (!c) return;
-    if (c->fd >= 0) {
-        close(c->fd);
-        c->fd = -1;
+void conn_close(Conn *connection) {
+    if (!connection) return;
+    if (connection->fd >= 0) {
+        close(connection->fd);
+        connection->fd = -1;
     }
-    c->out_len = 0;
-    c->out_pos = 0;
-    c->closing = false;
-    c->slot = 0;
-    c->generation = 0;
-    frame_reader_reset(&c->reader);
+    connection->out_len = 0;
+    connection->out_pos = 0;
+    connection->closing = false;
+    connection->slot = 0;
+    connection->generation = 0;
+    frame_reader_reset(&connection->reader);
 }
