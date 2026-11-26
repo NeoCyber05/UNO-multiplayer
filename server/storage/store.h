@@ -7,19 +7,26 @@
 #include <stdint.h>
 #include <sqlite3.h>
 
+enum {
+    /* Email tối đa 254 byte (giới hạn của SMTP) cộng NUL. */
+    ACCOUNT_EMAIL_SIZE = 255,
+    /* Bằng crypto_pwhash_STRBYTES: chuỗi Argon2id kể cả NUL không vượt 128 byte. */
+    PASSWORD_HASH_SIZE = 128
+};
+
 typedef struct {
-    char email[255];
-    char hash[128];
-    char name[65];
-    char avatar[32];
+    char email[ACCOUNT_EMAIL_SIZE];
+    char hash[PASSWORD_HASH_SIZE];
+    char name[PLAYER_NAME_SIZE];
+    char avatar[AVATAR_ID_SIZE];
 } AccountCreate;
 
 typedef struct {
     UserId id;
-    char email[255];
-    char hash[128];
-    char name[65];
-    char avatar[32];
+    char email[ACCOUNT_EMAIL_SIZE];
+    char hash[PASSWORD_HASH_SIZE];
+    char name[PLAYER_NAME_SIZE];
+    char avatar[AVATAR_ID_SIZE];
     int elo;
 } Account;
 

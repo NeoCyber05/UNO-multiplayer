@@ -2,50 +2,56 @@
 #define UNO_ACCOUNTS_H
 
 #include "server/app.h"
+#include "server/auth/auth_worker.h"
 #include "shared/contracts.h"
 #include "shared/protocol.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* Validation helpers: each returns true only for input the spec accepts. */
+enum {
+    /* "UNO#" cộng tối đa 20 chữ số của UserId 64 bit và NUL. */
+    USER_TAG_SIZE = 32,
+    /* Số phiên đăng nhập giữ cùng lúc, kể cả phiên đã rớt mạng chờ RESUME. */
+    MAX_SESSIONS = 256
+};
 
-/** @brief Lowercase ASCII address, 3..254 bytes, exactly one '@' with text on both sides. */
+/* Các hàm kiểm tra đầu vào: chỉ trả true với dữ liệu mà spec chấp nhận. */
+
+/** @brief Email ASCII chữ thường, 3..254 byte, đúng một '@' và có chữ ở hai phía. */
 bool accountsValidateEmail(const char *email);
-/** @brief 6..128 bytes; content is not restricted because it is only hashed. */
+/** @brief Mật khẩu 6..128 byte; không giới hạn nội dung vì chỉ dùng để băm. */
 bool accountsValidatePassword(const char *password);
-/** @brief Well-formed UTF-8, 1..64 bytes and 1..16 code points, no control characters. */
+/** @brief Tên UTF-8 hợp lệ, 1..64 byte và 1..16 ký tự, không có ký tự điều khiển. */
 bool accountsValidateName(const char *name);
-/** @brief One of the whitelisted avatar ids (fox, panda, ...). */
+/** @brief Một trong các mã avatar nằm trong danh sách cho phép (fox, panda, ...). */
 bool accountsValidateAvatar(const char *avatar);
 
 /**
- * @brief Fill @p outToken with 32 random bytes from libsodium as 64 hex chars.
- * @param[out] outToken Buffer of 65 bytes, NUL-terminated on return.
+ * @brief Sinh token phiên: 32 byte ngẫu nhiên của libsodium viết thành 64 ký tự hex.
+ * @param[out] outToken Buffer SESSION_TOKEN_SIZE byte, kết thúc bằng NUL.
  */
-void accountsGenerateToken(char outToken[65]);
+void accountsGenerateToken(char outToken[SESSION_TOKEN_SIZE]);
 
 /**
- * @brief Format the public friend tag "UNO#<userId>".
- * @param[in] userId Account id.
- * @param[out] outTag Buffer of 32 bytes.
+ * @brief Tạo tag kết bạn công khai dạng "UNO#<userId>".
+ * @param[in] userId Mã tài khoản.
+ * @param[out] outTag Buffer USER_TAG_SIZE byte.
  */
-void accountsFormatTag(UserId userId, char outTag[32]);
+void accountsFormatTag(UserId userId, char outTag[USER_TAG_SIZE]);
 
 /**
- * @brief Milliseconds from CLOCK_MONOTONIC plus a fixed offset, used for
- *        session age and the auth rate limit. Not comparable with appNowMs.
+ * @brief Số mili giây từ CLOCK_MONOTONIC cộng một độ lệch cố định, dùng cho tuổi
+ *        phiên và giới hạn tần suất xác thực. Không so sánh được với appNowMs.
  */
 uint64_t accountsGetNowMs(void);
 
-#define MAX_SESSIONS 256
-
-/* A login session. It outlives its socket (connected = false) so RESUME can
- * move it to a new connection within the 24 h token lifetime. */
+/* Một phiên đăng nhập. Phiên sống lâu hơn socket của nó (connected = false) để
+ * RESUME chuyển được sang kết nối mới trong 24 giờ hiệu lực của token. */
 typedef struct {
     bool inUse;
     UserId userId;
-    char token[65];
+    char token[SESSION_TOKEN_SIZE];
     ConnId connId;
     bool connected;
     uint64_t createdAtMs;
@@ -56,84 +62,83 @@ struct Sessions {
 };
 
 /**
- * @brief Allocate the session table and the per-IP rate limiter.
- * @return OK, BAD_REQUEST for NULL @p app, or STORAGE_ERROR when out of memory.
+ * @brief Cấp phát bảng phiên và bộ giới hạn tần suất theo IP.
+ * @return OK, BAD_REQUEST khi @p app là NULL, hoặc STORAGE_ERROR khi hết bộ nhớ.
  */
 Status sessionsInit(App *app);
 
-/** @brief Free the session table and rate limiter; safe to call twice. */
+/** @brief Giải phóng bảng phiên và bộ giới hạn tần suất; gọi hai lần vẫn an toàn. */
 void sessionsCleanup(App *app);
 
 /**
- * @brief Attach a freshly logged-in account to a connection.
+ * @brief Gắn tài khoản vừa đăng nhập vào một kết nối.
  *
- * Reuses the account's existing entry, else a free one, else evicts the
- * oldest disconnected entry.
+ * Dùng lại phiên sẵn có của tài khoản, nếu không thì một ô trống, nếu không
+ * nữa thì thay phiên đã rớt mạng cũ nhất.
  *
- * @param[in] connId Connection that completed LOGIN.
- * @param[in] userId Account id.
- * @param[in] token New session token; copied.
- * @return OK, BAD_REQUEST for invalid arguments, or BUSY when every entry is
- *         connected.
+ * @param[in] connId Kết nối vừa LOGIN thành công.
+ * @param[in] userId Mã tài khoản.
+ * @param[in] token Token phiên mới; được chép lại.
+ * @return OK, BAD_REQUEST khi đối số sai, hoặc BUSY khi mọi phiên đều đang kết nối.
  */
 Status sessionsBind(App *app, ConnId connId, UserId userId, const char *token);
 
 /**
- * @brief Find the account currently bound to a live connection.
- * @param[out] outUserId Receives the account id on success.
- * @return OK, or UNAUTHENTICATED when the slot is closed, reused (generation
- *         mismatch) or carries no session.
+ * @brief Tìm tài khoản đang gắn với một kết nối còn sống.
+ * @param[out] outUserId Nhận mã tài khoản khi thành công.
+ * @return OK, hoặc UNAUTHENTICATED khi slot đã đóng, đã được dùng lại (khác
+ *         generation) hoặc chưa có phiên.
  */
 Status sessionsUser(App *app, ConnId connId, UserId *outUserId);
 
 /**
- * @brief Find the connection a logged-in account is using.
- * @param[out] outConn Receives the connection on success.
- * @return OK, or NOT_FOUND when the account has no connected session.
+ * @brief Tìm kết nối mà một tài khoản đang dùng.
+ * @param[out] outConn Nhận kết nối khi thành công.
+ * @return OK, hoặc NOT_FOUND khi tài khoản không có phiên đang kết nối.
  */
 Status sessionsFindConn(App *app, UserId userId, ConnId *outConn);
 
 /**
- * @brief Move a session to a new connection by its token (RESUME).
- * @param[in] connId The new connection.
- * @param[in] token 64-hex-char token from LOGIN; an expired one is forgotten.
- * @return OK, or UNAUTHENTICATED for an unknown/expired token or a dead slot.
+ * @brief Chuyển một phiên sang kết nối mới bằng token (RESUME).
+ * @param[in] connId Kết nối mới.
+ * @param[in] token Token 64 ký tự hex từ LOGIN; token hết hạn bị xóa.
+ * @return OK, hoặc UNAUTHENTICATED khi token lạ/hết hạn hoặc slot đã chết.
  */
 Status sessionsResume(App *app, ConnId connId, const char *token);
 
-/** @brief Mark the session on @p connId disconnected but keep it for RESUME. */
+/** @brief Đánh dấu phiên trên @p connId là đã rớt mạng nhưng giữ lại cho RESUME. */
 void sessionsDisconnect(App *app, ConnId connId);
 
-/** @brief Forget the session on @p connId entirely (LOGOUT or re-login). */
+/** @brief Xóa hẳn phiên trên @p connId (LOGOUT hoặc đăng nhập tài khoản khác). */
 void sessionsLogout(App *app, ConnId connId);
 
 /**
- * @brief Count one auth request from @p ip against its sliding one-minute window.
- * @return true if the request may proceed; always true when the limit is off
- *         (authLimit <= 0) or @p ip is empty.
+ * @brief Tính một request xác thực từ @p ip vào cửa sổ trượt một phút của IP đó.
+ * @return true nếu request được phép chạy; luôn true khi tắt giới hạn
+ *         (authLimit <= 0) hoặc @p ip rỗng.
  */
 bool accountsRateLimitCheck(App *app, const char *ip);
 
 /**
- * @brief Handle REGISTER, LOGIN, RESUME and LOGOUT.
+ * @brief Xử lý REGISTER, LOGIN, RESUME và LOGOUT.
  *
- * REGISTER and LOGIN are only validated here and then queued on the auth
- * worker; their replies are sent later by authDrain. RESUME and LOGOUT
- * reply at once. The session token only ever goes back in the LOGIN reply.
+ * REGISTER và LOGIN chỉ được kiểm tra ở đây rồi đưa sang auth worker; phản hồi
+ * do authDrain gửi sau. RESUME và LOGOUT trả lời ngay. Token phiên chỉ xuất hiện
+ * trong phản hồi của LOGIN.
  *
- * @param[in] connId Connection that sent @p envelope.
- * @param[in] envelope Request; its payload is borrowed.
- * @return OK once a reply was sent or queued, BAD_REQUEST for another opcode
- *         or a dead connection.
+ * @param[in] connId Kết nối đã gửi @p envelope.
+ * @param[in] envelope Request; payload chỉ được mượn.
+ * @return OK khi đã gửi hoặc xếp hàng phản hồi, BAD_REQUEST với opcode khác hoặc
+ *         kết nối đã chết.
  */
 Status accountsHandle(App *app, ConnId connId, const Envelope *envelope);
 
 /**
- * @brief Read every finished auth job from the worker pipe and reply.
+ * @brief Đọc mọi job xác thực đã xong từ pipe của worker rồi trả lời client.
  *
- * Results for a connection that closed or was reused meanwhile are dropped.
- * A successful LOGIN closes the account's previous socket, binds the session
- * and resyncs room, queue and presence for the new socket.
+ * Kết quả của kết nối đã đóng hoặc đã bị dùng lại trong lúc chờ bị bỏ qua.
+ * LOGIN thành công sẽ đóng socket cũ của tài khoản, gắn phiên và đồng bộ lại
+ * phòng, hàng chờ và trạng thái online cho socket mới.
  */
 void authDrain(App *app);
 
