@@ -121,7 +121,7 @@ bool queue_remove(Queue *queue, UserId user, Mode *outMode, QueueEntry *removed)
     return false;
 }
 
-static void place_seats(const ModeQueue *modeQueue, Mode mode, const size_t picked[],
+static void placeSeats(const ModeQueue *modeQueue, Mode mode, const size_t picked[],
                         size_t pickedCount, UserId seats[QUEUE_MATCH_SEATS]) {
     bool taken[QUEUE_MATCH_SEATS] = {false};
     bool teamMode = isTeamMode(mode);
@@ -180,7 +180,7 @@ bool queue_pick(const Queue *queue, Mode mode, UserId outSeats[QUEUE_MATCH_SEATS
     *outEntryCount = 0;
     if (!findEarliestSet(modeQueue, 0, 0, outIndexes, &pickedCount)) return false;
     *outEntryCount = pickedCount;
-    place_seats(modeQueue, mode, outIndexes, pickedCount, outSeats);
+    placeSeats(modeQueue, mode, outIndexes, pickedCount, outSeats);
     return true;
 }
 
