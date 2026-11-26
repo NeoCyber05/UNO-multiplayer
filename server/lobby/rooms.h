@@ -9,13 +9,19 @@
 
 enum {
     MAX_ROOMS = 16,
-    ROOM_MAX_SEATS = 4,
+    ROOM_MAX_SEATS = MATCH_SEAT_COUNT,
     MAX_INVITES = 64,
     MAX_PARTIES = 32,
     PARTY_MAX_MEMBERS = 2,
+    /* Lời mời chưa trả lời sau 30 giây thì hết hạn và nhường ô cho lời mời mới. */
     INVITE_TIMEOUT_MS = 30000,
-    /* Queue matches use room ids "Q" + 5 digits, so the serial wraps here. */
-    QUEUE_ROOM_SERIAL_LIMIT = 100000
+    /* Trận ghép từ hàng chờ dùng mã phòng "Q" + 5 chữ số, nên bộ đếm quay vòng ở đây. */
+    QUEUE_ROOM_SERIAL_LIMIT = 100000,
+    ROOM_CODE_LENGTH = 6,
+    ROOM_CODE_SIZE = ROOM_CODE_LENGTH + 1,
+    /* Mã lời mời là UUID dạng chuỗi 36 ký tự cộng NUL. */
+    INVITE_ID_SIZE = 37,
+    INVITE_KIND_SIZE = 16
 };
 
 typedef enum {
@@ -24,10 +30,10 @@ typedef enum {
 } RoomStatus;
 
 typedef struct {
-    char roomId[7];
+    char roomId[ROOM_CODE_SIZE];
     Mode mode;
     bool ranked;
-    PlayerSpec players[4];
+    PlayerSpec players[ROOM_MAX_SEATS];
 } RoomStart;
 
 typedef Status (*OnMatchStart)(App *app, const RoomStart *roomStart, MatchId *outMatchId);
@@ -36,14 +42,14 @@ typedef struct {
     bool occupied;
     bool isBot;
     UserId userId;
-    char name[65];
-    char avatar[32];
+    char name[PLAYER_NAME_SIZE];
+    char avatar[AVATAR_ID_SIZE];
     BotLevel botLevel;
 } RoomSeat;
 
 typedef struct {
     bool active;
-    char code[7];
+    char code[ROOM_CODE_SIZE];
     Mode mode;
     bool ranked;
     Seat hostSeat;
@@ -54,12 +60,12 @@ typedef struct {
 
 typedef struct {
     bool active;
-    char inviteId[37];
+    char inviteId[INVITE_ID_SIZE];
     UserId senderId;
     UserId recipientId;
-    char kind[16]; /* "room" or "party" */
-    char roomCode[7];
-    Mode mode; /* party invites only: mode the new party queues for */
+    char kind[INVITE_KIND_SIZE]; /* "room" hoặc "party" */
+    char roomCode[ROOM_CODE_SIZE];
+    Mode mode; /* chỉ dùng cho lời mời party: chế độ mà party mới sẽ xếp hàng */
     uint64_t createdAtMs;
 } Invite;
 
@@ -81,173 +87,189 @@ struct Rooms {
     Party parties[MAX_PARTIES];
     uint32_t nextPartyId;
     uint32_t nextInviteId;
-    uint32_t nextQueueRoom; /* serial for the next "Qnnnnn" queue match id */
+    uint32_t nextQueueRoom; /* số thứ tự cho mã trận hàng chờ "Qnnnnn" kế tiếp */
 };
 
 /**
- * @brief Allocate the room, invite and party tables.
- * @param[out] outRooms Receives the tables; free with roomsDestroy.
- * @param[in] app Server state the tables push through; borrowed.
- * @param[in] onStart Called by roomsStart/roomsMakeMatch to open a match.
- * @return OK, BAD_REQUEST for NULL @p outRooms, or STORAGE_ERROR when out of memory.
+ * @brief Cấp phát bảng phòng, lời mời và party.
+ * @param[out] outRooms Nhận các bảng; giải phóng bằng roomsDestroy.
+ * @param[in] app Trạng thái server mà các bảng dùng để push; chỉ mượn.
+ * @param[in] onStart Được roomsStart/roomsMakeMatch gọi để mở trận.
+ * @return OK, BAD_REQUEST khi @p outRooms là NULL, hoặc STORAGE_ERROR khi hết bộ nhớ.
  */
 Status roomsInit(Rooms **outRooms, App *app, OnMatchStart onStart);
 
-/** @brief Free the tables; NULL is ignored. */
+/** @brief Giải phóng các bảng; NULL được bỏ qua. */
 void roomsDestroy(Rooms *rooms);
 
 /**
- * @brief Pick a random 6-character room code from [0-9A-Z].
+ * @brief Chọn ngẫu nhiên mã phòng 6 ký tự trong [0-9A-Z].
  *
- * Codes that look like queue match ids ("Q" + 5 digits) or belong to another
- * active room are drawn again.
+ * Mã trông giống mã trận hàng chờ ("Q" + 5 chữ số) hoặc trùng phòng đang mở
+ * thì được rút lại.
  *
- * @param[in] rooms Tables to check for collisions, or NULL to skip that check.
- * @param[out] outCode Buffer of 7 bytes, NUL-terminated on return.
+ * @param[in] rooms Bảng dùng để kiểm tra trùng, hoặc NULL để bỏ bước đó.
+ * @param[out] outCode Buffer ROOM_CODE_SIZE byte, kết thúc bằng NUL.
  */
-void roomsGenerateCode(Rooms *rooms, char outCode[7]);
+void roomsGenerateCode(Rooms *rooms, char outCode[ROOM_CODE_SIZE]);
 
-/** @brief Active room with this code (case-insensitive), or NULL. */
+/** @brief Phòng đang mở có mã này (không phân biệt hoa thường), hoặc NULL. */
 Room *roomsFindByCode(Rooms *rooms, const char *code);
 
-/** @brief Active room where @p userId sits as a human, or NULL. */
+/** @brief Phòng đang mở mà @p userId ngồi với tư cách người chơi thật, hoặc NULL. */
 Room *roomsFindByUser(Rooms *rooms, UserId userId);
 
 /**
- * @brief Open a waiting, unranked room with @p hostId in seat 0.
- * @param[in] name Display name, or NULL for "Host"; copied.
- * @param[in] avatar Avatar id, or NULL for "fox"; copied.
- * @param[out] outCode Receives the new code; may be NULL.
- * @return OK; BAD_REQUEST for invalid arguments; BUSY when the host already
- *         sits in a room; SERVER_FULL when all MAX_ROOMS are in use.
+ * @brief Mở phòng chờ, không ranked, với @p hostId ở ghế 0.
+ * @param[in] name Tên hiển thị, hoặc NULL để dùng "Host"; được chép lại.
+ * @param[in] avatar Mã avatar, hoặc NULL để dùng "fox"; được chép lại.
+ * @param[out] outCode Nhận mã phòng mới; có thể NULL.
+ * @return OK; BAD_REQUEST khi đối số sai; BUSY khi host đã ngồi ở phòng khác;
+ *         SERVER_FULL khi đã dùng hết MAX_ROOMS phòng.
  */
 Status roomsCreate(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
-                    char outCode[7]);
+                   char outCode[ROOM_CODE_SIZE]);
 
 /**
- * @brief Seat @p userId in the lowest free seat of the room named by @p code.
- * @param[out] outSeat Receives the seat; may be NULL.
- * @return OK; BAD_REQUEST for invalid arguments; BUSY when the user already sits
- *         in a room; NOT_FOUND for an unknown code; ROOM_FULL with no free seat.
+ * @brief Đặt @p userId vào ghế trống có số nhỏ nhất của phòng mang mã @p code.
+ * @param[out] outSeat Nhận số ghế; có thể NULL.
+ * @return OK; BAD_REQUEST khi đối số sai; BUSY khi user đã ngồi ở phòng khác;
+ *         NOT_FOUND khi mã không tồn tại; ROOM_FULL khi hết ghế.
  */
 Status roomsJoin(Rooms *rooms, UserId userId, const char *name, const char *avatar,
-                  const char *code, Seat *outSeat);
+                 const char *code, Seat *outSeat);
 
 /**
- * @brief Free the user's seat; the last human leaving closes the room and a
- *        leaving host hands the host seat to the lowest remaining human.
- * @return Always OK, also when the user sits in no room.
+ * @brief Giải phóng ghế của user; người thật cuối cùng rời đi thì đóng phòng, host
+ *        rời đi thì quyền host chuyển cho người thật ở ghế nhỏ nhất còn lại.
+ * @return Luôn OK, kể cả khi user không ngồi phòng nào.
  */
 Status roomsLeave(Rooms *rooms, UserId userId);
 
 /**
- * @brief Put a bot of @p level in @p seat (host only).
- * @return OK; BAD_REQUEST for a bad seat; NOT_FOUND without a room; FORBIDDEN
- *         for a non-host; INVALID_ACTION for the host seat or a human's seat.
+ * @brief Đặt bot mức @p level vào ghế @p seat (chỉ host).
+ * @return OK; BAD_REQUEST khi ghế sai; NOT_FOUND khi không có phòng; FORBIDDEN với
+ *         người không phải host; INVALID_ACTION với ghế host hoặc ghế người thật.
  */
 Status roomsSetBot(Rooms *rooms, UserId requesterId, int seat, BotLevel level);
 
 /**
- * @brief Empty an occupied seat other than the host's (host only).
- * @return OK; BAD_REQUEST for a bad seat; NOT_FOUND without a room; FORBIDDEN
- *         for a non-host; INVALID_ACTION for the host seat or an empty seat.
+ * @brief Làm trống một ghế đang có người, trừ ghế host (chỉ host).
+ * @return OK; BAD_REQUEST khi ghế sai; NOT_FOUND khi không có phòng; FORBIDDEN với
+ *         người không phải host; INVALID_ACTION với ghế host hoặc ghế trống.
  */
 Status roomsKick(Rooms *rooms, UserId requesterId, int seat);
 
 /**
- * @brief Change the room's game mode (host only).
- * @return OK, BAD_REQUEST, NOT_FOUND without a room, or FORBIDDEN for a non-host.
+ * @brief Đổi chế độ chơi của phòng (chỉ host).
+ * @return OK, BAD_REQUEST, NOT_FOUND khi không có phòng, hoặc FORBIDDEN với người
+ *         không phải host.
  */
 Status roomsSetMode(Rooms *rooms, UserId requesterId, Mode mode);
 
 /**
- * @brief Start the match of a full waiting room through Rooms.onStart.
+ * @brief Bắt đầu trận cho phòng chờ đã đủ người qua Rooms.onStart.
  *
- * The room only switches to ROOM_STATUS_IN_MATCH when the callback succeeds;
- * on failure it stays waiting and unchanged.
+ * Phòng chỉ chuyển sang ROOM_STATUS_IN_MATCH khi callback thành công; nếu thất
+ * bại, phòng vẫn đang chờ và không đổi gì.
  *
- * @return OK; BAD_REQUEST; NOT_FOUND for an unknown room; INVALID_ACTION when
- *         the room is not waiting or a seat is empty; BUSY without a callback;
- *         otherwise the callback's error.
+ * @return OK; BAD_REQUEST; NOT_FOUND khi không có phòng; INVALID_ACTION khi phòng
+ *         không ở trạng thái chờ hoặc còn ghế trống; BUSY khi không có callback;
+ *         còn lại là lỗi của callback.
  */
 Status roomsStart(App *app, const char *roomId);
 
 /**
- * @brief Store a room or party invite in a free or expired slot.
+ * @brief Lưu lời mời vào phòng hoặc party vào một ô trống hoặc đã hết hạn.
  *
- * A slot is reused once its invite is older than INVITE_TIMEOUT_MS.
+ * Ô được dùng lại khi lời mời trong đó cũ hơn INVITE_TIMEOUT_MS.
  *
- * @param[in] kind "room" or "party"; copied.
- * @param[in] roomCode Room the invite points at (room invites); copied.
- * @param[out] outInviteId Receives a random UUID; buffer of 37 bytes.
- * @return OK, BAD_REQUEST for missing users, or SERVER_FULL with no free slot.
+ * @param[in] kind "room" hoặc "party"; được chép lại.
+ * @param[in] roomCode Phòng mà lời mời trỏ tới (lời mời phòng); được chép lại.
+ * @param[out] outInviteId Nhận UUID ngẫu nhiên; buffer INVITE_ID_SIZE byte.
+ * @return OK, BAD_REQUEST khi thiếu user, hoặc SERVER_FULL khi hết ô.
  */
 Status roomsInviteCreate(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
-                           const char *roomCode, char outInviteId[37]);
+                         const char *roomCode, char outInviteId[INVITE_ID_SIZE]);
 
 /**
- * @brief Clean up after a user dropped: leave their party, cancel invites they
- *        sent or received, and free a waiting-room seat (the room then gets a
- *        fresh state push). A seat in a running match is kept for RESUME/LOGIN.
- * @param[in] nowMs Currently unused.
+ * @brief Dọn dẹp khi user rớt mạng: rời party, hủy lời mời user đã gửi hoặc nhận,
+ *        và nhả ghế ở phòng chờ (phòng đó nhận ROOM_STATE mới). Ghế trong trận
+ *        đang chạy được giữ cho RESUME/LOGIN.
+ * @param[in] nowMs Hiện chưa dùng.
  */
 void roomsDisconnect(App *app, UserId userId, uint64_t nowMs);
 
 /**
- * @brief Start a ranked matchmaking match for four humans through Rooms.onStart.
+ * @brief Bắt đầu trận ranked từ hàng chờ cho bốn người thật qua Rooms.onStart.
  *
- * Builds RoomStart{roomId = "Q" + 5 increasing digits, ranked = true} with each
- * seat's name and avatar from the store. No room is created: roomsMatchEnded
- * ignores the "Q" id, and room codes never take that form.
- * @param[in,out] app Server state; app->rooms supplies onStart.
- * @param[in] mode Mode of the match.
- * @param[in] users Account per seat, already in seat order; 0 (bot) is rejected.
- * @param[out] outMatchId Receives the match id on success.
- * @return OK on success; BAD_REQUEST for NULL arguments or a zero user;
- *         BUSY without an onStart callback; the store lookup error; or the
- *         onStart (matchesStart) error such as BUSY, SERVER_FULL or STORAGE_ERROR.
+ * Dựng RoomStart{roomId = "Q" + 5 chữ số tăng dần, ranked = true} với tên và
+ * avatar từng ghế lấy từ Store. Không tạo phòng nào: roomsMatchEnded bỏ qua mã
+ * "Q", và mã phòng thường không bao giờ có dạng đó.
+ * @param[in,out] app Trạng thái server; app->rooms cung cấp onStart.
+ * @param[in] mode Chế độ của trận.
+ * @param[in] users Tài khoản theo thứ tự ghế; 0 (bot) bị từ chối.
+ * @param[out] outMatchId Nhận mã trận khi thành công.
+ * @return OK; BAD_REQUEST khi đối số NULL hoặc có user 0; BUSY khi không có
+ *         callback onStart; lỗi tra Store; hoặc lỗi của onStart (matchesStart)
+ *         như BUSY, SERVER_FULL, STORAGE_ERROR.
  */
-Status roomsMakeMatch(App *app, Mode mode, const UserId users[4], MatchId *outMatchId);
+Status roomsMakeMatch(App *app, Mode mode, const UserId users[ROOM_MAX_SEATS],
+                      MatchId *outMatchId);
 
-/* Envelope command dispatcher */
+/**
+ * @brief Xử lý ROOM_CREATE, ROOM_JOIN, ROOM_LEAVE, ROOM_MODE, ROOM_BOT, ROOM_KICK,
+ *        ROOM_START, INVITE_SEND, INVITE_REPLY và PARTY_LEAVE.
+ *
+ * Người thực hiện luôn lấy từ phiên của kết nối, không lấy từ payload. Mọi lỗi
+ * nghiệp vụ được trả về client dưới dạng ERROR {code, message}.
+ *
+ * @return OK khi đã trả lời; BAD_REQUEST khi đối số NULL.
+ */
 Status roomsHandle(App *app, ConnId connId, const Envelope *envelope);
 
-/* Broadcast */
+/** @brief Gửi ROOM_STATE của @p room cho mọi người thật đang ngồi trong phòng. */
 Status roomsBroadcastState(App *app, const Room *room);
 
 /**
- * @brief Release a room once its match is finalized so members may play again.
- * @param[in,out] app Server state; app->rooms owns the room table.
- * @param[in] roomId Room code carried by the finished match; an empty or unknown
- *            code (e.g. a queue match or a room every human already left) is ignored,
- *            as is a room not in ROOM_STATUS_IN_MATCH.
+ * @brief Nhả phòng khi trận của nó đã chốt để thành viên có thể chơi tiếp.
+ * @param[in,out] app Trạng thái server; app->rooms sở hữu bảng phòng.
+ * @param[in] roomId Mã phòng gắn với trận vừa xong; mã rỗng hoặc lạ (trận hàng
+ *            chờ, hoặc phòng mà mọi người thật đã rời) được bỏ qua, cũng như
+ *            phòng không ở ROOM_STATUS_IN_MATCH.
  */
 void roomsMatchEnded(App *app, const char *roomId);
 
 /**
- * @brief Push the user's current ROOM_STATE and PARTY_STATE to their live connection.
+ * @brief Gửi ROOM_STATE và PARTY_STATE hiện tại tới kết nối đang sống của user.
  *
- * Used after LOGIN: a re-login moves the session to a new socket without leaving
- * the room or party, and that socket has not seen any snapshot yet.
- * @param[in,out] app Server state owned by the poll loop.
- * @param[in] userId Account that just bound a connection.
+ * Dùng sau LOGIN/RESUME: đăng nhập lại chuyển phiên sang socket mới mà không rời
+ * phòng hay party, và socket đó chưa nhận snapshot nào.
+ * @param[in,out] app Trạng thái server do vòng poll sở hữu.
+ * @param[in] userId Tài khoản vừa gắn vào một kết nối.
  */
 void roomsSyncUser(App *app, UserId userId);
 
 /**
- * @brief Copy a renamed account's name and avatar into its waiting-room seat.
+ * @brief Chép tên và avatar mới của tài khoản vào ghế ở phòng chờ.
  *
- * A room still WAITING bumps its revision and broadcasts ROOM_STATE; a room
- * whose match already started keeps the identity the match was created with.
- * @param[in,out] app Server state; app->rooms owns the room table.
- * @param[in] userId Account that changed its profile; a user in no room is ignored.
- * @param[in] name New display name, already validated.
- * @param[in] avatar New avatar key, already validated.
+ * Phòng còn WAITING thì tăng revision và phát ROOM_STATE; phòng đã vào trận giữ
+ * danh tính lúc tạo trận.
+ * @param[in,out] app Trạng thái server; app->rooms sở hữu bảng phòng.
+ * @param[in] userId Tài khoản vừa đổi hồ sơ; user không ở phòng nào được bỏ qua.
+ * @param[in] name Tên hiển thị mới, đã kiểm tra.
+ * @param[in] avatar Mã avatar mới, đã kiểm tra.
  */
 void roomsUpdateIdentity(App *app, UserId userId, const char *name, const char *avatar);
 
-/* Party operations */
+/** @brief Party đang có @p userId là thành viên, hoặc NULL. */
 Party *partyFindByUser(Rooms *rooms, UserId userId);
+
+/**
+ * @brief Giải tán party của @p userId (party tối đa hai người, nên một người rời
+ *        là hết party) và báo PARTY_STATE rỗng cho các thành viên cũ.
+ * @return Luôn OK, kể cả khi user không ở party nào.
+ */
 Status partyLeave(Rooms *rooms, UserId userId);
 
 #endif

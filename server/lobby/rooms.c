@@ -1,32 +1,180 @@
 #define _POSIX_C_SOURCE 200809L
 #include "rooms.h"
-#include "server/auth/accounts.h"
 #include "server/app.h"
+#include "server/auth/accounts.h"
 #include "server/game/match.h"
+#include "server/lobby/lobby_common.h"
 #include "server/lobby/queue.h"
 #include "server/storage/store.h"
-#include <arpa/inet.h>
 #include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <time.h>
 
-static uint64_t monotonicNowMs(void) {
-    return accountsGetNowMs();
-}
-
-static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
+#define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
 
 enum {
-    ID_TEXT_SIZE = 32, /* fits the decimal form of any 64-bit id */
     QUEUE_ROOM_PREFIX = 'Q',
-    ROOM_CODE_LENGTH = 6
+    BOT_LEVEL_COUNT = HARD + 1,
+    /* UUID phiên bản 4 (RFC 4122): 16 byte, nibble phiên bản ở byte 6, variant ở byte 8. */
+    UUID_BYTES = 16,
+    UUID_VERSION_BYTE = 6,
+    UUID_VERSION_MASK = 0x0F,
+    UUID_VERSION_4 = 0x40,
+    UUID_VARIANT_BYTE = 8,
+    UUID_VARIANT_MASK = 0x3F,
+    UUID_VARIANT_RFC4122 = 0x80
 };
 
-/* "Q" + 5 digits is reserved for queue matches; a room with such a code would
- * be freed by roomsMatchEnded when the queue match of the same id ends. */
+/* 36 ký hiệu cho mã phòng: dễ đọc to, khoảng 2,2 tỷ mã 6 ký tự. */
+static const char CODE_ALPHABET[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+#define CODE_ALPHABET_SIZE (sizeof(CODE_ALPHABET) - 1)
+
+static const char *const BOT_LEVEL_NAMES[BOT_LEVEL_COUNT] = {"easy", "normal", "hard"};
+
+/* Một request phòng đang xử lý, kèm danh tính người gửi dùng cho ghế và lời mời. */
+typedef struct {
+    App *app;
+    Rooms *rooms;
+    ConnId connId;
+    const Envelope *envelope;
+    UserId userId;
+    Account account;
+} RoomRequest;
+
+/* Thông báo lỗi riêng cho từng Status mà một thao tác phòng có thể trả về. */
+typedef struct {
+    Status status;
+    const char *message;
+} StatusMessage;
+
+/* ----------------------------- Gửi phản hồi ----------------------------- */
+
+/* Slot của kết nối nếu vẫn là đúng socket đó (cùng generation), ngược lại NULL. */
+static AppConnSlot *liveSlot(App *app, ConnId connId) {
+    if (connId.slot >= APP_MAX_CONNS) return NULL;
+    AppConnSlot *slot = &app->slots[connId.slot];
+    return slot->active && slot->generation == connId.generation ? slot : NULL;
+}
+
+/* Gửi một envelope tới kết nối rồi giải phóng payload. Lỗi gửi chỉ bật cờ closing;
+ * vòng poll sẽ đóng kết nối sau. */
+static void sendToConn(App *app, ConnId connId, int32_t requestId, const char *type,
+                       json_object *payload) {
+    AppConnSlot *slot = liveSlot(app, connId);
+    if (slot) {
+        Envelope response = {PROTOCOL_VERSION, requestId, type, payload};
+        if (connQueue(&slot->conn, &response) == OK) (void)connFlush(&slot->conn);
+    }
+    json_object_put(payload);
+}
+
+static void replyError(const RoomRequest *request, const char *code, const char *message) {
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "code", json_object_new_string(code));
+    json_object_object_add(payload, "message", json_object_new_string(message));
+    sendToConn(request->app, request->connId, request->envelope->id, "ERROR", payload);
+}
+
+/* Trả OK; @p payload NULL nghĩa là payload rỗng. Hàm này chiếm quyền sở hữu payload. */
+static void replyOk(const RoomRequest *request, json_object *payload) {
+    sendToConn(request->app, request->connId, request->envelope->id, "OK",
+               payload ? payload : json_object_new_object());
+}
+
+/* Đổi Status lỗi thành ERROR: Status có trong bảng dùng mã và thông báo của nó,
+ * còn lại là INVALID_ACTION với @p fallback. */
+static void replyStatusError(const RoomRequest *request, Status status,
+                             const StatusMessage messages[], size_t count,
+                             const char *fallback) {
+    for (size_t i = 0; i < count; i++) {
+        if (messages[i].status == status) {
+            replyError(request, statusCode(status), messages[i].message);
+            return;
+        }
+    }
+    replyError(request, "INVALID_ACTION", fallback);
+}
+
+/* Trường @p key của payload, hoặc NULL khi không có payload/trường. */
+static json_object *payloadField(const Envelope *envelope, const char *key) {
+    json_object *value = NULL;
+    if (!envelope->payload || !json_object_object_get_ex(envelope->payload, key, &value)) {
+        return NULL;
+    }
+    return value;
+}
+
+/* ------------------------------ Tiện ích ghế ------------------------------ */
+
+static bool validSeat(int seat) {
+    return seat >= 0 && seat < ROOM_MAX_SEATS;
+}
+
+static bool isHumanSeat(const RoomSeat *seat) {
+    return seat->occupied && !seat->isBot;
+}
+
+static bool isHost(const Room *room, UserId userId) {
+    return room->seats[room->hostSeat].userId == userId;
+}
+
+/* Ghế của người thật @p userId trong phòng, hoặc -1. */
+static int humanSeatOf(const Room *room, UserId userId) {
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (isHumanSeat(&room->seats[seat]) && room->seats[seat].userId == userId) return seat;
+    }
+    return -1;
+}
+
+static int lowestEmptySeat(const Room *room) {
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (!room->seats[seat].occupied) return seat;
+    }
+    return -1;
+}
+
+/* Ghế người thật có số nhỏ nhất, hoặc -1 khi phòng không còn người thật. */
+static int lowestHumanSeat(const Room *room) {
+    for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
+        if (isHumanSeat(&room->seats[seat])) return seat;
+    }
+    return -1;
+}
+
+/* Đặt người thật vào ghế; tên/avatar NULL dùng giá trị mặc định. */
+static void seatHuman(RoomSeat *seat, UserId userId, const char *name, const char *avatar,
+                      const char *defaultName) {
+    memset(seat, 0, sizeof(*seat));
+    seat->occupied = true;
+    seat->userId = userId;
+    snprintf(seat->name, sizeof(seat->name), "%s", name ? name : defaultName);
+    snprintf(seat->avatar, sizeof(seat->avatar), "%s", avatar ? avatar : "fox");
+}
+
+/**
+ * @brief Phòng mà @p requesterId đang làm host.
+ * @param[out] outStatus NOT_FOUND khi không ở phòng nào, FORBIDDEN khi không phải host.
+ * @return Phòng, hoặc NULL kèm @p outStatus.
+ */
+static Room *hostedRoom(Rooms *rooms, UserId requesterId, Status *outStatus) {
+    Room *room = roomsFindByUser(rooms, requesterId);
+    if (!room) {
+        *outStatus = NOT_FOUND;
+        return NULL;
+    }
+    if (!isHost(room, requesterId)) {
+        *outStatus = FORBIDDEN;
+        return NULL;
+    }
+    return room;
+}
+
+/* ------------------------------ Mã ngẫu nhiên ------------------------------ */
+
+/* "Q" + 5 chữ số dành cho trận hàng chờ; phòng mang mã đó sẽ bị roomsMatchEnded
+ * nhả nhầm khi trận hàng chờ cùng mã kết thúc. */
 static bool isQueueRoomId(const char *code) {
     if (code[0] != QUEUE_ROOM_PREFIX) return false;
     for (int i = 1; i < ROOM_CODE_LENGTH; i++) {
@@ -35,154 +183,113 @@ static bool isQueueRoomId(const char *code) {
     return true;
 }
 
-static void sendError(App *app, ConnId connId, int32_t requestId, const char *code,
-                      const char *message) {
-    if (connId.slot >= APP_MAX_CONNS) return;
-    AppConnSlot *slot = &app->slots[connId.slot];
-    if (!slot->active || slot->generation != connId.generation) return;
-
-    struct json_object *payload = json_object_new_object();
-    json_object_object_add(payload, "code", json_object_new_string(code));
-    json_object_object_add(payload, "message", json_object_new_string(message));
-
-    Envelope response = {1, requestId, "ERROR", payload};
-    connQueue(&slot->conn, &response);
-    json_object_put(payload);
-    connFlush(&slot->conn);
-}
-
-static void sendOk(App *app, ConnId connId, int32_t requestId, struct json_object *payload) {
-    if (connId.slot >= APP_MAX_CONNS) return;
-    AppConnSlot *slot = &app->slots[connId.slot];
-    if (!slot->active || slot->generation != connId.generation) return;
-
-    Envelope response = {1, requestId, "OK", payload ? payload : json_object_new_object()};
-    connQueue(&slot->conn, &response);
-    if (!payload) json_object_put(response.payload);
-    connFlush(&slot->conn);
-}
-
-/* Random RFC 4122 version-4 UUID text for invite ids, so ids cannot be guessed. */
-static void generateUuid(char outUuid[37]) {
-    uint8_t randomBytes[16];
-    randombytes_buf(randomBytes, sizeof(randomBytes));
-    randomBytes[6] = (randomBytes[6] & 0x0f) | 0x40; /* version 4 */
-    randomBytes[8] = (randomBytes[8] & 0x3f) | 0x80; /* variant 1 */
-    snprintf(outUuid, 37,
+/* UUID phiên bản 4 ngẫu nhiên cho mã lời mời, để không thể đoán được. */
+static void generateUuid(char outUuid[INVITE_ID_SIZE]) {
+    uint8_t bytes[UUID_BYTES];
+    randombytes_buf(bytes, sizeof(bytes));
+    bytes[UUID_VERSION_BYTE] = (bytes[UUID_VERSION_BYTE] & UUID_VERSION_MASK) | UUID_VERSION_4;
+    bytes[UUID_VARIANT_BYTE] =
+        (bytes[UUID_VARIANT_BYTE] & UUID_VARIANT_MASK) | UUID_VARIANT_RFC4122;
+    snprintf(outUuid, INVITE_ID_SIZE,
              "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-             randomBytes[0], randomBytes[1], randomBytes[2], randomBytes[3],
-             randomBytes[4], randomBytes[5], randomBytes[6], randomBytes[7],
-             randomBytes[8], randomBytes[9], randomBytes[10], randomBytes[11],
-             randomBytes[12], randomBytes[13], randomBytes[14], randomBytes[15]);
+             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+             bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+             bytes[15]);
 }
 
-void roomsGenerateCode(Rooms *rooms, char outCode[7]) {
-    /* 6 characters from 36 symbols: about 2.2 billion codes, short enough to
-     * read out loud. Collisions with live rooms or queue ids are retried. */
-    static const char codeAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    char candidate[7];
-    while (1) {
-        uint8_t codeBytes[6];
-        randombytes_buf(codeBytes, sizeof(codeBytes));
-        for (int i = 0; i < 6; i++) {
-            candidate[i] = codeAlphabet[codeBytes[i] % 36];
-        }
-        candidate[6] = '\0';
-
-        bool collision = isQueueRoomId(candidate);
-        if (rooms && !collision) {
-            for (int i = 0; i < MAX_ROOMS; i++) {
-                const Room *other = &rooms->rooms[i];
-                if (other->active && other->code != outCode &&
-                    strcmp(other->code, candidate) == 0) {
-                    collision = true;
-                    break;
-                }
-            }
-        }
-        if (!collision) {
-            memcpy(outCode, candidate, 7);
-            break;
+/* Mã đã thuộc về phòng đang mở khác (bỏ qua chính buffer đang được điền). */
+static bool codeInUse(const Rooms *rooms, const char *candidate, const char *ownBuffer) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        const Room *other = &rooms->rooms[i];
+        if (other->active && other->code != ownBuffer && strcmp(other->code, candidate) == 0) {
+            return true;
         }
     }
+    return false;
 }
 
-static bool parseMode(struct json_object *valueJson, Mode *outMode) {
+void roomsGenerateCode(Rooms *rooms, char outCode[ROOM_CODE_SIZE]) {
+    char candidate[ROOM_CODE_SIZE];
+    do {
+        uint8_t codeBytes[ROOM_CODE_LENGTH];
+        randombytes_buf(codeBytes, sizeof(codeBytes));
+        for (int i = 0; i < ROOM_CODE_LENGTH; i++) {
+            candidate[i] = CODE_ALPHABET[codeBytes[i] % CODE_ALPHABET_SIZE];
+        }
+        candidate[ROOM_CODE_LENGTH] = '\0';
+    } while (isQueueRoomId(candidate) || (rooms && codeInUse(rooms, candidate, outCode)));
+    memcpy(outCode, candidate, ROOM_CODE_SIZE);
+}
+
+/* ------------------------------ Đọc tham số ------------------------------ */
+
+/* Chế độ dạng số (0..3) hoặc tên; thiếu trường thì mặc định CLASSIC. */
+static bool parseMode(json_object *valueJson, Mode *outMode) {
     if (!valueJson) {
         *outMode = CLASSIC;
         return true;
     }
     if (json_object_is_type(valueJson, json_type_int)) {
         int modeNumber = json_object_get_int(valueJson);
-        if (modeNumber >= 0 && modeNumber <= 3) {
-            *outMode = (Mode)modeNumber;
-            return true;
-        }
-        return false;
+        if (modeNumber < 0 || modeNumber >= LOBBY_MODE_COUNT) return false;
+        *outMode = (Mode)modeNumber;
+        return true;
     }
-    if (json_object_is_type(valueJson, json_type_string)) {
-        const char *text = json_object_get_string(valueJson);
-        if (strcasecmp(text, "classic") == 0) { *outMode = CLASSIC; return true; }
-        if (strcasecmp(text, "2v2") == 0 || strcasecmp(text, "two_v_two") == 0) {
-            *outMode = TWO_V_TWO;
-            return true;
-        }
-        if (strcasecmp(text, "side") == 0) { *outMode = SIDE; return true; }
-        if (strcasecmp(text, "draft") == 0) { *outMode = DRAFT; return true; }
-        return false;
+    if (!json_object_is_type(valueJson, json_type_string)) return false;
+    const char *text = json_object_get_string(valueJson);
+    if (strcasecmp(text, "classic") == 0) *outMode = CLASSIC;
+    else if (strcasecmp(text, "2v2") == 0 || strcasecmp(text, "two_v_two") == 0) {
+        *outMode = TWO_V_TWO;
     }
-    return false;
-}
-
-/* Parties only queue for team modes, so INVITE_SEND must name one explicitly. */
-static bool parsePartyMode(struct json_object *payload, Mode *outMode) {
-    struct json_object *modeObj = NULL;
-    if (!json_object_object_get_ex(payload, "mode", &modeObj) ||
-        !json_object_is_type(modeObj, json_type_string)) {
-        return false;
-    }
-    const char *modeName = json_object_get_string(modeObj);
-    if (strcmp(modeName, MODE_NAMES[TWO_V_TWO]) == 0) { *outMode = TWO_V_TWO; return true; }
-    if (strcmp(modeName, MODE_NAMES[SIDE]) == 0) { *outMode = SIDE; return true; }
-    return false;
-}
-
-/* A seated player stays reserved until the match finalizes, even after ROOM_LEAVE. */
-static bool rejectIfInMatch(App *app, ConnId connId, int32_t requestId, UserId userId) {
-    if (!matchesContains(app->matches, userId)) return false;
-    sendError(app, connId, requestId, "BUSY", "User is in a match");
+    else if (strcasecmp(text, "side") == 0) *outMode = SIDE;
+    else if (strcasecmp(text, "draft") == 0) *outMode = DRAFT;
+    else return false;
     return true;
 }
 
-/* Spec: a user waiting in matchmaking cannot also sit in a room or party. */
-static bool rejectIfQueued(App *app, ConnId connId, int32_t requestId, UserId userId) {
-    if (!queueContains(app->queue, userId)) return false;
-    sendError(app, connId, requestId, "BUSY", "User is in matchmaking");
+/* Party chỉ xếp hàng ở chế độ đồng đội, nên INVITE_SEND phải ghi rõ "2v2" hoặc "side". */
+static bool parsePartyMode(const Envelope *envelope, Mode *outMode) {
+    json_object *modeJson = payloadField(envelope, "mode");
+    if (!json_object_is_type(modeJson, json_type_string)) return false;
+    Mode mode = CLASSIC;
+    if (!lobbyParseModeName(json_object_get_string(modeJson), &mode)) return false;
+    if (mode != TWO_V_TWO && mode != SIDE) return false;
+    *outMode = mode;
     return true;
 }
 
-static bool parseBotLevel(struct json_object *valueJson, BotLevel *outLevel) {
-    if (!valueJson) return false;
+/* Mức bot dạng số (0..2) hoặc tên; "medium" là tên khác của "normal". */
+static bool parseBotLevel(json_object *valueJson, BotLevel *outLevel) {
     if (json_object_is_type(valueJson, json_type_int)) {
         int levelNumber = json_object_get_int(valueJson);
-        if (levelNumber >= 0 && levelNumber <= 2) {
-            *outLevel = (BotLevel)levelNumber;
-            return true;
-        }
-        return false;
+        if (levelNumber < 0 || levelNumber >= BOT_LEVEL_COUNT) return false;
+        *outLevel = (BotLevel)levelNumber;
+        return true;
     }
-    if (json_object_is_type(valueJson, json_type_string)) {
-        const char *text = json_object_get_string(valueJson);
-        if (strcasecmp(text, "easy") == 0) { *outLevel = EASY; return true; }
-        if (strcasecmp(text, "normal") == 0 || strcasecmp(text, "medium") == 0) {
-            *outLevel = NORMAL;
-            return true;
-        }
-        if (strcasecmp(text, "hard") == 0) { *outLevel = HARD; return true; }
-        return false;
-    }
-    return false;
+    if (!json_object_is_type(valueJson, json_type_string)) return false;
+    const char *text = json_object_get_string(valueJson);
+    if (strcasecmp(text, "easy") == 0) *outLevel = EASY;
+    else if (strcasecmp(text, "normal") == 0 || strcasecmp(text, "medium") == 0) *outLevel = NORMAL;
+    else if (strcasecmp(text, "hard") == 0) *outLevel = HARD;
+    else return false;
+    return true;
 }
+
+/* Người đang có ghế trong trận vẫn bị giữ chỗ tới khi trận chốt, kể cả sau ROOM_LEAVE. */
+static bool rejectIfInMatch(const RoomRequest *request) {
+    if (!matchesContains(request->app->matches, request->userId)) return false;
+    replyError(request, "BUSY", "User is in a match");
+    return true;
+}
+
+/* Spec: người đang chờ ghép trận không thể đồng thời ngồi phòng hay ở party. */
+static bool rejectIfQueued(const RoomRequest *request) {
+    if (!queueContains(request->app->queue, request->userId)) return false;
+    replyError(request, "BUSY", "User is in matchmaking");
+    return true;
+}
+
+/* --------------------------- Thao tác trên phòng --------------------------- */
 
 Status roomsInit(Rooms **outRooms, App *app, OnMatchStart onStart) {
     if (!outRooms) return BAD_REQUEST;
@@ -197,7 +304,6 @@ Status roomsInit(Rooms **outRooms, App *app, OnMatchStart onStart) {
 }
 
 void roomsDestroy(Rooms *rooms) {
-    if (!rooms) return;
     free(rooms);
 }
 
@@ -214,35 +320,27 @@ Room *roomsFindByCode(Rooms *rooms, const char *code) {
 Room *roomsFindByUser(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return NULL;
     for (int i = 0; i < MAX_ROOMS; i++) {
-        if (rooms->rooms[i].active) {
-            for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
-                if (rooms->rooms[i].seats[seat].occupied && !rooms->rooms[i].seats[seat].isBot &&
-                    rooms->rooms[i].seats[seat].userId == userId) {
-                    return &rooms->rooms[i];
-                }
-            }
+        if (rooms->rooms[i].active && humanSeatOf(&rooms->rooms[i], userId) >= 0) {
+            return &rooms->rooms[i];
         }
     }
     return NULL;
 }
 
-Status roomsCreate(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
-                    char outCode[7]) {
-    if (!rooms || hostId == 0) return BAD_REQUEST;
-
-    if (roomsFindByUser(rooms, hostId) != NULL) return BUSY;
-
-    /* Find empty room slot */
-    int slot = -1;
+static Room *freeRoom(Rooms *rooms) {
     for (int i = 0; i < MAX_ROOMS; i++) {
-        if (!rooms->rooms[i].active) {
-            slot = i;
-            break;
-        }
+        if (!rooms->rooms[i].active) return &rooms->rooms[i];
     }
-    if (slot < 0) return SERVER_FULL;
+    return NULL;
+}
 
-    Room *room = &rooms->rooms[slot];
+Status roomsCreate(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
+                   char outCode[ROOM_CODE_SIZE]) {
+    if (!rooms || hostId == 0) return BAD_REQUEST;
+    if (roomsFindByUser(rooms, hostId) != NULL) return BUSY;
+    Room *room = freeRoom(rooms);
+    if (!room) return SERVER_FULL;
+
     memset(room, 0, sizeof(*room));
     roomsGenerateCode(rooms, room->code);
     room->active = true;
@@ -251,227 +349,149 @@ Status roomsCreate(Rooms *rooms, UserId hostId, const char *name, const char *av
     room->hostSeat = 0;
     room->revision = 1;
     room->status = ROOM_STATUS_WAITING;
-
-    room->seats[0].occupied = true;
-    room->seats[0].isBot = false;
-    room->seats[0].userId = hostId;
-    strncpy(room->seats[0].name, name ? name : "Host", sizeof(room->seats[0].name) - 1);
-    strncpy(room->seats[0].avatar, avatar ? avatar : "fox", sizeof(room->seats[0].avatar) - 1);
-
-    if (outCode) {
-        strcpy(outCode, room->code);
-    }
+    seatHuman(&room->seats[0], hostId, name, avatar, "Host");
+    if (outCode) snprintf(outCode, ROOM_CODE_SIZE, "%s", room->code);
     return OK;
 }
 
 Status roomsJoin(Rooms *rooms, UserId userId, const char *name, const char *avatar,
-                  const char *code, Seat *outSeat) {
+                 const char *code, Seat *outSeat) {
     if (!rooms || userId == 0 || !code) return BAD_REQUEST;
-
     if (roomsFindByUser(rooms, userId) != NULL) return BUSY;
-
     Room *room = roomsFindByCode(rooms, code);
     if (!room) return NOT_FOUND;
-
-    /* Find lowest-numbered empty seat */
-    int emptySeat = -1;
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (!room->seats[i].occupied) {
-            emptySeat = i;
-            break;
-        }
-    }
+    int emptySeat = lowestEmptySeat(room);
     if (emptySeat < 0) return ROOM_FULL;
 
-    room->seats[emptySeat].occupied = true;
-    room->seats[emptySeat].isBot = false;
-    room->seats[emptySeat].userId = userId;
-    strncpy(room->seats[emptySeat].name, name ? name : "Player",
-            sizeof(room->seats[emptySeat].name) - 1);
-    strncpy(room->seats[emptySeat].avatar, avatar ? avatar : "fox",
-            sizeof(room->seats[emptySeat].avatar) - 1);
+    seatHuman(&room->seats[emptySeat], userId, name, avatar, "Player");
     room->revision++;
-
     if (outSeat) *outSeat = (Seat)emptySeat;
     return OK;
 }
 
 Status roomsLeave(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return OK;
-
     Room *room = roomsFindByUser(rooms, userId);
     if (!room) return OK;
+    int seat = humanSeatOf(room, userId);
+    if (seat < 0) return OK;
 
-    int seatIndex = -1;
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].isBot && room->seats[i].userId == userId) {
-            seatIndex = i;
-            break;
-        }
-    }
-    if (seatIndex < 0) return OK;
-
-    memset(&room->seats[seatIndex], 0, sizeof(room->seats[seatIndex]));
+    memset(&room->seats[seat], 0, sizeof(room->seats[seat]));
     room->revision++;
-
-    /* Check remaining humans */
-    int humanCount = 0;
-    int lowestHumanSeat = -1;
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].isBot) {
-            humanCount++;
-            if (lowestHumanSeat < 0) lowestHumanSeat = i;
-        }
-    }
-
-    if (humanCount == 0) {
-        /* Last human left: room is destroyed */
+    int nextHost = lowestHumanSeat(room);
+    if (nextHost < 0) {
+        /* Người thật cuối cùng đã rời: đóng phòng. */
         memset(room, 0, sizeof(*room));
-        return OK;
+    } else if (seat == room->hostSeat) {
+        room->hostSeat = (Seat)nextHost;
     }
-
-    /* If the host left, migrate host to remaining human with lowest seat */
-    if (seatIndex == room->hostSeat) {
-        room->hostSeat = (Seat)lowestHumanSeat;
-    }
-
     return OK;
 }
 
 Status roomsSetBot(Rooms *rooms, UserId requesterId, int seat, BotLevel level) {
-    if (!rooms || requesterId == 0) return BAD_REQUEST;
-    if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
+    if (!rooms || requesterId == 0 || !validSeat(seat)) return BAD_REQUEST;
+    Status status = OK;
+    Room *room = hostedRoom(rooms, requesterId, &status);
+    if (!room) return status;
+    /* Host không tự biến mình thành bot, và bot không được thay người thật. */
+    if (seat == room->hostSeat || isHumanSeat(&room->seats[seat])) return INVALID_ACTION;
 
-    Room *room = roomsFindByUser(rooms, requesterId);
-    if (!room) return NOT_FOUND;
-
-    /* Must be host */
-    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
-
-    /* Host cannot turn themselves into a bot */
-    if (seat == room->hostSeat) return INVALID_ACTION;
-
-    /* Cannot overwrite an existing human */
-    if (room->seats[seat].occupied && !room->seats[seat].isBot) return INVALID_ACTION;
-
-    room->seats[seat].occupied = true;
-    room->seats[seat].isBot = true;
-    room->seats[seat].userId = 0;
-    room->seats[seat].botLevel = level;
-    snprintf(room->seats[seat].name, sizeof(room->seats[seat].name), "Bot %u",
-             (unsigned)(seat + 1));
-    strcpy(room->seats[seat].avatar, "robot");
+    RoomSeat *botSeat = &room->seats[seat];
+    botSeat->occupied = true;
+    botSeat->isBot = true;
+    botSeat->userId = 0;
+    botSeat->botLevel = level;
+    snprintf(botSeat->name, sizeof(botSeat->name), "Bot %u", (unsigned)(seat + 1));
+    snprintf(botSeat->avatar, sizeof(botSeat->avatar), "%s", "robot");
     room->revision++;
-
     return OK;
 }
 
 Status roomsKick(Rooms *rooms, UserId requesterId, int seat) {
-    if (!rooms || requesterId == 0) return BAD_REQUEST;
-    if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
-
-    Room *room = roomsFindByUser(rooms, requesterId);
-    if (!room) return NOT_FOUND;
-
-    /* Must be host */
-    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
-
-    /* Cannot kick self */
-    if (seat == room->hostSeat) return INVALID_ACTION;
-
-    /* Must be occupied */
-    if (!room->seats[seat].occupied) return INVALID_ACTION;
-
+    if (!rooms || requesterId == 0 || !validSeat(seat)) return BAD_REQUEST;
+    Status status = OK;
+    Room *room = hostedRoom(rooms, requesterId, &status);
+    if (!room) return status;
+    /* Host không tự kick mình, và không có gì để kick ở ghế trống. */
+    if (seat == room->hostSeat || !room->seats[seat].occupied) return INVALID_ACTION;
     memset(&room->seats[seat], 0, sizeof(room->seats[seat]));
     room->revision++;
-
     return OK;
 }
 
 Status roomsSetMode(Rooms *rooms, UserId requesterId, Mode mode) {
     if (!rooms || requesterId == 0) return BAD_REQUEST;
-
-    Room *room = roomsFindByUser(rooms, requesterId);
-    if (!room) return NOT_FOUND;
-
-    /* Must be host */
-    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
-
+    Status status = OK;
+    Room *room = hostedRoom(rooms, requesterId, &status);
+    if (!room) return status;
     room->mode = mode;
     room->revision++;
     return OK;
 }
 
+/* Chép bốn ghế của phòng sang RoomStart mà coordinator dùng để mở trận. */
+static void fillRoomStart(RoomStart *roomStart, const Room *room) {
+    memset(roomStart, 0, sizeof(*roomStart));
+    snprintf(roomStart->roomId, sizeof(roomStart->roomId), "%s", room->code);
+    roomStart->mode = room->mode;
+    roomStart->ranked = room->ranked;
+    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
+        PlayerSpec *player = &roomStart->players[i];
+        player->userId = room->seats[i].userId;
+        snprintf(player->name, sizeof(player->name), "%s", room->seats[i].name);
+        snprintf(player->avatar, sizeof(player->avatar), "%s", room->seats[i].avatar);
+        player->isBot = room->seats[i].isBot;
+        player->botLevel = room->seats[i].botLevel;
+    }
+}
+
 Status roomsStart(App *app, const char *roomId) {
     if (!app || !app->rooms || !roomId) return BAD_REQUEST;
     Rooms *rooms = app->rooms;
-
     Room *room = roomsFindByCode(rooms, roomId);
     if (!room) return NOT_FOUND;
-
-    if (room->status != ROOM_STATUS_WAITING) return INVALID_ACTION;
-
-    /* Check all 4 seats occupied */
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (!room->seats[i].occupied) return INVALID_ACTION;
-    }
-
+    if (room->status != ROOM_STATUS_WAITING || lowestEmptySeat(room) >= 0) return INVALID_ACTION;
     if (!rooms->onStart) return BUSY;
 
     RoomStart roomStart;
-    memset(&roomStart, 0, sizeof(roomStart));
-    strncpy(roomStart.roomId, room->code, sizeof(roomStart.roomId) - 1);
-    roomStart.mode = room->mode;
-    roomStart.ranked = room->ranked;
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        roomStart.players[i].userId = room->seats[i].userId;
-        strncpy(roomStart.players[i].name, room->seats[i].name,
-                sizeof(roomStart.players[i].name) - 1);
-        strncpy(roomStart.players[i].avatar, room->seats[i].avatar,
-                sizeof(roomStart.players[i].avatar) - 1);
-        roomStart.players[i].isBot = room->seats[i].isBot;
-        roomStart.players[i].botLevel = room->seats[i].botLevel;
-    }
+    fillRoomStart(&roomStart, room);
+    MatchId matchId = {0};
+    Status status = rooms->onStart(app, &roomStart, &matchId);
+    /* Callback lỗi thì phòng giữ nguyên trạng thái chờ. */
+    if (status == OK) room->status = ROOM_STATUS_IN_MATCH;
+    return status;
+}
 
-    MatchId outMatchId = {0};
-    Status status = rooms->onStart(app, &roomStart, &outMatchId);
-    if (status != OK) {
-        /* Callback failed: room remains intact without mutating to in-match */
-        return status;
-    }
-
-    room->status = ROOM_STATUS_IN_MATCH;
-    return OK;
+/* Phát ROOM_STATE cho phòng mang mã @p code nếu phòng đó vẫn còn. */
+static void broadcastRoomByCode(App *app, const char *code) {
+    Room *room = roomsFindByCode(app->rooms, code);
+    if (room) roomsBroadcastState(app, room);
 }
 
 void roomsDisconnect(App *app, UserId userId, uint64_t nowMs) {
     (void)nowMs;
     if (!app || !app->rooms || userId == 0) return;
     Rooms *rooms = app->rooms;
-
     partyLeave(rooms, userId);
 
-    /* Cancel any pending invites involving this user */
+    /* Hủy mọi lời mời mà user đã gửi hoặc đang nhận. */
     for (int i = 0; i < MAX_INVITES; i++) {
-        if (rooms->invites[i].active &&
-            (rooms->invites[i].senderId == userId || rooms->invites[i].recipientId == userId)) {
-            rooms->invites[i].active = false;
+        Invite *invite = &rooms->invites[i];
+        if (invite->active && (invite->senderId == userId || invite->recipientId == userId)) {
+            invite->active = false;
         }
     }
-
     Room *room = roomsFindByUser(rooms, userId);
     if (room && room->status == ROOM_STATUS_WAITING) {
-        char code[7];
-        strcpy(code, room->code);
+        char code[ROOM_CODE_SIZE];
+        snprintf(code, sizeof(code), "%s", room->code);
         roomsLeave(rooms, userId);
-        Room *after = roomsFindByCode(rooms, code);
-        if (after) {
-            roomsBroadcastState(app, after);
-        }
+        broadcastRoomByCode(app, code);
     }
 }
 
-Status roomsMakeMatch(App *app, Mode mode, const UserId users[4], MatchId *outMatchId) {
+Status roomsMakeMatch(App *app, Mode mode, const UserId users[ROOM_MAX_SEATS],
+                      MatchId *outMatchId) {
     if (!app || !app->rooms || !users || !outMatchId) return BAD_REQUEST;
     Rooms *rooms = app->rooms;
     if (!rooms->onStart) return BUSY;
@@ -482,7 +502,7 @@ Status roomsMakeMatch(App *app, Mode mode, const UserId users[4], MatchId *outMa
     unsigned serial = (unsigned)(rooms->nextQueueRoom % QUEUE_ROOM_SERIAL_LIMIT);
     snprintf(roomStart.roomId, sizeof(roomStart.roomId), "%c%05u", QUEUE_ROOM_PREFIX, serial);
     roomStart.mode = mode;
-    /* Spec: only matchmaking with four humans is ranked; no bot ever fills a seat. */
+    /* Spec: chỉ trận ghép từ hàng chờ với bốn người thật mới ranked; không có bot. */
     roomStart.ranked = true;
     for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
         if (users[seat] == 0) return BAD_REQUEST;
@@ -491,60 +511,45 @@ Status roomsMakeMatch(App *app, Mode mode, const UserId users[4], MatchId *outMa
         if (lookup != OK) return lookup;
         PlayerSpec *player = &roomStart.players[seat];
         player->userId = users[seat];
-        strncpy(player->name, account.name, sizeof(player->name) - 1);
-        strncpy(player->avatar, account.avatar, sizeof(player->avatar) - 1);
+        snprintf(player->name, sizeof(player->name), "%s", account.name);
+        snprintf(player->avatar, sizeof(player->avatar), "%s", account.avatar);
     }
-
-    /* The coordinator persists the match and pushes GAME_STATE itself. */
+    /* Coordinator tự lưu trận và tự push GAME_STATE. */
     Status started = rooms->onStart(app, &roomStart, outMatchId);
     if (started == OK) rooms->nextQueueRoom++;
     return started;
 }
 
-/* Wire ids are decimal strings so 64-bit ids survive JSON number precision. */
-static json_object *userIdJson(UserId userId) {
-    char idText[ID_TEXT_SIZE];
-    snprintf(idText, sizeof(idText), "%llu", (unsigned long long)userId);
-    return json_object_new_string(idText);
+/* ------------------------------ Snapshot JSON ------------------------------ */
+
+static json_object *seatStateJson(const RoomSeat *seat, int seatIndex) {
+    json_object *seatJson = json_object_new_object();
+    json_object_object_add(seatJson, "seat", json_object_new_int(seatIndex));
+    json_object_object_add(seatJson, "isBot", json_object_new_boolean(seat->isBot));
+    if (!seat->isBot) json_object_object_add(seatJson, "userId", lobbyUserIdJson(seat->userId));
+    json_object_object_add(seatJson, "name", json_object_new_string(seat->name));
+    json_object_object_add(seatJson, "avatar", json_object_new_string(seat->avatar));
+    if (seat->isBot) {
+        json_object_object_add(seatJson, "botLevel",
+                               json_object_new_string(BOT_LEVEL_NAMES[seat->botLevel]));
+    }
+    return seatJson;
 }
 
-/* One builder for every ROOM_STATE so broadcast, kick and re-login agree. */
+/* Một hàm dựng duy nhất cho mọi ROOM_STATE, để broadcast, kick và đăng nhập lại khớp nhau. */
 static json_object *roomStateJson(const Room *room) {
-    struct json_object *payload = json_object_new_object();
+    json_object *payload = json_object_new_object();
     json_object_object_add(payload, "revision", json_object_new_int64(room->revision));
     json_object_object_add(payload, "roomId", json_object_new_string(room->code));
     json_object_object_add(payload, "code", json_object_new_string(room->code));
-    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[room->mode]));
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(room->mode)));
     json_object_object_add(payload, "ranked", json_object_new_boolean(room->ranked));
     json_object_object_add(payload, "hostSeat", json_object_new_int(room->hostSeat));
-
-    struct json_object *seatsJson = json_object_new_array();
+    json_object *seatsJson = json_object_new_array();
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (!room->seats[i].occupied) {
-            json_object_array_add(seatsJson, NULL);
-        } else {
-            struct json_object *seatStateJson = json_object_new_object();
-            json_object_object_add(seatStateJson, "seat", json_object_new_int(i));
-            json_object_object_add(seatStateJson, "isBot",
-                                   json_object_new_boolean(room->seats[i].isBot));
-            if (room->seats[i].isBot) {
-                json_object_object_add(seatStateJson, "name",
-                                       json_object_new_string(room->seats[i].name));
-                json_object_object_add(seatStateJson, "avatar",
-                                       json_object_new_string(room->seats[i].avatar));
-                const char *levelNames[] = {"easy", "normal", "hard"};
-                const char *levelName = levelNames[room->seats[i].botLevel];
-                json_object_object_add(seatStateJson, "botLevel",
-                                       json_object_new_string(levelName));
-            } else {
-                json_object_object_add(seatStateJson, "userId", userIdJson(room->seats[i].userId));
-                json_object_object_add(seatStateJson, "name",
-                                       json_object_new_string(room->seats[i].name));
-                json_object_object_add(seatStateJson, "avatar",
-                                       json_object_new_string(room->seats[i].avatar));
-            }
-            json_object_array_add(seatsJson, seatStateJson);
-        }
+        const RoomSeat *seat = &room->seats[i];
+        /* Ghế trống là null để client giữ đúng vị trí bốn ghế. */
+        json_object_array_add(seatsJson, seat->occupied ? seatStateJson(seat, i) : NULL);
     }
     json_object_object_add(payload, "seats", seatsJson);
     return payload;
@@ -552,8 +557,8 @@ static json_object *roomStateJson(const Room *room) {
 
 static void pushToSeatedHumans(App *app, const Room *room, json_object *payload) {
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].isBot) {
-            /* Offline members miss the push; LOGIN resyncs them via roomsSyncUser. */
+        /* Thành viên offline lỡ bản push này; LOGIN đồng bộ lại qua roomsSyncUser. */
+        if (isHumanSeat(&room->seats[i])) {
             (void)appPush(app, room->seats[i].userId, "ROOM_STATE", payload);
         }
     }
@@ -570,60 +575,55 @@ Status roomsBroadcastState(App *app, const Room *room) {
 void roomsUpdateIdentity(App *app, UserId userId, const char *name, const char *avatar) {
     if (!app || !app->rooms || userId == 0 || !name || !avatar) return;
     Room *room = roomsFindByUser(app->rooms, userId);
-    /* matchesStart already copied the seats; a live match keeps its own copy. */
+    /* matchesStart đã chép các ghế; trận đang chạy giữ bản của riêng nó. */
     if (!room || room->status != ROOM_STATUS_WAITING) return;
-    for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        RoomSeat *seat = &room->seats[i];
-        if (!seat->occupied || seat->isBot || seat->userId != userId) continue;
-        snprintf(seat->name, sizeof(seat->name), "%s", name);
-        snprintf(seat->avatar, sizeof(seat->avatar), "%s", avatar);
-        room->revision++;
-        roomsBroadcastState(app, room);
-        return;
-    }
+    int seatIndex = humanSeatOf(room, userId);
+    if (seatIndex < 0) return;
+    RoomSeat *seat = &room->seats[seatIndex];
+    snprintf(seat->name, sizeof(seat->name), "%s", name);
+    snprintf(seat->avatar, sizeof(seat->avatar), "%s", avatar);
+    room->revision++;
+    roomsBroadcastState(app, room);
 }
 
 void roomsMatchEnded(App *app, const char *roomId) {
     if (!app || !app->rooms || !roomId || roomId[0] == '\0') return;
     Room *room = roomsFindByCode(app->rooms, roomId);
-    /* If every human left mid-match the code may since name a new waiting room. */
+    /* Nếu mọi người thật đã rời giữa trận, mã này có thể đã thuộc một phòng chờ mới. */
     if (!room || room->status != ROOM_STATUS_IN_MATCH) return;
-    /* Clearing the slot frees every seat at once; members already got MATCH_RESULT. */
+    /* Xóa ô phòng là nhả mọi ghế cùng lúc; thành viên đã nhận MATCH_RESULT. */
     memset(room, 0, sizeof(*room));
 }
+
+/* --------------------------------- Party --------------------------------- */
 
 Party *partyFindByUser(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return NULL;
     for (int i = 0; i < MAX_PARTIES; i++) {
-        if (rooms->parties[i].active) {
-            for (size_t member = 0; member < rooms->parties[i].memberCount; member++) {
-                if (rooms->parties[i].members[member] == userId) {
-                    return &rooms->parties[i];
-                }
-            }
+        Party *party = &rooms->parties[i];
+        if (!party->active) continue;
+        for (size_t member = 0; member < party->memberCount; member++) {
+            if (party->members[member] == userId) return party;
         }
     }
     return NULL;
 }
 
 static json_object *partyStateJson(const Party *party) {
-    struct json_object *payload = json_object_new_object();
+    json_object *payload = json_object_new_object();
     json_object_object_add(payload, "partyId", json_object_new_int((int)party->partyId));
-    json_object_object_add(payload, "leaderId", userIdJson(party->leaderId));
+    json_object_object_add(payload, "leaderId", lobbyUserIdJson(party->leaderId));
     json_object_object_add(payload, "revision", json_object_new_int64(party->revision));
-    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[party->mode]));
-
-    struct json_object *membersJson = json_object_new_array();
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(party->mode)));
+    json_object *membersJson = json_object_new_array();
     for (size_t i = 0; i < party->memberCount; i++) {
-        json_object_array_add(membersJson, userIdJson(party->members[i]));
+        json_object_array_add(membersJson, lobbyUserIdJson(party->members[i]));
     }
     json_object_object_add(payload, "members", membersJson);
     return payload;
 }
 
 static void broadcastPartyState(App *app, const Party *party) {
-    if (!app || !party) return;
-
     json_object *payload = partyStateJson(party);
     for (size_t i = 0; i < party->memberCount; i++) {
         (void)appPush(app, party->members[i], "PARTY_STATE", payload);
@@ -647,622 +647,539 @@ void roomsSyncUser(App *app, UserId userId) {
     }
 }
 
+/* PARTY_STATE của party vừa giải tán: không còn leader ("0") và không còn thành viên. */
+static json_object *dissolvedPartyJson(const Party *party) {
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "partyId", json_object_new_int((int)party->partyId));
+    json_object_object_add(payload, "leaderId", json_object_new_string("0"));
+    json_object_object_add(payload, "revision", json_object_new_int64(party->revision + 1));
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(party->mode)));
+    json_object_object_add(payload, "members", json_object_new_array());
+    return payload;
+}
+
 Status partyLeave(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return OK;
     Party *party = partyFindByUser(rooms, userId);
     if (!party) return OK;
-
     if (rooms->app) {
-        UserId oldMembers[PARTY_MAX_MEMBERS];
-        size_t oldCount = party->memberCount;
-        for (size_t i = 0; i < oldCount; i++) {
-            oldMembers[i] = party->members[i];
-        }
-        uint32_t partyId = party->partyId;
-        uint64_t revision = party->revision + 1;
-
-        struct json_object *payload = json_object_new_object();
-        json_object_object_add(payload, "partyId", json_object_new_int((int)partyId));
-        json_object_object_add(payload, "leaderId", json_object_new_string("0"));
-        json_object_object_add(payload, "revision", json_object_new_int64(revision));
-        json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[party->mode]));
-        json_object_object_add(payload, "members", json_object_new_array());
-
-        Envelope pushEnvelope = {1, 0, "PARTY_STATE", payload};
-        for (size_t i = 0; i < oldCount; i++) {
-            ConnId connId;
-            if (sessionsFindConn(rooms->app, oldMembers[i], &connId) == OK) {
-                if (connId.slot < APP_MAX_CONNS) {
-                    AppConnSlot *recipientSlot = &rooms->app->slots[connId.slot];
-                    if (recipientSlot->active && recipientSlot->generation == connId.generation) {
-                        connQueue(&recipientSlot->conn, &pushEnvelope);
-                        connFlush(&recipientSlot->conn);
-                    }
-                }
-            }
+        json_object *payload = dissolvedPartyJson(party);
+        for (size_t i = 0; i < party->memberCount; i++) {
+            (void)appPush(rooms->app, party->members[i], "PARTY_STATE", payload);
         }
         json_object_put(payload);
     }
-
-    /* Party max 2 members. If someone leaves, dissolve party */
+    /* Party tối đa hai người: một người rời thì giải tán cả party. */
     memset(party, 0, sizeof(*party));
     return OK;
 }
 
-Status roomsInviteCreate(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
-                           const char *roomCode, char outInviteId[37]) {
-    if (!rooms || senderId == 0 || recipientId == 0) return BAD_REQUEST;
+/* Party mới gồm người mời (làm leader) và người nhận lời; NULL khi hết ô. */
+static Party *createParty(Rooms *rooms, UserId leaderId, UserId memberId, Mode mode) {
+    for (int i = 0; i < MAX_PARTIES; i++) {
+        Party *party = &rooms->parties[i];
+        if (party->active) continue;
+        party->active = true;
+        party->partyId = rooms->nextPartyId++;
+        party->leaderId = leaderId;
+        party->members[0] = leaderId;
+        party->members[1] = memberId;
+        party->memberCount = PARTY_MAX_MEMBERS;
+        party->mode = mode;
+        party->revision = 1;
+        return party;
+    }
+    return NULL;
+}
 
-    uint64_t nowMs = monotonicNowMs();
-    int inviteSlot = -1;
+/* -------------------------------- Lời mời -------------------------------- */
+
+static Invite *findInvite(Rooms *rooms, const char *inviteId) {
     for (int i = 0; i < MAX_INVITES; i++) {
-        const Invite *slot = &rooms->invites[i];
+        Invite *invite = &rooms->invites[i];
+        if (invite->active && strcmp(invite->inviteId, inviteId) == 0) return invite;
+    }
+    return NULL;
+}
+
+/* Ô cho lời mời mới: ô trống hoặc ô có lời mời đã hết hạn. */
+static Invite *freeInviteSlot(Rooms *rooms, uint64_t nowMs) {
+    for (int i = 0; i < MAX_INVITES; i++) {
+        Invite *slot = &rooms->invites[i];
         bool expired = nowMs > slot->createdAtMs &&
                        nowMs - slot->createdAtMs > INVITE_TIMEOUT_MS;
-        if (!slot->active || expired) {
-            inviteSlot = i;
-            break;
-        }
+        if (!slot->active || expired) return slot;
     }
-    if (inviteSlot < 0) {
-        return SERVER_FULL;
-    }
+    return NULL;
+}
 
-    Invite *invite = &rooms->invites[inviteSlot];
+Status roomsInviteCreate(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
+                         const char *roomCode, char outInviteId[INVITE_ID_SIZE]) {
+    if (!rooms || senderId == 0 || recipientId == 0) return BAD_REQUEST;
+    uint64_t nowMs = accountsGetNowMs();
+    Invite *invite = freeInviteSlot(rooms, nowMs);
+    if (!invite) return SERVER_FULL;
+
     memset(invite, 0, sizeof(*invite));
     invite->active = true;
     generateUuid(invite->inviteId);
     invite->senderId = senderId;
     invite->recipientId = recipientId;
-    if (kind) strncpy(invite->kind, kind, sizeof(invite->kind) - 1);
-    if (roomCode) strncpy(invite->roomCode, roomCode, sizeof(invite->roomCode) - 1);
+    if (kind) snprintf(invite->kind, sizeof(invite->kind), "%s", kind);
+    if (roomCode) snprintf(invite->roomCode, sizeof(invite->roomCode), "%s", roomCode);
     invite->createdAtMs = nowMs;
-
-    if (outInviteId) {
-        strcpy(outInviteId, invite->inviteId);
-    }
+    if (outInviteId) snprintf(outInviteId, INVITE_ID_SIZE, "%s", invite->inviteId);
     return OK;
+}
+
+/* ------------------------- Handler từng lệnh ROOM_* ------------------------- */
+
+/* Payload OK chung khi user vừa có ghế trong phòng. */
+static json_object *seatedReplyJson(const char *code, int seat) {
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "roomId", json_object_new_string(code));
+    json_object_object_add(payload, "code", json_object_new_string(code));
+    json_object_object_add(payload, "seat", json_object_new_int(seat));
+    return payload;
+}
+
+static void handleRoomCreate(RoomRequest *request) {
+    if (rejectIfInMatch(request) || rejectIfQueued(request)) return;
+    Mode mode = CLASSIC;
+    json_object *modeJson = payloadField(request->envelope, "mode");
+    /* Chế độ sai thì giữ CLASSIC thay vì từ chối, như hành vi cũ của client. */
+    if (modeJson) (void)parseMode(modeJson, &mode);
+
+    char code[ROOM_CODE_SIZE] = {0};
+    Status status = roomsCreate(request->rooms, request->userId, request->account.name,
+                                request->account.avatar, mode, code);
+    if (status != OK) {
+        static const StatusMessage MESSAGES[] = {
+            {BUSY, "User already in a room"}, {SERVER_FULL, "Server room capacity reached"}};
+        replyStatusError(request, status, MESSAGES, ARRAY_LENGTH(MESSAGES),
+                         "Could not create room");
+        return;
+    }
+    json_object *payload = seatedReplyJson(code, 0);
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(mode)));
+    replyOk(request, payload);
+    broadcastRoomByCode(request->app, code);
+}
+
+/* Ghép request vào phòng @p code; dùng chung cho ROOM_JOIN và nhận lời mời phòng. */
+static Status joinRoom(RoomRequest *request, const char *code, Seat *outSeat) {
+    return roomsJoin(request->rooms, request->userId, request->account.name,
+                     request->account.avatar, code, outSeat);
+}
+
+static const StatusMessage JOIN_MESSAGES[] = {
+    {BUSY, "User already in a room"}, {NOT_FOUND, "Room not found"}, {ROOM_FULL, "Room is full"}};
+
+static void handleRoomJoin(RoomRequest *request) {
+    json_object *codeJson = payloadField(request->envelope, "code");
+    if (!codeJson) {
+        replyError(request, "BAD_REQUEST", "Room code is required");
+        return;
+    }
+    if (rejectIfInMatch(request) || rejectIfQueued(request)) return;
+    const char *code = json_object_get_string(codeJson);
+    Seat seat = 0;
+    Status status = joinRoom(request, code, &seat);
+    if (status != OK) {
+        replyStatusError(request, status, JOIN_MESSAGES, ARRAY_LENGTH(JOIN_MESSAGES),
+                         "Could not join room");
+        return;
+    }
+    replyOk(request, seatedReplyJson(code, seat));
+    broadcastRoomByCode(request->app, code);
+}
+
+static void handleRoomLeave(RoomRequest *request) {
+    Room *room = roomsFindByUser(request->rooms, request->userId);
+    if (!room) {
+        replyOk(request, NULL);
+        return;
+    }
+    /* Chép mã trước khi rời: người cuối rời đi thì ô phòng bị xóa trắng. */
+    char code[ROOM_CODE_SIZE];
+    snprintf(code, sizeof(code), "%s", room->code);
+    roomsLeave(request->rooms, request->userId);
+    replyOk(request, NULL);
+    broadcastRoomByCode(request->app, code);
+}
+
+/* Thông báo cho các lỗi chung của thao tác chỉ host mới được làm. */
+static void replyHostOnlyError(RoomRequest *request, Status status, const char *forbidden,
+                               const char *fallback) {
+    const StatusMessage messages[] = {{FORBIDDEN, forbidden}, {NOT_FOUND, "Room not found"}};
+    replyStatusError(request, status, messages, ARRAY_LENGTH(messages), fallback);
+}
+
+/* Phát lại ROOM_STATE cho phòng mà người gửi đang ngồi. */
+static void broadcastRequesterRoom(RoomRequest *request) {
+    Room *room = roomsFindByUser(request->rooms, request->userId);
+    if (room) roomsBroadcastState(request->app, room);
+}
+
+static void handleRoomMode(RoomRequest *request) {
+    json_object *modeJson = payloadField(request->envelope, "mode");
+    if (!modeJson) {
+        replyError(request, "BAD_REQUEST", "Mode is required");
+        return;
+    }
+    Mode mode = CLASSIC;
+    if (!parseMode(modeJson, &mode)) {
+        replyError(request, "BAD_REQUEST", "Invalid mode");
+        return;
+    }
+    Status status = roomsSetMode(request->rooms, request->userId, mode);
+    if (status != OK) {
+        replyHostOnlyError(request, status, "Only host can change room mode", "Could not set mode");
+        return;
+    }
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(mode)));
+    replyOk(request, payload);
+    broadcastRequesterRoom(request);
+}
+
+/* Đọc trường "seat" và kiểm tra nằm trong 0..3; trả lời lỗi và trả false nếu không. */
+static bool readSeatParam(RoomRequest *request, json_object *seatJson, int *outSeat) {
+    *outSeat = json_object_get_int(seatJson);
+    if (validSeat(*outSeat)) return true;
+    replyError(request, "BAD_REQUEST", "Seat must be between 0 and 3");
+    return false;
+}
+
+static void handleRoomBot(RoomRequest *request) {
+    json_object *seatJson = payloadField(request->envelope, "seat");
+    json_object *levelJson = payloadField(request->envelope, "level");
+    if (!seatJson || !levelJson) {
+        replyError(request, "BAD_REQUEST", "Seat and level are required");
+        return;
+    }
+    int seat = 0;
+    if (!readSeatParam(request, seatJson, &seat)) return;
+    BotLevel level = EASY;
+    if (!parseBotLevel(levelJson, &level)) {
+        replyError(request, "BAD_REQUEST", "Invalid bot level");
+        return;
+    }
+    Status status = roomsSetBot(request->rooms, request->userId, seat, level);
+    if (status != OK) {
+        replyHostOnlyError(request, status, "Only host can configure bots",
+                           "Could not configure bot");
+        return;
+    }
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "seat", json_object_new_int(seat));
+    json_object_object_add(payload, "level", json_object_new_string(BOT_LEVEL_NAMES[level]));
+    replyOk(request, payload);
+    broadcastRequesterRoom(request);
+}
+
+/* Người thật đang ngồi ghế @p seat trong phòng của host, hoặc 0. */
+static UserId humanAtSeat(Rooms *rooms, UserId hostId, int seat) {
+    Room *room = roomsFindByUser(rooms, hostId);
+    if (!room || !isHumanSeat(&room->seats[seat])) return 0;
+    return room->seats[seat].userId;
+}
+
+static void handleRoomKick(RoomRequest *request) {
+    json_object *seatJson = payloadField(request->envelope, "seat");
+    if (!seatJson) {
+        replyError(request, "BAD_REQUEST", "Seat is required");
+        return;
+    }
+    int seat = 0;
+    if (!readSeatParam(request, seatJson, &seat)) return;
+    /* roomsKick xóa ghế, nên phải nhớ trước ai đang ngồi đó để báo cho họ. */
+    UserId kickedUser = humanAtSeat(request->rooms, request->userId, seat);
+    Status status = roomsKick(request->rooms, request->userId, seat);
+    if (status != OK) {
+        replyHostOnlyError(request, status, "Only host can kick members", "Could not kick member");
+        return;
+    }
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "seat", json_object_new_int(seat));
+    replyOk(request, payload);
+
+    Room *room = roomsFindByUser(request->rooms, request->userId);
+    if (!room) return;
+    /* Người bị kick không còn ngồi nên broadcast bỏ qua họ; cùng snapshot đó
+     * báo cho client của họ biết đã rời phòng. */
+    json_object *state = roomStateJson(room);
+    pushToSeatedHumans(request->app, room, state);
+    if (kickedUser) (void)appPush(request->app, kickedUser, "ROOM_STATE", state);
+    json_object_put(state);
+}
+
+static void handleRoomStart(RoomRequest *request) {
+    Room *room = roomsFindByUser(request->rooms, request->userId);
+    if (!room) {
+        replyError(request, "NOT_FOUND", "Room not found");
+        return;
+    }
+    if (!isHost(room, request->userId)) {
+        replyError(request, "FORBIDDEN", "Only host can start room");
+        return;
+    }
+    Status status = roomsStart(request->app, room->code);
+    if (status == BUSY) {
+        replyError(request, "BUSY", "Match engine not available");
+    } else if (status != OK) {
+        replyError(request, "INVALID_ACTION", "Cannot start room: all 4 seats must be filled");
+    } else {
+        replyOk(request, NULL);
+    }
+}
+
+/* -------------------------- INVITE_SEND / REPLY -------------------------- */
+
+/* Kiểm tra lời mời vào phòng; điền @p outRoomCode khi hợp lệ. */
+static bool checkRoomInvite(RoomRequest *request, UserId target, char outRoomCode[ROOM_CODE_SIZE]) {
+    Room *room = roomsFindByUser(request->rooms, request->userId);
+    if (!room) {
+        replyError(request, "INVALID_ACTION", "You are not in a room");
+        return false;
+    }
+    if (lowestEmptySeat(room) < 0) {
+        replyError(request, "ROOM_FULL", "Room is full");
+        return false;
+    }
+    if (roomsFindByUser(request->rooms, target) != NULL) {
+        replyError(request, "BUSY", "Target user is already in a room");
+        return false;
+    }
+    snprintf(outRoomCode, ROOM_CODE_SIZE, "%s", room->code);
+    return true;
+}
+
+static bool checkPartyInvite(RoomRequest *request, UserId target) {
+    Party *party = partyFindByUser(request->rooms, request->userId);
+    if (party && party->memberCount >= PARTY_MAX_MEMBERS) {
+        replyError(request, "BUSY", "Party is full");
+        return false;
+    }
+    if (partyFindByUser(request->rooms, target) != NULL) {
+        replyError(request, "BUSY", "Target user is already in a party");
+        return false;
+    }
+    return true;
+}
+
+/* Đọc user được mời và loại lời mời; trả lời lỗi và trả false nếu sai. */
+static bool readInviteTarget(RoomRequest *request, UserId *outTarget, bool *outParty,
+                             Mode *outPartyMode) {
+    json_object *userJson = payloadField(request->envelope, "userId");
+    json_object *kindJson = payloadField(request->envelope, "kind");
+    if (!userJson || !kindJson) {
+        replyError(request, "BAD_REQUEST", "userId and kind required");
+        return false;
+    }
+    if (!lobbyParseUserIdJson(userJson, outTarget) || *outTarget == request->userId) {
+        replyError(request, "BAD_REQUEST", "Invalid target user");
+        return false;
+    }
+    const char *kind = json_object_get_string(kindJson);
+    if (strcasecmp(kind, "room") != 0 && strcasecmp(kind, "party") != 0) {
+        replyError(request, "BAD_REQUEST", "Kind must be room or party");
+        return false;
+    }
+    *outParty = strcasecmp(kind, "party") == 0;
+    if (*outParty && !parsePartyMode(request->envelope, outPartyMode)) {
+        replyError(request, "BAD_REQUEST", "Party mode must be 2v2 or side");
+        return false;
+    }
+    return true;
+}
+
+/* Push INVITE cho người được mời; người đó đã được kiểm tra là đang online. */
+static void pushInvite(RoomRequest *request, const Invite *invite, bool party) {
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "inviteId", json_object_new_string(invite->inviteId));
+    json_object_object_add(payload, "senderId", lobbyUserIdJson(request->userId));
+    json_object_object_add(payload, "senderName", json_object_new_string(request->account.name));
+    json_object_object_add(payload, "kind", json_object_new_string(invite->kind));
+    if (invite->roomCode[0]) {
+        json_object_object_add(payload, "roomId", json_object_new_string(invite->roomCode));
+    }
+    if (party) {
+        const char *modeName = lobbyModeName(invite->mode);
+        json_object_object_add(payload, "mode", json_object_new_string(modeName));
+    }
+    (void)appPush(request->app, invite->recipientId, "INVITE", payload);
+    json_object_put(payload);
+}
+
+static void handleInviteSend(RoomRequest *request) {
+    UserId target = 0;
+    bool party = false;
+    Mode partyMode = TWO_V_TWO;
+    if (!readInviteTarget(request, &target, &party, &partyMode)) return;
+    ConnId recipientConn;
+    if (sessionsFindConn(request->app, target, &recipientConn) != OK) {
+        replyError(request, "NOT_FOUND", "User is offline");
+        return;
+    }
+    char roomCode[ROOM_CODE_SIZE] = {0};
+    if (party ? !checkPartyInvite(request, target) : !checkRoomInvite(request, target, roomCode)) {
+        return;
+    }
+    char inviteId[INVITE_ID_SIZE];
+    const char *kind = json_object_get_string(payloadField(request->envelope, "kind"));
+    Status created = roomsInviteCreate(request->rooms, request->userId, target, kind, roomCode,
+                                       inviteId);
+    if (created != OK) {
+        replyError(request, "SERVER_FULL", "Too many active invites");
+        return;
+    }
+    Invite *invite = findInvite(request->rooms, inviteId);
+    if (!invite) {
+        replyError(request, "STORAGE_ERROR", "Failed to allocate invite");
+        return;
+    }
+    invite->mode = partyMode;
+    pushInvite(request, invite, party);
+    json_object *payload = json_object_new_object();
+    json_object_object_add(payload, "inviteId", json_object_new_string(invite->inviteId));
+    replyOk(request, payload);
+}
+
+/* Nhận lời mời vào phòng. Lỗi do phòng (mất, đầy) làm lời mời hết hiệu lực; lỗi
+ * do người nhận đang ở phòng khác thì giữ lời mời để nhận lại sau. */
+static void acceptRoomInvite(RoomRequest *request, Invite *invite) {
+    if (roomsFindByUser(request->rooms, request->userId) != NULL) {
+        replyError(request, "BUSY", "Already in a room");
+        return;
+    }
+    Seat seat = 0;
+    Status status = joinRoom(request, invite->roomCode, &seat);
+    if (status == BUSY) {
+        replyError(request, "BUSY", "Already in a room");
+        return;
+    }
+    invite->active = false;
+    if (status != OK) {
+        replyStatusError(request, status, JOIN_MESSAGES, ARRAY_LENGTH(JOIN_MESSAGES),
+                         "Could not join room");
+        return;
+    }
+    replyOk(request, seatedReplyJson(invite->roomCode, seat));
+    broadcastRoomByCode(request->app, invite->roomCode);
+}
+
+static void acceptPartyInvite(RoomRequest *request, Invite *invite) {
+    if (partyFindByUser(request->rooms, request->userId) != NULL) {
+        replyError(request, "BUSY", "Already in a party");
+        return;
+    }
+    Party *party = partyFindByUser(request->rooms, invite->senderId);
+    if (!party) {
+        party = createParty(request->rooms, invite->senderId, request->userId, invite->mode);
+    } else if (party->memberCount < PARTY_MAX_MEMBERS) {
+        party->members[party->memberCount++] = request->userId;
+        party->revision++;
+    } else {
+        invite->active = false;
+        replyError(request, "BUSY", "Party is full");
+        return;
+    }
+    invite->active = false;
+    replyOk(request, NULL);
+    if (party) broadcastPartyState(request->app, party);
+}
+
+/* Lời mời đang chờ gửi tới chính người gửi request, hoặc NULL (đã trả lời lỗi). */
+static Invite *pendingInviteFor(RoomRequest *request, const char *inviteId) {
+    Invite *invite = findInvite(request->rooms, inviteId);
+    if (!invite || invite->recipientId != request->userId) {
+        replyError(request, "NOT_FOUND", "Invite not found");
+        return NULL;
+    }
+    if (accountsGetNowMs() - invite->createdAtMs > INVITE_TIMEOUT_MS) {
+        invite->active = false;
+        replyError(request, "NOT_FOUND", "Invite has expired");
+        return NULL;
+    }
+    return invite;
+}
+
+static void handleInviteReply(RoomRequest *request) {
+    json_object *idJson = payloadField(request->envelope, "inviteId");
+    json_object *acceptJson = payloadField(request->envelope, "accept");
+    if (!idJson || !acceptJson) {
+        replyError(request, "BAD_REQUEST", "inviteId and accept required");
+        return;
+    }
+    Invite *invite = pendingInviteFor(request, json_object_get_string(idJson));
+    if (!invite) return;
+    if (!json_object_get_boolean(acceptJson)) {
+        invite->active = false;
+        replyOk(request, NULL);
+        return;
+    }
+    /* Nhận lời: lời mời vẫn chờ nếu bị từ chối tạm, để nhận lại được sau trận. */
+    if (rejectIfInMatch(request) || rejectIfQueued(request)) return;
+    bool partyInvite = strcasecmp(invite->kind, "party") == 0;
+    /* Một mục party luôn chứa đủ hai người, nên người mời đang xếp hàng một mình
+     * cũng không thể có thêm bạn cùng đội. */
+    if (partyInvite && queueContains(request->app->queue, invite->senderId)) {
+        replyError(request, "BUSY", "Inviter is in matchmaking");
+        return;
+    }
+    if (strcasecmp(invite->kind, "room") == 0) acceptRoomInvite(request, invite);
+    else acceptPartyInvite(request, invite);
+}
+
+static void handlePartyLeave(RoomRequest *request) {
+    /* Mục party trong hàng chờ không thể sống lâu hơn party; mục solo thì giữ. */
+    if (partyFindByUser(request->rooms, request->userId)) {
+        queueUserGone(request->app, request->userId);
+    }
+    partyLeave(request->rooms, request->userId);
+    replyOk(request, NULL);
+}
+
+/* ------------------------------- Điều phối ------------------------------- */
+
+typedef void (*RoomHandler)(RoomRequest *request);
+
+static const struct {
+    const char *type;
+    RoomHandler handler;
+} ROOM_HANDLERS[] = {
+    {"ROOM_CREATE", handleRoomCreate}, {"ROOM_JOIN", handleRoomJoin},
+    {"ROOM_LEAVE", handleRoomLeave}, {"ROOM_MODE", handleRoomMode},
+    {"ROOM_BOT", handleRoomBot}, {"ROOM_KICK", handleRoomKick},
+    {"ROOM_START", handleRoomStart}, {"INVITE_SEND", handleInviteSend},
+    {"INVITE_REPLY", handleInviteReply}, {"PARTY_LEAVE", handlePartyLeave},
+};
+
+/* Tên/avatar của người gửi; không đọc được hồ sơ thì dùng "Player<id>" và "fox". */
+static void loadRequesterIdentity(App *app, UserId userId, Account *outAccount) {
+    memset(outAccount, 0, sizeof(*outAccount));
+    if (app->store) (void)storeAccountGetById(app->store, userId, outAccount);
+    if (outAccount->name[0] == '\0') {
+        lobbyFallbackName(userId, outAccount->name, sizeof(outAccount->name));
+        snprintf(outAccount->avatar, sizeof(outAccount->avatar), "%s", "fox");
+    }
 }
 
 Status roomsHandle(App *app, ConnId connId, const Envelope *envelope) {
     if (!app || !app->rooms || !envelope) return BAD_REQUEST;
-    Rooms *rooms = app->rooms;
-
-    UserId userId = 0;
-    if (sessionsUser(app, connId, &userId) != OK) {
-        sendError(app, connId, envelope->id, "UNAUTHENTICATED", "Authentication required");
+    RoomRequest request = {app, app->rooms, connId, envelope, 0, {0}};
+    if (sessionsUser(app, connId, &request.userId) != OK) {
+        replyError(&request, "UNAUTHENTICATED", "Authentication required");
         return OK;
     }
-
-    Account account;
-    memset(&account, 0, sizeof(account));
-    if (app->store) {
-        storeAccountGetById(app->store, userId, &account);
-    }
-    if (account.name[0] == '\0') {
-        snprintf(account.name, sizeof(account.name), "Player%llu", (unsigned long long)userId);
-        strcpy(account.avatar, "fox");
-    }
-
-    if (strcmp(envelope->type, "ROOM_CREATE") == 0) {
-        if (rejectIfInMatch(app, connId, envelope->id, userId)) return OK;
-        if (rejectIfQueued(app, connId, envelope->id, userId)) return OK;
-        Mode mode = CLASSIC;
-        struct json_object *modeJson = NULL;
-        if (envelope->payload && json_object_object_get_ex(envelope->payload, "mode", &modeJson)) {
-            parseMode(modeJson, &mode);
-        }
-
-        char code[7] = {0};
-        Status status = roomsCreate(rooms, userId, account.name, account.avatar, mode, code);
-        if (status == BUSY) {
-            sendError(app, connId, envelope->id, "BUSY", "User already in a room");
-            return OK;
-        }
-        if (status == SERVER_FULL) {
-            sendError(app, connId, envelope->id, "SERVER_FULL", "Server room capacity reached");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not create room");
-            return OK;
-        }
-
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "roomId", json_object_new_string(code));
-        json_object_object_add(responsePayload, "code", json_object_new_string(code));
-        json_object_object_add(responsePayload, "mode", json_object_new_string(MODE_NAMES[mode]));
-        json_object_object_add(responsePayload, "seat", json_object_new_int(0));
-        sendOk(app, connId, envelope->id, responsePayload);
-
-        Room *room = roomsFindByCode(rooms, code);
-        if (room) roomsBroadcastState(app, room);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_JOIN") == 0) {
-        struct json_object *codeJson = NULL;
-        if (!envelope->payload || !json_object_object_get_ex(envelope->payload, "code",
-                                                             &codeJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Room code is required");
-            return OK;
-        }
-        if (rejectIfInMatch(app, connId, envelope->id, userId)) return OK;
-        if (rejectIfQueued(app, connId, envelope->id, userId)) return OK;
-        const char *code = json_object_get_string(codeJson);
-        Seat seat = 0;
-        Status status = roomsJoin(rooms, userId, account.name, account.avatar, code, &seat);
-        if (status == BUSY) {
-            sendError(app, connId, envelope->id, "BUSY", "User already in a room");
-            return OK;
-        }
-        if (status == NOT_FOUND) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-            return OK;
-        }
-        if (status == ROOM_FULL) {
-            sendError(app, connId, envelope->id, "ROOM_FULL", "Room is full");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not join room");
-            return OK;
-        }
-
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "roomId", json_object_new_string(code));
-        json_object_object_add(responsePayload, "code", json_object_new_string(code));
-        json_object_object_add(responsePayload, "seat", json_object_new_int(seat));
-        sendOk(app, connId, envelope->id, responsePayload);
-
-        Room *room = roomsFindByCode(rooms, code);
-        if (room) roomsBroadcastState(app, room);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_LEAVE") == 0) {
-        Room *room = roomsFindByUser(rooms, userId);
-        if (!room) {
-            sendOk(app, connId, envelope->id, NULL);
-            return OK;
-        }
-        char code[7];
-        strcpy(code, room->code);
-        roomsLeave(rooms, userId);
-        sendOk(app, connId, envelope->id, NULL);
-
-        Room *after = roomsFindByCode(rooms, code);
-        if (after) {
-            roomsBroadcastState(app, after);
-        }
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_MODE") == 0) {
-        struct json_object *modeJson = NULL;
-        if (!envelope->payload || !json_object_object_get_ex(envelope->payload, "mode",
-                                                             &modeJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Mode is required");
-            return OK;
-        }
-        Mode mode = CLASSIC;
-        if (!parseMode(modeJson, &mode)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Invalid mode");
-            return OK;
-        }
-        Status status = roomsSetMode(rooms, userId, mode);
-        if (status == FORBIDDEN) {
-            sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can change room mode");
-            return OK;
-        }
-        if (status == NOT_FOUND) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not set mode");
-            return OK;
-        }
-
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "mode", json_object_new_string(MODE_NAMES[mode]));
-        sendOk(app, connId, envelope->id, responsePayload);
-
-        Room *room = roomsFindByUser(rooms, userId);
-        if (room) roomsBroadcastState(app, room);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_BOT") == 0) {
-        struct json_object *seatJson = NULL, *levelJson = NULL;
-        if (!envelope->payload ||
-            !json_object_object_get_ex(envelope->payload, "seat", &seatJson) ||
-            !json_object_object_get_ex(envelope->payload, "level", &levelJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Seat and level are required");
-            return OK;
-        }
-        int seatValue = json_object_get_int(seatJson);
-        if (seatValue < 0 || seatValue >= ROOM_MAX_SEATS) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Seat must be between 0 and 3");
-            return OK;
-        }
-        BotLevel level = EASY;
-        if (!parseBotLevel(levelJson, &level)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Invalid bot level");
-            return OK;
-        }
-
-        Status status = roomsSetBot(rooms, userId, seatValue, level);
-        if (status == FORBIDDEN) {
-            sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can configure bots");
-            return OK;
-        }
-        if (status == NOT_FOUND) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not configure bot");
-            return OK;
-        }
-
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "seat", json_object_new_int(seatValue));
-        const char *levelNames[] = {"easy", "normal", "hard"};
-        json_object_object_add(responsePayload, "level", json_object_new_string(levelNames[level]));
-        sendOk(app, connId, envelope->id, responsePayload);
-
-        Room *room = roomsFindByUser(rooms, userId);
-        if (room) roomsBroadcastState(app, room);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_KICK") == 0) {
-        struct json_object *seatJson = NULL;
-        if (!envelope->payload || !json_object_object_get_ex(envelope->payload, "seat",
-                                                             &seatJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Seat is required");
-            return OK;
-        }
-        int seatValue = json_object_get_int(seatJson);
-        if (seatValue < 0 || seatValue >= ROOM_MAX_SEATS) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Seat must be between 0 and 3");
-            return OK;
-        }
-        /* roomsKick wipes the seat, so remember who sat there to notify them. */
-        UserId kickedUser = 0;
-        Room *before = roomsFindByUser(rooms, userId);
-        if (before && before->seats[seatValue].occupied && !before->seats[seatValue].isBot) {
-            kickedUser = before->seats[seatValue].userId;
-        }
-        Status status = roomsKick(rooms, userId, seatValue);
-        if (status == FORBIDDEN) {
-            sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can kick members");
-            return OK;
-        }
-        if (status == NOT_FOUND) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not kick member");
-            return OK;
-        }
-
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "seat", json_object_new_int(seatValue));
-        sendOk(app, connId, envelope->id, responsePayload);
-
-        Room *room = roomsFindByUser(rooms, userId);
-        if (room) {
-            /* The kicked user is no longer seated, so the broadcast skips them;
-             * the same snapshot tells their client it left the room. */
-            json_object *state = roomStateJson(room);
-            pushToSeatedHumans(app, room, state);
-            if (kickedUser) (void)appPush(app, kickedUser, "ROOM_STATE", state);
-            json_object_put(state);
-        }
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "ROOM_START") == 0) {
-        Room *room = roomsFindByUser(rooms, userId);
-        if (!room) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-            return OK;
-        }
-        if (room->seats[room->hostSeat].userId != userId) {
-            sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can start room");
-            return OK;
-        }
-
-        Status status = roomsStart(app, room->code);
-        if (status == BUSY) {
-            sendError(app, connId, envelope->id, "BUSY", "Match engine not available");
-            return OK;
-        }
-        if (status != OK) {
-            sendError(app, connId, envelope->id, "INVALID_ACTION",
-                      "Cannot start room: all 4 seats must be filled");
-            return OK;
-        }
-
-        sendOk(app, connId, envelope->id, NULL);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "INVITE_SEND") == 0) {
-        struct json_object *userJson = NULL, *kindJson = NULL;
-        if (!envelope->payload ||
-            !json_object_object_get_ex(envelope->payload, "userId", &userJson) ||
-            !json_object_object_get_ex(envelope->payload, "kind", &kindJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "userId and kind required");
-            return OK;
-        }
-
-        UserId targetUserId = 0;
-        if (json_object_is_type(userJson, json_type_string)) {
-            targetUserId = (UserId)strtoull(json_object_get_string(userJson), NULL, 10);
-        } else if (json_object_is_type(userJson, json_type_int)) {
-            targetUserId = (UserId)json_object_get_int64(userJson);
-        }
-
-        if (targetUserId == 0 || targetUserId == userId) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Invalid target user");
-            return OK;
-        }
-
-        const char *kind = json_object_get_string(kindJson);
-        if (strcasecmp(kind, "room") != 0 && strcasecmp(kind, "party") != 0) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Kind must be room or party");
-            return OK;
-        }
-        bool isParty = strcasecmp(kind, "party") == 0;
-        Mode partyMode = TWO_V_TWO;
-        if (isParty && !parsePartyMode(envelope->payload, &partyMode)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "Party mode must be 2v2 or side");
-            return OK;
-        }
-
-        /* Check recipient is online */
-        ConnId recipientConn;
-        if (sessionsFindConn(app, targetUserId, &recipientConn) != OK) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "User is offline");
-            return OK;
-        }
-
-        char roomCode[7] = {0};
-        if (strcasecmp(kind, "room") == 0) {
-            Room *room = roomsFindByUser(rooms, userId);
-            if (!room) {
-                sendError(app, connId, envelope->id, "INVALID_ACTION", "You are not in a room");
-                return OK;
-            }
-            int occupiedSeats = 0;
-            for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-                if (room->seats[i].occupied) occupiedSeats++;
-            }
-            if (occupiedSeats >= ROOM_MAX_SEATS) {
-                sendError(app, connId, envelope->id, "ROOM_FULL", "Room is full");
-                return OK;
-            }
-            if (roomsFindByUser(rooms, targetUserId) != NULL) {
-                sendError(app, connId, envelope->id, "BUSY", "Target user is already in a room");
-                return OK;
-            }
-            strcpy(roomCode, room->code);
-        } else {
-            /* Party */
-            Party *party = partyFindByUser(rooms, userId);
-            if (party && party->memberCount >= PARTY_MAX_MEMBERS) {
-                sendError(app, connId, envelope->id, "BUSY", "Party is full");
-                return OK;
-            }
-            if (partyFindByUser(rooms, targetUserId) != NULL) {
-                sendError(app, connId, envelope->id, "BUSY", "Target user is already in a party");
-                return OK;
-            }
-        }
-
-        /* Create invite */
-        char inviteIdBuffer[37];
-        Status inviteStatus = roomsInviteCreate(rooms, userId, targetUserId, kind, roomCode,
-                                                  inviteIdBuffer);
-        if (inviteStatus != OK) {
-            sendError(app, connId, envelope->id, "SERVER_FULL", "Too many active invites");
-            return OK;
-        }
-        Invite *invite = NULL;
-        for (int i = 0; i < MAX_INVITES; i++) {
-            if (rooms->invites[i].active && strcmp(rooms->invites[i].inviteId,
-                                                   inviteIdBuffer) == 0) {
-                invite = &rooms->invites[i];
-                break;
-            }
-        }
-        if (!invite) {
-            sendError(app, connId, envelope->id, "STORAGE_ERROR", "Failed to allocate invite");
-            return OK;
-        }
-        invite->mode = partyMode;
-
-        /* Push INVITE to recipient */
-        struct json_object *pushPayload = json_object_new_object();
-        json_object_object_add(pushPayload, "inviteId", json_object_new_string(invite->inviteId));
-        char senderText[32];
-        snprintf(senderText, sizeof(senderText), "%llu", (unsigned long long)userId);
-        json_object_object_add(pushPayload, "senderId", json_object_new_string(senderText));
-        json_object_object_add(pushPayload, "senderName", json_object_new_string(account.name));
-        json_object_object_add(pushPayload, "kind", json_object_new_string(invite->kind));
-        if (roomCode[0]) {
-            json_object_object_add(pushPayload, "roomId", json_object_new_string(roomCode));
-        }
-        if (isParty) {
-            json_object_object_add(pushPayload, "mode",
-                                   json_object_new_string(MODE_NAMES[invite->mode]));
-        }
-
-        Envelope pushEnvelope = {1, 0, "INVITE", pushPayload};
-        if (recipientConn.slot < APP_MAX_CONNS) {
-            AppConnSlot *recipientSlot = &app->slots[recipientConn.slot];
-            if (recipientSlot->active && recipientSlot->generation == recipientConn.generation) {
-                connQueue(&recipientSlot->conn, &pushEnvelope);
-                connFlush(&recipientSlot->conn);
-            }
-        }
-        json_object_put(pushPayload);
-
-        /* Send OK to sender */
-        struct json_object *responsePayload = json_object_new_object();
-        json_object_object_add(responsePayload, "inviteId",
-                               json_object_new_string(invite->inviteId));
-        sendOk(app, connId, envelope->id, responsePayload);
-        return OK;
-    }
-
-    if (strcmp(envelope->type, "INVITE_REPLY") == 0) {
-        struct json_object *idJson = NULL, *acceptJson = NULL;
-        if (!envelope->payload ||
-            !json_object_object_get_ex(envelope->payload, "inviteId", &idJson) ||
-            !json_object_object_get_ex(envelope->payload, "accept", &acceptJson)) {
-            sendError(app, connId, envelope->id, "BAD_REQUEST", "inviteId and accept required");
-            return OK;
-        }
-
-        const char *inviteId = json_object_get_string(idJson);
-        bool accept = json_object_get_boolean(acceptJson);
-
-        Invite *invite = NULL;
-        for (int i = 0; i < MAX_INVITES; i++) {
-            if (rooms->invites[i].active && strcmp(rooms->invites[i].inviteId, inviteId) == 0) {
-                invite = &rooms->invites[i];
-                break;
-            }
-        }
-
-        if (!invite || invite->recipientId != userId) {
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Invite not found");
-            return OK;
-        }
-
-        uint64_t now = monotonicNowMs();
-        if (now - invite->createdAtMs > INVITE_TIMEOUT_MS) {
-            invite->active = false;
-            sendError(app, connId, envelope->id, "NOT_FOUND", "Invite has expired");
-            return OK;
-        }
-
-        if (!accept) {
-            invite->active = false;
-            sendOk(app, connId, envelope->id, NULL);
-            return OK;
-        }
-
-        /* Accept invite; the invite stays pending so it can be accepted after the match. */
-        if (rejectIfInMatch(app, connId, envelope->id, userId)) return OK;
-        if (rejectIfQueued(app, connId, envelope->id, userId)) return OK;
-        /* A party entry always holds both members, so a solo-queued inviter
-         * cannot gain a partner either. */
-        if (strcasecmp(invite->kind,
-                       "party") == 0 && queueContains(app->queue, invite->senderId)) {
-            sendError(app, connId, envelope->id, "BUSY", "Inviter is in matchmaking");
-            return OK;
-        }
-        if (strcasecmp(invite->kind, "room") == 0) {
-            if (roomsFindByUser(rooms, userId) != NULL) {
-                sendError(app, connId, envelope->id, "BUSY", "Already in a room");
-                return OK;
-            }
-            Seat seat = 0;
-            Status status = roomsJoin(rooms, userId, account.name, account.avatar,
-                                       invite->roomCode, &seat);
-            if (status == BUSY) {
-                sendError(app, connId, envelope->id, "BUSY", "Already in a room");
-                return OK;
-            }
-            if (status == NOT_FOUND) {
-                invite->active = false;
-                sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
-                return OK;
-            }
-            if (status == ROOM_FULL) {
-                invite->active = false;
-                sendError(app, connId, envelope->id, "ROOM_FULL", "Room is full");
-                return OK;
-            }
-            if (status != OK) {
-                invite->active = false;
-                sendError(app, connId, envelope->id, "INVALID_ACTION", "Could not join room");
-                return OK;
-            }
-
-            char code[7];
-            strcpy(code, invite->roomCode);
-            invite->active = false;
-
-            struct json_object *responsePayload = json_object_new_object();
-            json_object_object_add(responsePayload, "roomId", json_object_new_string(code));
-            json_object_object_add(responsePayload, "code", json_object_new_string(code));
-            json_object_object_add(responsePayload, "seat", json_object_new_int(seat));
-            sendOk(app, connId, envelope->id, responsePayload);
-
-            Room *room = roomsFindByCode(rooms, code);
-            if (room) roomsBroadcastState(app, room);
-            return OK;
-        } else {
-            /* Party invite accepted */
-            if (partyFindByUser(rooms, userId) != NULL) {
-                sendError(app, connId, envelope->id, "BUSY", "Already in a party");
-                return OK;
-            }
-            Party *party = partyFindByUser(rooms, invite->senderId);
-            if (!party) {
-                /* Create new party */
-                int partySlot = -1;
-                for (int i = 0; i < MAX_PARTIES; i++) {
-                    if (!rooms->parties[i].active) {
-                        partySlot = i;
-                        break;
-                    }
-                }
-                if (partySlot >= 0) {
-                    party = &rooms->parties[partySlot];
-                    party->active = true;
-                    party->partyId = rooms->nextPartyId++;
-                    party->leaderId = invite->senderId;
-                    party->members[0] = invite->senderId;
-                    party->members[1] = userId;
-                    party->memberCount = 2;
-                    party->mode = invite->mode;
-                    party->revision = 1;
-                }
-            } else {
-                if (party->memberCount < PARTY_MAX_MEMBERS) {
-                    party->members[party->memberCount++] = userId;
-                    party->revision++;
-                } else {
-                    invite->active = false;
-                    sendError(app, connId, envelope->id, "BUSY", "Party is full");
-                    return OK;
-                }
-            }
-
-            invite->active = false;
-            sendOk(app, connId, envelope->id, NULL);
-
-            if (party) broadcastPartyState(app, party);
+    loadRequesterIdentity(app, request.userId, &request.account);
+    for (size_t i = 0; i < ARRAY_LENGTH(ROOM_HANDLERS); i++) {
+        if (strcmp(envelope->type, ROOM_HANDLERS[i].type) == 0) {
+            ROOM_HANDLERS[i].handler(&request);
             return OK;
         }
     }
-
-    if (strcmp(envelope->type, "PARTY_LEAVE") == 0) {
-        /* The queued party entry cannot outlive the party; a solo entry stays. */
-        if (partyFindByUser(rooms, userId)) queueUserGone(app, userId);
-        partyLeave(rooms, userId);
-        sendOk(app, connId, envelope->id, NULL);
-        return OK;
-    }
-
-    sendError(app, connId, envelope->id, "BAD_REQUEST", "Unknown command");
+    replyError(&request, "BAD_REQUEST", "Unknown command");
     return OK;
 }

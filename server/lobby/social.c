@@ -2,29 +2,24 @@
 #include "social.h"
 #include "server/auth/accounts.h"
 #include "server/game/match.h"
-#include "server/lobby/queue.h"
 #include "server/game/rating.h"
+#include "server/lobby/lobby_common.h"
+#include "server/lobby/queue.h"
 #include "server/lobby/rooms.h"
 #include "server/storage/store.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-enum {
-    ID_TEXT_SIZE = 32, /* fits the decimal form of any 64-bit id */
-    TAG_TEXT_SIZE = 32, /* buffer size accountsFormatTag writes */
-    MS_PER_SECOND = 1000,
-    DECIMAL_BASE = 10
-};
+#define ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))
+
+enum { MS_PER_SECOND = 1000 };
 
 static const char TAG_PREFIX[] = "UNO#";
 
-/* Same order as Mode and Profile.modes. */
-static const char *const MODE_KEYS[STORE_MODE_COUNT] = {"classic", "2v2", "side", "draft"};
-
 static const char *const PRESENCE_KEYS[] = {"offline", "idle", "online", "in_match"};
 
-/* Spec §6 badge names, one per BadgeBit. */
+/* Tên huy hiệu theo spec §6, mỗi BadgeBit một tên. */
 static const struct { BadgeBit bit; const char *key; } BADGE_KEYS[] = {
     {BADGE_FIRST_WIN, "first-win"}, {BADGE_WIN_100, "win-100"},
     {BADGE_STREAK_10, "streak-10"}, {BADGE_PLUS4, "plus4"},
@@ -32,47 +27,16 @@ static const struct { BadgeBit bit; const char *key; } BADGE_KEYS[] = {
     {BADGE_MATCHES, "matches-500"}, {BADGE_DIAMOND, "diamond"}
 };
 
-/* ---------------------------------------------------------------------------
- * Parsing
- * ------------------------------------------------------------------------- */
-
-/* Canonical decimal only: the wire never carries signs, spaces or padding, and
- * anything above INT64_MAX cannot be an SQLite rowid. */
-static bool parseIdText(const char *text, UserId *outUserId) {
-    if (!text || text[0] < '1' || text[0] > '9') return false;
-    uint64_t value = 0;
-    for (const char *cursor = text; *cursor; cursor++) {
-        if (*cursor < '0' || *cursor > '9') return false;
-        uint64_t digit = (uint64_t)(*cursor - '0');
-        if (value > ((uint64_t)INT64_MAX - digit) / DECIMAL_BASE) return false;
-        value = value * DECIMAL_BASE + digit;
-    }
-    *outUserId = (UserId)value;
-    return true;
-}
+/* ------------------------------- Đọc tham số ------------------------------- */
 
 bool socialParseTag(const char *tag, UserId *outUserId) {
     if (!tag || !outUserId) return false;
     size_t prefixLength = sizeof TAG_PREFIX - 1;
     if (strncmp(tag, TAG_PREFIX, prefixLength) != 0) return false;
-    return parseIdText(tag + prefixLength, outUserId);
+    return lobbyParseUserIdText(tag + prefixLength, outUserId);
 }
 
-/* User ids travel as decimal strings; a plain positive JSON integer is also
- * accepted, like INVITE_SEND does. */
-static bool parseUserIdValue(json_object *value, UserId *outUserId) {
-    if (json_object_is_type(value, json_type_string)) {
-        return parseIdText(json_object_get_string(value), outUserId);
-    }
-    if (json_object_is_type(value, json_type_int)) {
-        int64_t number = json_object_get_int64(value);
-        if (number <= 0) return false;
-        *outUserId = (UserId)number;
-        return true;
-    }
-    return false;
-}
-
+/* Trường chuỗi của payload, hoặc NULL khi thiếu hay không phải chuỗi. */
 static const char *stringField(const Envelope *envelope, const char *key) {
     json_object *value = NULL;
     if (!envelope->payload || !json_object_object_get_ex(envelope->payload, key, &value) ||
@@ -82,9 +46,16 @@ static const char *stringField(const Envelope *envelope, const char *key) {
     return json_object_get_string(value);
 }
 
-/* ---------------------------------------------------------------------------
- * Presence
- * ------------------------------------------------------------------------- */
+/* Trường JSON bất kỳ của payload, hoặc NULL. */
+static json_object *payloadField(const Envelope *envelope, const char *key) {
+    json_object *value = NULL;
+    if (!envelope->payload || !json_object_object_get_ex(envelope->payload, key, &value)) {
+        return NULL;
+    }
+    return value;
+}
+
+/* --------------------------------- Presence --------------------------------- */
 
 Presence socialPresenceOf(App *app, UserId user) {
     if (!app || user == 0) return PRESENCE_OFFLINE;
@@ -99,33 +70,23 @@ Presence socialPresenceOf(App *app, UserId user) {
 }
 
 const char *socialPresenceKey(Presence presence) {
-    size_t keyCount = sizeof PRESENCE_KEYS / sizeof PRESENCE_KEYS[0];
-    if ((size_t)presence >= keyCount) return PRESENCE_KEYS[PRESENCE_OFFLINE];
+    if ((size_t)presence >= ARRAY_LENGTH(PRESENCE_KEYS)) return PRESENCE_KEYS[PRESENCE_OFFLINE];
     return PRESENCE_KEYS[presence];
 }
 
-/* ---------------------------------------------------------------------------
- * JSON builders
- * ------------------------------------------------------------------------- */
-
-/* Wire ids are decimal strings so 64-bit ids survive JSON number precision. */
-static json_object *userIdJson(UserId user) {
-    char idText[ID_TEXT_SIZE];
-    snprintf(idText, sizeof idText, "%llu", (unsigned long long)user);
-    return json_object_new_string(idText);
-}
+/* ------------------------------- Dựng JSON ------------------------------- */
 
 static json_object *tagJson(UserId user) {
-    char tag[TAG_TEXT_SIZE];
+    char tag[USER_TAG_SIZE];
     accountsFormatTag(user, tag);
     return json_object_new_string(tag);
 }
 
-/* Public identity shared by friend rows, leaderboard entries and profiles;
- * nothing private (email, hash, token) ever goes through here. */
+/* Danh tính công khai dùng chung cho hàng bạn bè, bảng xếp hạng và hồ sơ; không
+ * thông tin riêng tư nào (email, hash, token) đi qua đây. */
 static void addIdentity(json_object *object, UserId user, const char *name,
-                         const char *avatar, int elo) {
-    json_object_object_add(object, "userId", userIdJson(user));
+                        const char *avatar, int elo) {
+    json_object_object_add(object, "userId", lobbyUserIdJson(user));
     json_object_object_add(object, "tag", tagJson(user));
     json_object_object_add(object, "name", json_object_new_string(name));
     json_object_object_add(object, "avatar", json_object_new_string(avatar));
@@ -136,8 +97,8 @@ static json_object *friendRowJson(App *app, const FriendRow *row) {
     json_object *object = json_object_new_object();
     bool pending = row->link != FRIEND_ACCEPTED;
     bool incoming = row->link == FRIEND_PENDING_IN;
-    /* Spec: presence is shown to friends only; a stranger who merely sent or
-     * received a request cannot watch the other account come and go. */
+    /* Spec: presence chỉ hiện cho bạn bè; người lạ mới gửi hoặc nhận lời mời không
+     * được theo dõi tài khoản kia lúc online/offline. */
     Presence presence = pending ? PRESENCE_OFFLINE : socialPresenceOf(app, row->userId);
     addIdentity(object, row->userId, row->name, row->avatar, row->elo);
     json_object_object_add(object, "presence",
@@ -146,8 +107,8 @@ static json_object *friendRowJson(App *app, const FriendRow *row) {
                            json_object_new_boolean(presence != PRESENCE_OFFLINE));
     json_object_object_add(object, "pending", json_object_new_boolean(pending));
     json_object_object_add(object, "incoming", json_object_new_boolean(incoming));
-    /* FRIEND_REPLY names the request by its sender, so only the receiver needs it. */
-    if (incoming) json_object_object_add(object, "requestId", userIdJson(row->userId));
+    /* FRIEND_REPLY gọi lời mời theo người gửi, nên chỉ phía nhận cần requestId. */
+    if (incoming) json_object_object_add(object, "requestId", lobbyUserIdJson(row->userId));
     return object;
 }
 
@@ -159,7 +120,7 @@ static json_object *friendsArrayJson(App *app, const FriendRow rows[], size_t co
     return friends;
 }
 
-/* FRIEND_LIST OK and FRIEND_STATE share this {friends:[...]} shape. */
+/* Phản hồi FRIEND_LIST và push FRIEND_STATE dùng chung dạng {friends:[...]}. */
 static Status friendStateJson(App *app, UserId user, json_object **outJson) {
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
@@ -170,11 +131,14 @@ static Status friendStateJson(App *app, UserId user, json_object **outJson) {
     return OK;
 }
 
+static json_object *rankJson(int elo) {
+    return json_object_new_string(ratingRankKey(ratingRank(elo)));
+}
+
 static json_object *leaderboardEntryJson(const LeaderboardEntry *entry) {
     json_object *object = json_object_new_object();
     addIdentity(object, entry->userId, entry->name, entry->avatar, entry->elo);
-    json_object_object_add(object, "rank",
-                           json_object_new_string(ratingRankKey(ratingRank(entry->elo))));
+    json_object_object_add(object, "rank", rankJson(entry->elo));
     return object;
 }
 
@@ -205,8 +169,7 @@ static json_object *statsJson(const ProfileStats *stats) {
 
 static json_object *badgesJson(uint32_t badges) {
     json_object *keys = json_object_new_array();
-    size_t badgeCount = sizeof BADGE_KEYS / sizeof BADGE_KEYS[0];
-    for (size_t index = 0; index < badgeCount; index++) {
+    for (size_t index = 0; index < ARRAY_LENGTH(BADGE_KEYS); index++) {
         if (badges & BADGE_KEYS[index].bit) {
             json_object_array_add(keys, json_object_new_string(BADGE_KEYS[index].key));
         }
@@ -218,7 +181,7 @@ static json_object *modesJson(const Profile *profile) {
     json_object *modes = json_object_new_array();
     for (size_t mode = 0; mode < STORE_MODE_COUNT; mode++) {
         json_object *object = json_object_new_object();
-        json_object_object_add(object, "key", json_object_new_string(MODE_KEYS[mode]));
+        json_object_object_add(object, "key", json_object_new_string(lobbyModeName((Mode)mode)));
         json_object_object_add(object, "matches",
                                json_object_new_int64(profile->modes[mode].matches));
         json_object_object_add(object, "wins", json_object_new_int64(profile->modes[mode].wins));
@@ -227,20 +190,16 @@ static json_object *modesJson(const Profile *profile) {
     return modes;
 }
 
-static const char *modeKey(Mode mode) {
-    return (size_t)mode < STORE_MODE_COUNT ? MODE_KEYS[mode] : MODE_KEYS[CLASSIC];
-}
-
 static json_object *historyJson(const Profile *profile) {
     json_object *history = json_object_new_array();
     for (size_t index = 0; index < profile->historyCount; index++) {
         const HistoryRow *row = &profile->history[index];
         json_object *object = json_object_new_object();
         json_object_object_add(object, "matchId", json_object_new_string(row->matchId));
-        json_object_object_add(object, "mode", json_object_new_string(modeKey(row->mode)));
+        json_object_object_add(object, "mode", json_object_new_string(lobbyModeName(row->mode)));
         json_object_object_add(object, "won", json_object_new_boolean(row->won));
         json_object_object_add(object, "delta", json_object_new_int(row->eloDelta));
-        /* The store keeps Unix seconds; the wire uses epoch milliseconds like serverTimeMs. */
+        /* Store lưu giây Unix; wire dùng mili giây epoch giống serverTimeMs. */
         json_object_object_add(object, "when",
                                json_object_new_int64(row->endedAt * MS_PER_SECOND));
         json_object_array_add(history, object);
@@ -251,8 +210,7 @@ static json_object *historyJson(const Profile *profile) {
 static json_object *profileJson(const Profile *profile) {
     json_object *object = json_object_new_object();
     addIdentity(object, profile->userId, profile->name, profile->avatar, profile->elo);
-    json_object_object_add(object, "rank",
-                           json_object_new_string(ratingRankKey(ratingRank(profile->elo))));
+    json_object_object_add(object, "rank", rankJson(profile->elo));
     json_object_object_add(object, "stats", statsJson(&profile->stats));
     json_object_object_add(object, "badges", badgesJson(profile->badges));
     json_object_object_add(object, "modes", modesJson(profile));
@@ -260,15 +218,13 @@ static json_object *profileJson(const Profile *profile) {
     return object;
 }
 
-/* ---------------------------------------------------------------------------
- * Pushes
- * ------------------------------------------------------------------------- */
+/* ---------------------------------- Push ---------------------------------- */
 
 static void pushFriendState(App *app, UserId user) {
-    /* Skip the store read for someone who cannot receive the push anyway. */
+    /* Không đọc Store cho người dù sao cũng không nhận được push. */
     if (socialPresenceOf(app, user) == PRESENCE_OFFLINE) return;
     json_object *state = NULL;
-    /* A failed read only costs this snapshot; the next change sends another. */
+    /* Đọc lỗi chỉ mất bản snapshot này; lần thay đổi sau sẽ gửi bản khác. */
     if (friendStateJson(app, user, &state) != OK) return;
     (void)appPush(app, user, "FRIEND_STATE", state);
     json_object_put(state);
@@ -282,67 +238,75 @@ void socialPresence(App *app, UserId user) {
 
     json_object *own = json_object_new_object();
     json_object_object_add(own, "friends", friendsArrayJson(app, rows, count));
-    /* NOT_FOUND just means u itself is offline; the friends still hear about it. */
+    /* NOT_FOUND chỉ có nghĩa là chính user đang offline; bạn bè vẫn được báo. */
     (void)appPush(app, user, "FRIEND_STATE", own);
     json_object_put(own);
 
-    /* Each friend gets their own whole list: FRIEND_STATE replaces it client-side. */
+    /* Mỗi người bạn nhận nguyên danh sách của họ: FRIEND_STATE thay thế toàn bộ ở client. */
     for (size_t index = 0; index < count; index++) {
         if (rows[index].link == FRIEND_ACCEPTED) pushFriendState(app, rows[index].userId);
     }
 }
 
-/* ---------------------------------------------------------------------------
- * Request handlers
- * ------------------------------------------------------------------------- */
+/* ------------------------------ Xử lý request ------------------------------ */
 
-static void replyBuilt(App *app, ConnId conn, int32_t id, Status status, json_object *payload) {
+/* Một request social đang xử lý; @c me luôn lấy từ phiên, không từ payload. */
+typedef struct {
+    App *app;
+    ConnId conn;
+    const Envelope *envelope;
+    UserId me;
+} SocialRequest;
+
+static void replyStatus(const SocialRequest *request, Status status) {
+    appReplyStatus(request->app, request->conn, request->envelope->id, status);
+}
+
+/* Trả OK với payload đã dựng rồi giải phóng nó; status lỗi thì trả ERROR. */
+static void replyBuilt(const SocialRequest *request, Status status, json_object *payload) {
     if (status != OK) {
-        appReplyStatus(app, conn, id, status);
+        replyStatus(request, status);
         return;
     }
-    appReplyOk(app, conn, id, payload);
+    appReplyOk(request->app, request->conn, request->envelope->id, payload);
     json_object_put(payload);
 }
 
-static void handleFriendList(App *app, ConnId conn, const Envelope *envelope, UserId me) {
+static void handleFriendList(const SocialRequest *request) {
     json_object *state = NULL;
-    Status status = friendStateJson(app, me, &state);
-    replyBuilt(app, conn, envelope->id, status, state);
+    Status status = friendStateJson(request->app, request->me, &state);
+    replyBuilt(request, status, state);
 }
 
-static void handleFriendRequest(App *app, ConnId conn, const Envelope *envelope, UserId me) {
+static void handleFriendRequest(const SocialRequest *request) {
     UserId target = 0;
-    if (!socialParseTag(stringField(envelope, "tag"), &target) || target == me) {
-        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
+    if (!socialParseTag(stringField(request->envelope, "tag"), &target) || target == request->me) {
+        replyStatus(request, BAD_REQUEST);
         return;
     }
-    /* NOT_FOUND (no such account) and INVALID_ACTION (already linked) come from the store. */
-    Status status = storeFriendRequest(app->store, me, target);
-    appReplyStatus(app, conn, envelope->id, status);
+    /* NOT_FOUND (không có tài khoản) và INVALID_ACTION (đã có quan hệ) đến từ Store. */
+    Status status = storeFriendRequest(request->app->store, request->me, target);
+    replyStatus(request, status);
     if (status != OK) return;
-    pushFriendState(app, me);
-    pushFriendState(app, target);
+    pushFriendState(request->app, request->me);
+    pushFriendState(request->app, target);
 }
 
-static void handleFriendReply(App *app, ConnId conn, const Envelope *envelope, UserId me) {
-    json_object *requestObj = NULL;
-    json_object *acceptObj = NULL;
+static void handleFriendReply(const SocialRequest *request) {
+    json_object *requestJson = payloadField(request->envelope, "requestId");
+    json_object *acceptJson = payloadField(request->envelope, "accept");
     UserId requester = 0;
-    if (!envelope->payload ||
-        !json_object_object_get_ex(envelope->payload, "requestId", &requestObj) ||
-        !json_object_object_get_ex(envelope->payload, "accept", &acceptObj) ||
-        !json_object_is_type(acceptObj, json_type_boolean) ||
-        !parseUserIdValue(requestObj, &requester)) {
-        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
+    if (!requestJson || !json_object_is_type(acceptJson, json_type_boolean) ||
+        !lobbyParseUserIdJson(requestJson, &requester)) {
+        replyStatus(request, BAD_REQUEST);
         return;
     }
-    Status status = storeFriendReply(app->store, me, requester,
-                                       json_object_get_boolean(acceptObj));
-    appReplyStatus(app, conn, envelope->id, status);
+    Status status = storeFriendReply(request->app->store, request->me, requester,
+                                     json_object_get_boolean(acceptJson));
+    replyStatus(request, status);
     if (status != OK) return;
-    pushFriendState(app, me);
-    pushFriendState(app, requester);
+    pushFriendState(request->app, request->me);
+    pushFriendState(request->app, requester);
 }
 
 static Status loadProfileJson(App *app, UserId user, json_object **outJson) {
@@ -353,125 +317,127 @@ static Status loadProfileJson(App *app, UserId user, json_object **outJson) {
     return OK;
 }
 
-static void replyProfile(App *app, ConnId conn, int32_t id, json_object *profile) {
+/* Bọc hồ sơ thành {profile:...} rồi trả OK; hàm chiếm quyền sở hữu @p profile. */
+static void replyProfile(const SocialRequest *request, json_object *profile) {
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "profile", profile);
-    appReplyOk(app, conn, id, payload);
-    json_object_put(payload);
+    replyBuilt(request, OK, payload);
 }
 
-static void handleProfileGet(App *app, ConnId conn, const Envelope *envelope, UserId me) {
-    UserId target = me;
-    json_object *userObj = NULL;
-    if (envelope->payload && json_object_object_get_ex(envelope->payload, "userId", &userObj) &&
-        !parseUserIdValue(userObj, &target)) {
-        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
+static void handleProfileGet(const SocialRequest *request) {
+    UserId target = request->me;
+    json_object *userJson = payloadField(request->envelope, "userId");
+    if (userJson && !lobbyParseUserIdJson(userJson, &target)) {
+        replyStatus(request, BAD_REQUEST);
         return;
     }
     json_object *profile = NULL;
-    Status status = loadProfileJson(app, target, &profile);
+    Status status = loadProfileJson(request->app, target, &profile);
     if (status != OK) {
-        appReplyStatus(app, conn, envelope->id, status);
+        replyStatus(request, status);
         return;
     }
-    replyProfile(app, conn, envelope->id, profile);
+    replyProfile(request, profile);
 }
 
-static void handleProfileUpdate(App *app, ConnId conn, const Envelope *envelope, UserId me) {
-    json_object *userObj = NULL;
-    if (envelope->payload && json_object_object_get_ex(envelope->payload, "userId", &userObj)) {
-        UserId target = 0;
-        if (!parseUserIdValue(userObj, &target)) {
-            appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
-            return;
-        }
-        /* The account to edit always comes from the session, never the payload. */
-        if (target != me) {
-            appReplyStatus(app, conn, envelope->id, FORBIDDEN);
-            return;
-        }
-    }
-    const char *name = stringField(envelope, "name");
-    const char *avatar = stringField(envelope, "avatar");
-    if (!accountsValidateName(name) || !accountsValidateAvatar(avatar)) {
-        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
-        return;
-    }
-    Status status = storeProfileUpdate(app->store, me, name, avatar);
-    if (status != OK) {
-        /* Nothing changed, so nobody is told anything. */
-        appReplyStatus(app, conn, envelope->id, status);
-        return;
-    }
+/**
+ * @brief Kiểm tra trường "userId" tùy chọn của PROFILE_UPDATE.
+ *
+ * Tài khoản được sửa luôn lấy từ phiên; payload chỉ được nhắc lại đúng mã đó.
+ *
+ * @return OK, BAD_REQUEST khi mã sai dạng, FORBIDDEN khi là tài khoản khác.
+ */
+static Status checkProfileTarget(const SocialRequest *request) {
+    json_object *userJson = payloadField(request->envelope, "userId");
+    if (!userJson) return OK;
+    UserId target = 0;
+    if (!lobbyParseUserIdJson(userJson, &target)) return BAD_REQUEST;
+    return target == request->me ? OK : FORBIDDEN;
+}
 
-    /* The rename is committed: rooms and friends must see it even if the
-     * profile read for the reply fails below. */
-    roomsUpdateIdentity(app, me, name, avatar);
-    socialPresence(app, me);
+static void handleProfileUpdate(const SocialRequest *request) {
+    Status status = checkProfileTarget(request);
+    const char *name = stringField(request->envelope, "name");
+    const char *avatar = stringField(request->envelope, "avatar");
+    if (status == OK && (!accountsValidateName(name) || !accountsValidateAvatar(avatar))) {
+        status = BAD_REQUEST;
+    }
+    /* Không ghi được thì không có gì đổi, nên không báo cho ai. */
+    if (status == OK) status = storeProfileUpdate(request->app->store, request->me, name, avatar);
+    if (status != OK) {
+        replyStatus(request, status);
+        return;
+    }
+    /* Đổi tên đã commit: phòng và bạn bè phải thấy kể cả khi đọc hồ sơ để trả lời
+     * bên dưới bị lỗi. */
+    roomsUpdateIdentity(request->app, request->me, name, avatar);
+    socialPresence(request->app, request->me);
 
     json_object *profile = NULL;
-    status = loadProfileJson(app, me, &profile);
+    status = loadProfileJson(request->app, request->me, &profile);
     if (status != OK) {
-        appReplyStatus(app, conn, envelope->id, status);
+        replyStatus(request, status);
         return;
     }
-    (void)appPush(app, me, "PROFILE_STATE", profile);
-    replyProfile(app, conn, envelope->id, profile);
+    (void)appPush(request->app, request->me, "PROFILE_STATE", profile);
+    replyProfile(request, profile);
 }
 
-static void handleLeaderboard(App *app, ConnId conn, const Envelope *envelope) {
+static void handleLeaderboard(const SocialRequest *request) {
     json_object *entries = NULL;
-    Status status = leaderboardJson(app, &entries);
-    if (status != OK) {
-        appReplyStatus(app, conn, envelope->id, status);
-        return;
-    }
-    json_object *payload = json_object_new_object();
-    json_object_object_add(payload, "entries", entries);
-    appReplyOk(app, conn, envelope->id, payload);
-    json_object_put(payload);
-}
-
-static void handleLobby(App *app, ConnId conn, const Envelope *envelope, UserId me) {
+    Status status = leaderboardJson(request->app, &entries);
     json_object *payload = NULL;
-    Status status = friendStateJson(app, me, &payload);
-    if (status != OK) {
-        appReplyStatus(app, conn, envelope->id, status);
-        return;
+    if (status == OK) {
+        payload = json_object_new_object();
+        json_object_object_add(payload, "entries", entries);
     }
-    json_object *entries = NULL;
-    status = leaderboardJson(app, &entries);
-    if (status != OK) {
-        json_object_put(payload);
-        appReplyStatus(app, conn, envelope->id, status);
-        return;
-    }
-    json_object_object_add(payload, "leaderboard", entries);
-    appReplyOk(app, conn, envelope->id, payload);
-    json_object_put(payload);
+    replyBuilt(request, status, payload);
 }
+
+static void handleLobby(const SocialRequest *request) {
+    json_object *payload = NULL;
+    Status status = friendStateJson(request->app, request->me, &payload);
+    json_object *entries = NULL;
+    if (status == OK) status = leaderboardJson(request->app, &entries);
+    if (status == OK) {
+        json_object_object_add(payload, "leaderboard", entries);
+    } else {
+        /* friendStateJson có thể đã dựng payload trước khi bảng xếp hạng lỗi. */
+        json_object_put(payload);
+        payload = NULL;
+    }
+    replyBuilt(request, status, payload);
+}
+
+typedef void (*SocialHandler)(const SocialRequest *request);
+
+static const struct {
+    const char *type;
+    SocialHandler handler;
+} SOCIAL_HANDLERS[] = {
+    {"FRIEND_LIST", handleFriendList}, {"FRIEND_REQUEST", handleFriendRequest},
+    {"FRIEND_REPLY", handleFriendReply}, {"PROFILE_GET", handleProfileGet},
+    {"PROFILE_UPDATE", handleProfileUpdate}, {"LEADERBOARD_GET", handleLeaderboard},
+    {"LOBBY_GET", handleLobby},
+};
 
 Status socialHandle(App *app, ConnId conn, const Envelope *envelope) {
     if (!app || !envelope || !envelope->type) return BAD_REQUEST;
-    UserId me = 0;
-    if (sessionsUser(app, conn, &me) != OK || me == 0) {
-        appReplyStatus(app, conn, envelope->id, UNAUTHENTICATED);
+    SocialRequest request = {app, conn, envelope, 0};
+    if (sessionsUser(app, conn, &request.me) != OK || request.me == 0) {
+        replyStatus(&request, UNAUTHENTICATED);
         return OK;
     }
     if (!app->store) {
-        appReplyStatus(app, conn, envelope->id, STORAGE_ERROR);
+        replyStatus(&request, STORAGE_ERROR);
         return OK;
     }
-    if (strcmp(envelope->type, "FRIEND_LIST") == 0) handleFriendList(app, conn, envelope, me);
-    else if (strcmp(envelope->type,
-                    "FRIEND_REQUEST") == 0) handleFriendRequest(app, conn, envelope, me);
-    else if (strcmp(envelope->type,
-                    "FRIEND_REPLY") == 0) handleFriendReply(app, conn, envelope, me);
-    else if (strcmp(envelope->type, "PROFILE_GET") == 0) handleProfileGet(app, conn, envelope, me);
-    else if (strcmp(envelope->type,
-                    "PROFILE_UPDATE") == 0) handleProfileUpdate(app, conn, envelope, me);
-    else if (strcmp(envelope->type, "LEADERBOARD_GET") == 0) handleLeaderboard(app, conn, envelope);
-    else if (strcmp(envelope->type, "LOBBY_GET") == 0) handleLobby(app, conn, envelope, me);
-    else appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
+    for (size_t i = 0; i < ARRAY_LENGTH(SOCIAL_HANDLERS); i++) {
+        if (strcmp(envelope->type, SOCIAL_HANDLERS[i].type) == 0) {
+            SOCIAL_HANDLERS[i].handler(&request);
+            return OK;
+        }
+    }
+    replyStatus(&request, BAD_REQUEST);
     return OK;
 }

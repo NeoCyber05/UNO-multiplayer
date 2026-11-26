@@ -6,59 +6,59 @@
 #include "shared/protocol.h"
 #include <stdbool.h>
 
-/* Spec: presence is derived from the connection and activity, never from
- * anything the client claims. */
+/* Spec: presence được suy ra từ kết nối và hoạt động, không bao giờ từ điều client
+ * tự khai. */
 typedef enum { PRESENCE_OFFLINE, PRESENCE_IDLE, PRESENCE_ONLINE, PRESENCE_IN_MATCH } Presence;
 
 /**
- * @brief Derive a user's presence from server state.
- * @param[in] app Server state owned by the poll loop.
- * @param[in] user Account to inspect.
- * @return PRESENCE_OFFLINE without a connected session; PRESENCE_IN_MATCH while
- *         matchesContains holds a seat; PRESENCE_ONLINE in a room, the queue or a
- *         party; PRESENCE_IDLE otherwise.
+ * @brief Suy ra presence của user từ trạng thái server.
+ * @param[in] app Trạng thái server do vòng poll sở hữu.
+ * @param[in] user Tài khoản cần xem.
+ * @return PRESENCE_OFFLINE khi không có phiên đang kết nối; PRESENCE_IN_MATCH khi
+ *         matchesContains đang giữ ghế; PRESENCE_ONLINE khi ở phòng, hàng chờ hoặc
+ *         party; còn lại PRESENCE_IDLE.
  */
 Presence socialPresenceOf(App *app, UserId user);
 
 /**
- * @brief Return the wire key of a presence value.
- * @param[in] presence Presence value.
- * @return Static "offline", "idle", "online" or "in_match"; "offline" for an
- *         out-of-range value.
+ * @brief Khóa trên wire của một giá trị presence.
+ * @param[in] presence Giá trị presence.
+ * @return Chuỗi tĩnh "offline", "idle", "online" hoặc "in_match"; giá trị ngoài
+ *         enum trả "offline".
  */
 const char *socialPresenceKey(Presence presence);
 
 /**
- * @brief Parse a public friend tag of the exact form "UNO#<id>".
+ * @brief Đọc tag kết bạn công khai có đúng dạng "UNO#<id>".
  *
- * Only the canonical text accountsFormatTag produces is accepted: no
- * whitespace, sign, leading zero, zero id or value above INT64_MAX (SQLite ids
- * are signed 64-bit).
- * @param[in] tag Text from the client.
- * @param[out] outUserId Receives the id on success; untouched on failure.
- * @return true when tag is valid, false otherwise (including NULL arguments).
+ * Chỉ nhận đúng chuỗi chuẩn mà accountsFormatTag sinh ra: không khoảng trắng, không
+ * dấu, không số 0 ở đầu, không mã 0 và không vượt INT64_MAX (mã SQLite là số có
+ * dấu 64 bit).
+ * @param[in] tag Chuỗi từ client.
+ * @param[out] outUserId Nhận mã khi thành công; giữ nguyên nếu thất bại.
+ * @return true khi tag hợp lệ, false nếu không (kể cả khi đối số NULL).
  */
 bool socialParseTag(const char *tag, UserId *outUserId);
 
 /**
- * @brief Handle FRIEND_LIST, FRIEND_REQUEST, FRIEND_REPLY, PROFILE_GET,
- *        PROFILE_UPDATE, LEADERBOARD_GET and LOBBY_GET for the session's account.
- * @param[in,out] app Server state owned by the poll loop.
- * @param[in] conn Connection that sent the request.
- * @param[in] envelope Request envelope borrowed for the call.
- * @return OK once a reply was sent (errors travel as ERROR replies:
- *         UNAUTHENTICATED, BAD_REQUEST, FORBIDDEN, NOT_FOUND, INVALID_ACTION,
- *         STORAGE_ERROR), BAD_REQUEST if the arguments are NULL.
+ * @brief Xử lý FRIEND_LIST, FRIEND_REQUEST, FRIEND_REPLY, PROFILE_GET,
+ *        PROFILE_UPDATE, LEADERBOARD_GET và LOBBY_GET cho tài khoản của phiên.
+ * @param[in,out] app Trạng thái server do vòng poll sở hữu.
+ * @param[in] conn Kết nối đã gửi request.
+ * @param[in] envelope Request; chỉ mượn trong lúc gọi.
+ * @return OK khi đã trả lời (lỗi được gửi dạng ERROR: UNAUTHENTICATED, BAD_REQUEST,
+ *         FORBIDDEN, NOT_FOUND, INVALID_ACTION, STORAGE_ERROR), BAD_REQUEST khi đối
+ *         số NULL.
  */
 Status socialHandle(App *app, ConnId conn, const Envelope *envelope);
 
 /**
- * @brief Push a fresh FRIEND_STATE to a user and to each accepted friend online.
+ * @brief Push FRIEND_STATE mới cho user và cho từng người bạn đã chấp nhận đang online.
  *
- * Call after anything that changes the user's presence or public identity.
- * Offline recipients simply miss the push; their next LOGIN sends a new list.
- * @param[in,out] app Server state owned by the poll loop.
- * @param[in] user Account whose presence or identity changed.
+ * Gọi sau mọi thay đổi presence hoặc danh tính công khai của user. Người nhận
+ * offline lỡ bản push này; lần LOGIN sau họ nhận danh sách mới.
+ * @param[in,out] app Trạng thái server do vòng poll sở hữu.
+ * @param[in] user Tài khoản vừa đổi presence hoặc danh tính.
  */
 void socialPresence(App *app, UserId user);
 

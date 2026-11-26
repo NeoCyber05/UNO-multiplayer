@@ -3,6 +3,7 @@
 #include "server/auth/accounts.h"
 #include "server/app.h"
 #include "server/game/match.h"
+#include "server/lobby/lobby_common.h"
 #include "server/lobby/rooms.h"
 #include "server/storage/store.h"
 #include <stdio.h>
@@ -10,23 +11,20 @@
 #include <string.h>
 
 enum {
-    QUEUE_MODE_COUNT = DRAFT + 1,
+    QUEUE_MODE_COUNT = LOBBY_MODE_COUNT,
     TEAM_COUNT = 2,
-    TEAM_SIZE = 2,
-    ID_TEXT_SIZE = 32 /* fits the decimal form of any 64-bit id */
+    TEAM_SIZE = 2
 };
 
-static const char *const MODE_NAMES[QUEUE_MODE_COUNT] = {"classic", "2v2", "side", "draft"};
-
-/* Team seat layouts from the spec: 2v2 alternates seats, side keeps neighbours together. */
+/* Bố trí ghế theo đội từ spec: 2v2 xen kẽ ghế, side xếp hai người cạnh nhau. */
 static const Seat TWO_V_TWO_TEAMS[TEAM_COUNT][TEAM_SIZE] = {{0, 2}, {1, 3}};
 static const Seat SIDE_TEAMS[TEAM_COUNT][TEAM_SIZE] = {{0, 1}, {2, 3}};
 
 typedef struct {
-    QueueEntry entries[QUEUE_MAX_ENTRIES]; /* FIFO: index 0 waited longest */
+    QueueEntry entries[QUEUE_MAX_ENTRIES]; /* FIFO: index 0 là mục chờ lâu nhất */
     size_t count;
-    uint64_t revision;  /* bumped on every change so clients drop stale QUEUE_STATE */
-    bool retryPending;  /* a match start failed; queueTick retries after retryAtMs */
+    uint64_t revision;  /* tăng mỗi lần đổi để client bỏ QUEUE_STATE cũ */
+    bool retryPending;  /* mở trận vừa thất bại; queueTick thử lại sau retryAtMs */
     uint64_t retryAtMs;
 } ModeQueue;
 
@@ -76,7 +74,7 @@ static Status validateEntry(Mode mode, const QueueEntry *entry) {
         if (entry->users[index] == 0) return BAD_REQUEST;
     }
     if (entry->count == TEAM_SIZE && entry->users[0] == entry->users[1]) return BAD_REQUEST;
-    /* Spec: parties exist only to stay on one team, so solo modes reject them. */
+    /* Spec: party chỉ tồn tại để chung một đội, nên chế độ đơn từ chối party. */
     if (entry->count == TEAM_SIZE && !isTeamMode(mode)) return INVALID_ACTION;
     return OK;
 }
@@ -97,7 +95,7 @@ Status queueAdd(Queue *queue, Mode mode, const QueueEntry *entry) {
     return OK;
 }
 
-/* memmove keeps the remaining entries in arrival order. */
+/* memmove giữ các mục còn lại đúng thứ tự đến. */
 static void eraseAt(ModeQueue *modeQueue, size_t index) {
     size_t tail = modeQueue->count - index - 1;
     memmove(&modeQueue->entries[index], &modeQueue->entries[index + 1],
@@ -128,7 +126,7 @@ static void placeSeats(const ModeQueue *modeQueue, Mode mode, const size_t picke
     const Seat (*teams)[TEAM_SIZE] = mode == SIDE ? SIDE_TEAMS : TWO_V_TWO_TEAMS;
     size_t nextTeam = 0;
     memset(seats, 0, QUEUE_MATCH_SEATS * sizeof seats[0]);
-    /* Parties first so each one lands on a whole team before solos fill gaps. */
+    /* Xếp party trước để mỗi party chiếm trọn một đội, rồi người chơi đơn lấp chỗ trống. */
     for (size_t pick = 0; teamMode && pick < pickedCount; pick++) {
         const QueueEntry *entry = &modeQueue->entries[picked[pick]];
         if (entry->count != TEAM_SIZE || nextTeam >= TEAM_COUNT) continue;
@@ -152,11 +150,10 @@ static void placeSeats(const ModeQueue *modeQueue, Mode mode, const size_t picke
     }
 }
 
-/* Depth-first search in index order, so the first set that reaches exactly
- * four players is the earliest one by FIFO index. A plain greedy scan would
- * stall on [party, solo, party]: party + solo leaves no room for the second
- * party, although the two parties can play each other (spec §5). Depth is at
- * most four entries, so the search stays small even with a full queue. */
+/* Tìm theo chiều sâu đúng thứ tự index, nên tập đầu tiên đủ đúng bốn người là tập
+ * sớm nhất theo FIFO. Quét tham lam sẽ kẹt với [party, solo, party]: party + solo
+ * không còn chỗ cho party thứ hai, dù hai party có thể đấu với nhau (spec §5). Độ
+ * sâu tối đa bốn mục nên phép tìm vẫn nhỏ kể cả khi hàng chờ đầy. */
 static bool findEarliestSet(const ModeQueue *modeQueue, size_t start, size_t players,
                               size_t picked[QUEUE_MATCH_SEATS], size_t *pickedCount) {
     if (players == QUEUE_MATCH_SEATS) return true;
@@ -200,24 +197,17 @@ void queueTake(Queue *queue, Mode mode, const size_t indexes[], size_t count) {
 }
 
 /* ---------------------------------------------------------------------------
- * Server glue: everything below runs on the poll loop and talks to clients.
+ * Phần nối với server: mọi hàm dưới đây chạy trên vòng poll và nói chuyện với client.
  * ------------------------------------------------------------------------- */
-
-/* Wire ids are decimal strings so 64-bit ids survive JSON number precision. */
-static json_object *userIdJson(UserId user) {
-    char idText[ID_TEXT_SIZE];
-    snprintf(idText, sizeof idText, "%llu", (unsigned long long)user);
-    return json_object_new_string(idText);
-}
 
 static json_object *playerJson(App *app, UserId user) {
     Account account;
     memset(&account, 0, sizeof account);
     json_object *player = json_object_new_object();
-    json_object_object_add(player, "userId", userIdJson(user));
-    /* A failed lookup still lists the seat; the name shows up on the next snapshot. */
+    json_object_object_add(player, "userId", lobbyUserIdJson(user));
+    /* Tra hồ sơ lỗi vẫn liệt kê người chơi; tên thật xuất hiện ở snapshot kế tiếp. */
     if (!app->store || storeAccountGetById(app->store, user, &account) != OK) {
-        snprintf(account.name, sizeof account.name, "Player%llu", (unsigned long long)user);
+        lobbyFallbackName(user, account.name, sizeof account.name);
     }
     json_object_object_add(player, "name", json_object_new_string(account.name));
     json_object_object_add(player, "avatar", json_object_new_string(account.avatar));
@@ -228,7 +218,7 @@ static json_object *activeStateJson(App *app, Mode mode) {
     const ModeQueue *modeQueue = &app->queue->modes[mode];
     json_object *payload = json_object_new_object();
     json_object *players = json_object_new_array();
-    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[mode]));
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(mode)));
     json_object_object_add(payload, "active", json_object_new_boolean(true));
     for (size_t index = 0; index < modeQueue->count; index++) {
         const QueueEntry *entry = &modeQueue->entries[index];
@@ -241,17 +231,17 @@ static json_object *activeStateJson(App *app, Mode mode) {
     return payload;
 }
 
-/* Users who left the queue (or were matched, then matchId is set) get active:false. */
+/* Người rời hàng chờ (hoặc vừa được ghép trận, khi đó có matchId) nhận active:false. */
 static void notifyInactive(App *app, Mode mode, const UserId users[], size_t count,
                             const char *matchId) {
     json_object *payload = json_object_new_object();
-    json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[mode]));
+    json_object_object_add(payload, "mode", json_object_new_string(lobbyModeName(mode)));
     json_object_object_add(payload, "active", json_object_new_boolean(false));
     if (matchId) json_object_object_add(payload, "matchId", json_object_new_string(matchId));
     json_object_object_add(payload, "revision",
                            json_object_new_uint64(app->queue->modes[mode].revision));
     for (size_t index = 0; index < count; index++) {
-        /* Offline users simply miss it; they are pruned from the queue anyway. */
+        /* Người offline lỡ bản push này; dù sao họ cũng sẽ bị loại khỏi hàng chờ. */
         (void)appPush(app, users[index], "QUEUE_STATE", payload);
     }
     json_object_put(payload);
@@ -286,9 +276,9 @@ static UserId firstOfflineSeat(App *app, const UserId seats[QUEUE_MATCH_SEATS]) 
     return 0;
 }
 
-/* Start as many ranked matches as the mode can fill; on failure keep everyone
- * queued and let queueTick retry, since the cause (storage busy, all match
- * slots taken) is usually transient. */
+/* Mở nhiều trận ranked nhất mà chế độ này đủ người; nếu thất bại thì giữ mọi người
+ * trong hàng chờ và để queueTick thử lại, vì nguyên nhân (Store bận, hết ô trận)
+ * thường chỉ là tạm thời. */
 static void tryStart(App *app, Mode mode, uint64_t nowMs) {
     ModeQueue *modeQueue = &app->queue->modes[mode];
     UserId seats[QUEUE_MATCH_SEATS];
@@ -297,8 +287,8 @@ static void tryStart(App *app, Mode mode, uint64_t nowMs) {
     bool started = false;
     modeQueue->retryPending = false;
     while (queuePick(app->queue, mode, seats, picked, &pickedCount)) {
-        /* A LOGOUT earlier in this poll iteration has not been pruned yet;
-         * drop that entry (telling its members) and pick again. */
+        /* Một LOGOUT trước đó trong cùng vòng poll chưa được dọn; bỏ mục đó (báo cho
+         * các thành viên) rồi chọn lại. */
         UserId offline = firstOfflineSeat(app, seats);
         if (offline) {
             queueUserGone(app, offline);
@@ -322,7 +312,7 @@ void queueUserGone(App *app, UserId user) {
     Mode mode = CLASSIC;
     QueueEntry removed;
     if (!queueRemove(app->queue, user, &mode, &removed)) return;
-    /* Spec: one member leaving drops the whole party entry, so both are told. */
+    /* Spec: một thành viên rời là bỏ cả mục party, nên cả hai đều được báo. */
     notifyInactive(app, mode, removed.users, removed.count, NULL);
     broadcastMode(app, mode);
 }
@@ -333,7 +323,7 @@ void queueSyncUser(App *app, UserId user) {
         const ModeQueue *modeQueue = &app->queue->modes[mode];
         for (size_t index = 0; index < modeQueue->count; index++) {
             if (!entryHas(&modeQueue->entries[index], user)) continue;
-            /* Only the new socket needs it; the others already hold this revision. */
+            /* Chỉ socket mới cần bản này; các người khác đã có đúng revision này. */
             json_object *state = activeStateJson(app, (Mode)mode);
             (void)appPush(app, user, "QUEUE_STATE", state);
             json_object_put(state);
@@ -342,7 +332,7 @@ void queueSyncUser(App *app, UserId user) {
     }
 }
 
-/* LOGOUT keeps the socket but drops the session; such users cannot play. */
+/* LOGOUT giữ socket nhưng bỏ phiên; người như vậy không thể chơi. */
 static UserId firstOffline(App *app, const QueueEntry *entry) {
     for (size_t member = 0; member < entry->count; member++) {
         if (!isOnline(app, entry->users[member])) return entry->users[member];
@@ -357,7 +347,7 @@ void queueTick(App *app, uint64_t nowMs) {
         size_t index = 0;
         while (index < modeQueue->count) {
             UserId offline = firstOffline(app, &modeQueue->entries[index]);
-            /* Removal shifts the next entry into this index, so do not advance. */
+            /* Xóa mục sẽ dời mục kế tiếp vào đúng index này, nên không tăng index. */
             if (offline) queueUserGone(app, offline);
             else index++;
         }
@@ -373,17 +363,10 @@ static bool parseQueueMode(json_object *payload, Mode *outMode) {
         !json_object_is_type(modeObj, json_type_string)) {
         return false;
     }
-    const char *modeName = json_object_get_string(modeObj);
-    for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
-        if (strcmp(modeName, MODE_NAMES[mode]) == 0) {
-            *outMode = (Mode)mode;
-            return true;
-        }
-    }
-    return false;
+    return lobbyParseModeName(json_object_get_string(modeObj), outMode);
 }
 
-/* Spec: no user may sit in a room, a match and the queue at the same time. */
+/* Spec: không ai được cùng lúc ngồi phòng, ở trong trận và chờ ghép trận. */
 static bool isFree(App *app, UserId user) {
     return isOnline(app, user) &&
            roomsFindByUser(app->rooms, user) == NULL &&
@@ -391,8 +374,8 @@ static bool isFree(App *app, UserId user) {
            !queueContains(app->queue, user);
 }
 
-/* The party comes from the session, never from the client, so a member cannot
- * queue someone who is not in their party. */
+/* Party lấy từ phiên chứ không từ client, nên thành viên không thể xếp hàng giùm
+ * người không ở trong party của mình. */
 static Status buildEntry(App *app, UserId user, Mode mode, QueueEntry *entry) {
     memset(entry, 0, sizeof *entry);
     Party *party = partyFindByUser(app->rooms, user);
@@ -423,8 +406,8 @@ static void handleJoin(App *app, ConnId conn, const Envelope *envelope, UserId u
         appReplyStatus(app, conn, envelope->id, status);
         return;
     }
-    /* Reply before any match starts so the client sees active:true, then the
-     * higher-revision active:false that carries the matchId. */
+    /* Trả lời trước khi trận nào bắt đầu, để client thấy active:true rồi mới tới
+     * active:false có revision cao hơn kèm matchId. */
     json_object *state = activeStateJson(app, mode);
     json_object *reply = json_object_new_object();
     json_object_object_add(reply, "queue", json_object_get(state));
@@ -451,7 +434,7 @@ Status queueHandle(App *app, ConnId conn, const Envelope *envelope) {
         return OK;
     }
     if (strcmp(envelope->type, "QUEUE_LEAVE") == 0) {
-        /* Leaving when not queued is a no-op, like ROOM_LEAVE. */
+        /* Rời khi không ở hàng chờ thì không làm gì, giống ROOM_LEAVE. */
         queueUserGone(app, user);
         appReplyStatus(app, conn, envelope->id, OK);
         return OK;
