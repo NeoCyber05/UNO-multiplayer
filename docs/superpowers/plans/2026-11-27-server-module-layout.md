@@ -96,7 +96,7 @@ Expected: `d331058`; build, unit, sanitize trả 0; headless 15 test; integratio
 ### Task 1: Chuyển module server và sửa include
 
 **Files:**
-- Move: bảng chuyển file ở trên (11 file `server/`).
+- Move: bảng chuyển file ở trên (15 file trong `server/`).
 - Modify include: `server/app.{c,h}`, `server/main.c`, mọi file trong `server/auth/`, `server/lobby/`, `server/storage/`, `server/game/rating.c`, `server/game/match.{c,h}`, `server/game/profile.c`, `shared/net.h`, `shared/protocol.h`, `desktop/main.c`, `desktop/net_session.c`, `tests/test_*.c`, `tests/unit/test_{match,profile}.c`.
 - Modify: `Makefile` (dòng `CPPFLAGS`, `server_dirs`).
 
@@ -240,15 +240,16 @@ Expected: cùng kết quả với baseline: build/unit/sanitize 0, headless 15 t
 
 - [ ] **Step 2: Soát rename và include cũ.**
 
-Run:
+Run (`<move1>`, `<move2>` là hai commit chỉ có `git mv` của Task 1 và Task 2):
 ```bash
-git diff --summary -M main...HEAD | grep -c 'rename .*(100%)'
+git diff --summary -M main...HEAD | grep -c '^ rename '
+git show --summary --format= -M <move1> <move2> | grep -c '^ rename .*(100%)'
 git diff --check main...HEAD && echo check-clean
 git grep -nE '#include "(server/)?(accounts|auth_worker|rooms|queue|social|store|rating)\.h"' -- server shared desktop tests
 git diff --stat main...HEAD -- client | tail -1
 git log main..HEAD --format=%B | grep -ci co-authored
 ```
-Expected: `21` rename 100% (11 file server, 10 test); `check-clean`. `git grep` chỉ in các include basename của chính file (ví dụ `server/auth/accounts.c: #include "accounts.h"`), không có path cũ. `client` không đổi. `0` dòng co-author.
+Expected: `25` rename trên cả nhánh và `25` rename 100% trong hai commit chuyển file (15 file server, 10 test); `check-clean`. `git grep` chỉ in các include basename của chính file (ví dụ `server/auth/accounts.c: #include "accounts.h"`), không có path cũ. `client` không đổi. `0` dòng co-author.
 
 - [ ] **Step 3: Soát số file theo cây đích.**
 
