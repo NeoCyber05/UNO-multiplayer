@@ -93,6 +93,7 @@ static void sendView(Matches *matches, const Match *match, Seat seat, uint64_t n
     if (match->finishing)
         view.deadline = 0;
     else if (match->retryAt) {
+        /* Gửi thời gian còn lại tại lúc tạm dừng để client giữ nguyên đồng hồ lượt. */
         uint64_t remaining =
             match->deadline > match->pausedAt ? match->deadline - match->pausedAt : 0;
         view.deadline = nowMs + remaining;
@@ -128,6 +129,7 @@ static void broadcast(Matches *matches, const Match *match, const char *type,
 static void scheduleTurn(Match *match, uint64_t nowMs) {
     match->deadline = nowMs + TURN_MS;
     match->botAt = nowMs + BOT_DELAY_MS;
+    /* Chỉ tính thời lượng trận từ lượt đánh đầu tiên, sau giai đoạn chọn bài. */
     if (match->game.phase == PLAYING && !match->played) {
         match->played = true;
         match->playStartedAt = nowMs;
@@ -138,6 +140,7 @@ static void generateId(MatchId *out) {
     unsigned char bytes[16];
     char hex[sizeof bytes * 2 + 1];
     randombytes_buf(bytes, sizeof bytes);
+    /* Đặt các bit phiên bản và biến thể theo bố cục UUID v4. */
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     sodium_bin2hex(hex, sizeof hex, bytes, sizeof bytes);
@@ -166,7 +169,7 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs, Mat
     for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
         UserId userId = room->players[seat].userId;
         if (room->players[seat].isBot) {
-            // Ranked ELO is only meaningful between humans.
+            // Chỉ trận toàn người chơi mới được tính ELO xếp hạng.
             if (room->ranked || userId || (unsigned)room->players[seat].botLevel > HARD) {
                 return BAD_REQUEST;
             }
@@ -212,6 +215,7 @@ static int handPoints(const Pile *hand) {
 }
 
 static void beginFinish(Match *match, MatchStatus status, uint64_t nowMs) {
+    /* Chốt thời lượng và revision một lần để lần lưu lại dùng cùng kết quả. */
     match->finishing = true;
     match->finishRevision = match->game.revision;
     match->result.status = status;
@@ -225,7 +229,7 @@ static void beginFinish(Match *match, MatchStatus status, uint64_t nowMs) {
         result->stats = match->game.stats[seat];
     }
     if (status == MATCH_FINALIZED) {
-        // MATCH_LEAVE turns a human seat into a bot, but the leaver is still rated.
+        // MATCH_LEAVE giao ghế cho bot, còn tài khoản đã rời vẫn được tính ELO.
         bool isBot[SEAT_COUNT];
         for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
             isBot[seat] = match->result.players[seat].userId == 0;
@@ -283,6 +287,7 @@ static Status persistMatchAbort(Store *store, const Match *match) {
 }
 
 static Status pauseMatch(Matches *matches, Match *match, uint64_t nowMs) {
+    /* Giữ mốc tạm dừng đầu tiên để các lần thử lại không làm mất thời gian còn lại. */
     if (!match->retryAt) {
         match->pausedAt = nowMs;
         match->retryAt = nowMs + STORAGE_RETRY_MS;
@@ -300,7 +305,7 @@ static Status finishMatch(Matches *matches, Match *match, uint64_t nowMs) {
     if (aborted) {
         status = persistMatchAbort(matches->store, match);
     } else {
-        // Single-threaded poll loop: stats read here cannot change before storeFinalize commits.
+        // Vòng lặp poll xử lý tuần tự nên không xen cập nhật hồ sơ giữa hai bước này.
         ProfileDelta deltas[PROFILE_SEAT_COUNT];
         status = profileCompute(matches->store, &match->result, deltas);
         if (status == OK) status = storeFinalize(matches->store, &match->result, deltas);
@@ -329,7 +334,7 @@ static void resumeClock(Match *match, uint64_t nowMs) {
 
 static void retryPausedTurn(Matches *matches, Match *match, uint64_t nowMs) {
     sqlite3 *db = storeGetDb(matches->store);
-    // Probe for a writer without replaying a command the client saw fail.
+    // Thử lấy quyền ghi SQLite rồi nhả ngay, tránh chạy lại lệnh đã báo lỗi cho client.
     if (sqlite3_exec(db, "BEGIN IMMEDIATE; ROLLBACK", NULL, NULL, NULL) != SQLITE_OK) {
         match->retryAt = nowMs + STORAGE_RETRY_MS;
         return;
@@ -341,6 +346,7 @@ static void retryPausedTurn(Matches *matches, Match *match, uint64_t nowMs) {
 
 static Status applyEvents(Matches *matches, Match *match, const Game *candidate,
                           const EventBatch *events, uint64_t nowMs) {
+    /* Chỉ công bố nước đi sau khi lưu sự kiện để bộ nhớ và nhật ký khớp nhau. */
     if (storeEvents(matches->store, (const MatchId *)&match->result.matchId, events) != OK) {
         return pauseMatch(matches, match, nowMs);
     }
@@ -372,6 +378,7 @@ static void tickMatch(Matches *matches, Match *match, uint64_t nowMs) {
         return;
     }
     Seat turn = match->game.turn;
+    /* Khi dừng vì lỗi lưu, chỉ thử lại hành động đã đến hạn tại lúc dừng. */
     uint64_t effectiveNow = match->retryAt ? match->pausedAt : nowMs;
     bool expired = effectiveNow >= match->deadline;
     bool botReady = match->game.players[turn].isBot && effectiveNow >= match->botAt;
@@ -454,6 +461,7 @@ static const char *readString(json_object *payload, const char *key, size_t maxL
         return NULL;
     const char *value = json_object_get_string(field);
     size_t length = (size_t)json_object_get_string_len(field);
+    /* Loại byte NUL giữa chuỗi để strcmp và strcpy đọc đủ giá trị JSON. */
     return length && length <= maxLength && strlen(value) == length ? value : NULL;
 }
 
@@ -521,6 +529,7 @@ Status matchesHandle(Matches *matches, UserId userId, const Envelope *request, u
     if (!matches || !request || !request->type || !request->payload) return BAD_REQUEST;
     if (!userId) return UNAUTHENTICATED;
     Intent intent = {0};
+    /* Ghế lấy từ phiên đã xác thực để client không thể chỉ định người ra lệnh. */
     const char *matchId = readString(request->payload, "matchId", sizeof(MatchId) - 1);
     if (!matchId || json_object_object_get_ex(request->payload, "actor", NULL) ||
         json_object_object_get_ex(request->payload, "seat", NULL) || !readIntent(request, &intent))

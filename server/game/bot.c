@@ -5,7 +5,7 @@
 
 enum { WINNING_PLAY_SCORE = 1000 };
 
-/* Reservoir sampling gives equal-scoring candidates an equal chance. */
+/* Lấy mẫu hồ chứa để các lựa chọn đồng điểm có cùng xác suất được chọn. */
 static bool prefer(int score, int *best, unsigned *ties, uint64_t *randomState) {
     if (score < *best) return false;
     if (score > *best) {
@@ -48,6 +48,7 @@ static int scorePlay(const GameView *view, const Card *card, BotLevel level, int
         int shed = card->value == DISCARD_ALL ? sameColorCount : 1;
         if (shed == me->cardCount) return WINNING_PLAY_SCORE;
         score += 2 * shed;
+        /* Ưu tiên cản người sắp hết bài và tránh cản đồng đội. */
         bool blocks = card->value == SKIP || card->value == DRAW_TWO || card->value == WILD_FOUR ||
                       card->value == REVERSE;
         if (blocks && friendly) score -= 40;
@@ -61,6 +62,7 @@ Status botChoose(const GameView *view, BotLevel level, uint64_t *randomState, In
         return BAD_REQUEST;
     Intent intent = {.turnNo = view->turnNo, .draftTurn = view->draft.turn};
     memcpy(intent.matchId, view->matchId, sizeof intent.matchId);
+    /* Hô UNO ở một lệnh riêng trước khi đánh để tránh bị phạt. */
     if (view->canSayUno) {
         intent.kind = SAY_UNO;
     } else if (view->phase == FINISHED) {
@@ -94,6 +96,7 @@ Status botChoose(const GameView *view, BotLevel level, uint64_t *randomState, In
             Card card = hand->cards[selectedIndex];
             intent.kind = PLAY;
             memcpy(intent.cardId, card.id, sizeof intent.cardId);
+            /* Bot mức thường và khó ưu tiên màu còn nhiều lá để dễ đánh tiếp. */
             if (card.color == WILD_COLOR) {
                 best = INT_MIN;
                 ties = 0;

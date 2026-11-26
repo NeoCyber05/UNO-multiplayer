@@ -7,14 +7,14 @@ enum {
     RATING_ELO_FLOOR = 0
 };
 
-/* Standard ELO logistic: a 400-point gap means 10:1 expected odds. */
+/* Chênh 400 điểm cho tỷ lệ kỳ vọng thắng so với thua là 10 trên 1. */
 static const double RATING_SCALE = 400.0;
 static const double RATING_BASE = 10.0;
 
 int ratingDelta(double own, double opposition, bool won) {
     double expected = 1.0 / (1.0 + pow(RATING_BASE, (opposition - own) / RATING_SCALE));
     double score = won ? 1.0 : 0.0;
-    /* lround rounds half away from zero, as the spec requires. */
+    /* lround làm tròn phần đúng nửa đơn vị theo hướng xa 0 như đặc tả. */
     return (int)lround(RATING_K_FACTOR * (score - expected));
 }
 
@@ -49,7 +49,7 @@ static bool isTeamMode(Mode mode) {
     return mode == TWO_V_TWO || mode == SIDE;
 }
 
-/* Average eloBefore over seats that are (or are not) on `team`, skipping `exclude`. */
+/* Lấy trung bình ELO trước trận theo đội và bỏ ghế exclude, nếu có. */
 static bool averageRating(const MatchResult *result, int team, bool sameTeam,
                            int exclude, double *average) {
     double total = 0.0;
@@ -77,14 +77,14 @@ static int seatDelta(const MatchResult *result, int seat) {
     bool won = false;
     if (isTeamMode(result->mode)) {
         int team = result->players[seat].team;
-        /* Both teammates read the same two averages, so they get the same delta. */
+        /* Hai đồng đội dùng cùng hai giá trị trung bình nên mức thay đổi bằng nhau. */
         if (!averageRating(result, team, true, -1, &own) ||
             !averageRating(result, team, false, -1, &opposition)) {
             return 0;
         }
         won = team == result->winnerTeam;
     } else {
-        /* team < 0 disables the team filter: every other seat is an opponent. */
+        /* team âm tắt lọc theo đội để tính cả ba ghế còn lại là đối thủ. */
         if (!averageRating(result, -1, false, seat, &opposition)) {
             return 0;
         }
@@ -98,7 +98,7 @@ void ratingApply(MatchResult *result, const bool isBot[4]) {
         return;
     }
     bool changes = result->ranked && result->status == MATCH_FINALIZED;
-    /* Compute every delta from eloBefore only, so seat order cannot matter. */
+    /* Dùng eloBefore để thứ tự cập nhật các ghế không ảnh hưởng kết quả. */
     for (int seat = 0; seat < RATING_SEAT_COUNT; seat++) {
         PlayerResult *player = &result->players[seat];
         bool isBotSeat = isBot != NULL && isBot[seat];

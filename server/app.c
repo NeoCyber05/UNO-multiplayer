@@ -21,21 +21,21 @@
 #include <unistd.h>
 
 #ifndef MSG_NOSIGNAL
+/* Nếu hệ thống thiếu cờ này, appInit vẫn bỏ qua SIGPIPE cho cả tiến trình. */
 #define MSG_NOSIGNAL 0
 #endif
 
-/* sig_atomic_t: the only type a signal handler may write and the loop then read. */
+/* sig_atomic_t cho phép bộ xử lý tín hiệu đặt cờ để vòng lặp đọc an toàn. */
 static volatile sig_atomic_t gStopRequested = 0;
 
-/* SIGINT/SIGTERM only raise a flag; the poll loop notices it within one
- * POLL_TIMEOUT_MS and shuts down from normal context. */
+/* SIGINT và SIGTERM chỉ đặt cờ để việc thu hồi tài nguyên diễn ra ngoài
+ * bộ xử lý tín hiệu. */
 static void handleStopSignal(int signalNumber) {
     (void)signalNumber;
     gStopRequested = 1;
 }
 
-/* Identifies the slot a frame was read from; the generation rejects frames
- * that arrive for a slot already reused by a newer connection. */
+/* Đính kèm generation để onFrame loại frame thuộc kết nối cũ đã mất ô. */
 typedef struct {
     App *app;
     uint32_t slotIndex;
@@ -45,42 +45,39 @@ typedef struct {
 enum {
     MS_PER_SECOND = 1000,
     NS_PER_MS = 1000000,
-    /* Pending connections the kernel queues before accept() runs. */
+    /* Giới hạn hàng chờ kết nối mà hệ điều hành dùng trước accept(). */
     LISTEN_BACKLOG = 128,
-    /* poll() wakes at least this often so timers and bots advance with no traffic. */
+    /* Giới hạn thời gian chờ poll để lượt và bot vẫn chạy khi mạng im lặng. */
     POLL_TIMEOUT_MS = 50,
-    /* Fits the fixed SERVER_FULL error frame sent to a rejected connection. */
+    /* Bộ đệm riêng cho frame lỗi khi không thể cấp ô kết nối. */
     SERVER_FULL_FRAME_SIZE = 256
 };
 
-/* Per-connection token bucket: 0.03 tokens/ms is 30 requests/s sustained. */
+/* Mỗi kết nối hồi 30 token/giây để chặn gửi liên tục quá hạn mức. */
 static const double RATE_TOKENS_PER_MS = 0.03;
 static const double RATE_BURST_TOKENS = 60.0;
 
-/* Opcodes routed to the match coordinator; the actor always comes from the session. */
+/* Các lệnh trận được xử lý với danh tính lấy từ phiên đã xác thực. */
 static const char *const MATCH_COMMANDS[] = {
     "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "MATCH_LEAVE", "CHAT"
 };
 
-/* Opcodes routed to roomsHandle. */
 static const char *const ROOM_COMMANDS[] = {
     "ROOM_CREATE", "ROOM_JOIN", "ROOM_LEAVE", "ROOM_BOT", "ROOM_KICK", "ROOM_MODE",
     "ROOM_START", "INVITE_SEND", "INVITE_REPLY", "PARTY_LEAVE"
 };
 
-/* Opcodes routed to socialHandle. */
 static const char *const SOCIAL_COMMANDS[] = {
     "FRIEND_LIST", "FRIEND_REQUEST", "FRIEND_REPLY", "PROFILE_GET", "PROFILE_UPDATE",
     "LEADERBOARD_GET", "LOBBY_GET"
 };
 
 enum {
-    /* Actor, their room's humans, their party and an inviter, before dedup. */
+    /* Chỗ cho người ra lệnh, người trong phòng, thành viên nhóm và người mời. */
     PRESENCE_WATCH_MAX = 1 + ROOM_MAX_SEATS + PARTY_MAX_MEMBERS + 1
 };
 
-/* Presence of everyone a command may move, taken before it runs, so only
- * real changes reach friends. */
+/* Chụp trạng thái trước lệnh để chỉ báo cho bạn bè khi có thay đổi. */
 typedef struct {
     UserId users[PRESENCE_WATCH_MAX];
     Presence before[PRESENCE_WATCH_MAX];
@@ -89,7 +86,6 @@ typedef struct {
 
 uint64_t appNowMs(void) {
     struct timespec now;
-    /* CLOCK_MONOTONIC cannot fail on Linux; 0 keeps callers defined if it ever does. */
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
     return (uint64_t)now.tv_sec * MS_PER_SECOND + (uint64_t)(now.tv_nsec / NS_PER_MS);
 }
@@ -113,7 +109,7 @@ static const char *statusMessage(Status status) {
     }
 }
 
-/* Returns the slot only while conn still names the same accepted socket. */
+/* So generation để kết quả xử lý muộn không bị gửi cho socket dùng lại ô. */
 static AppConnSlot *liveSlot(App *app, ConnId conn) {
     if (conn.slot >= APP_MAX_CONNS) return NULL;
     AppConnSlot *slot = &app->slots[conn.slot];
@@ -121,8 +117,8 @@ static AppConnSlot *liveSlot(App *app, ConnId conn) {
     return slot;
 }
 
-/* Queue then flush immediately; a failed flush marks the conn closing and the
- * poll loop tears it down, so callers never close a slot mid-dispatch. */
+/* Giữ phần gửi thiếu trong bộ đệm đến POLLOUT. Lỗi I/O đánh dấu kết nối
+ * để vòng lặp dọn sau, tránh đóng ô giữa lúc đang xử lý yêu cầu. */
 static Status sendEnvelope(AppConnSlot *slot, const Envelope *envelope) {
     Status queued = connQueue(&slot->conn, envelope);
     if (queued != OK) return queued;
@@ -135,7 +131,7 @@ Status appPush(App *app, UserId user, const char *type, json_object *payload) {
     if (sessionsFindConn(app, user, &conn) != OK) return NOT_FOUND;
     AppConnSlot *slot = liveSlot(app, conn);
     if (!slot) return NOT_FOUND;
-    /* Protocol: pushes carry id 0 so clients never match them to a request. */
+    /* Giao thức dành id 0 cho thông báo chủ động để client phân biệt với phản hồi. */
     Envelope push = {1, 0, type, payload};
     return sendEnvelope(slot, &push);
 }
@@ -152,7 +148,7 @@ void appReplyStatus(App *app, ConnId conn, int32_t id, Status status) {
                                json_object_new_string(statusMessage(status)));
     }
     Envelope reply = {1, id, status == OK ? "OK" : "ERROR", payload};
-    /* A failed send already marked the conn closing; nothing else to undo. */
+    /* Lỗi I/O sẽ được vòng lặp xử lý qua cờ closing. */
     (void)sendEnvelope(slot, &reply);
     json_object_put(payload);
 }
@@ -162,13 +158,12 @@ void appReplyOk(App *app, ConnId conn, int32_t id, json_object *payload) {
     AppConnSlot *slot = liveSlot(app, conn);
     if (!slot) return;
     Envelope reply = {1, id, "OK", payload};
-    /* A failed send already marked the conn closing; nothing else to undo. */
     (void)sendEnvelope(slot, &reply);
 }
 
 static void onMatchPush(void *context, UserId userId, const char *type,
                            json_object *payload) {
-    /* An offline seat simply misses the push; RESUME resends the current view. */
+    /* Ghế mất kết nối nhận lại trạng thái hiện tại qua RESUME. */
     (void)appPush((App *)context, userId, type, payload);
 }
 
@@ -184,7 +179,7 @@ static void recordMatch(App *app, const RoomStart *roomStart) {
     for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
         if (!app->matchRecords[index].active) slot = &app->matchRecords[index];
     }
-    /* Safety net only: reuse a record whose match is already over. */
+    /* Nếu hết bản ghi trống, có thể dùng lại bản ghi của trận đã kết thúc. */
     for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
         if (!recordInMatch(app, &app->matchRecords[index])) {
             slot = &app->matchRecords[index];
@@ -201,24 +196,22 @@ static void recordMatch(App *app, const RoomStart *roomStart) {
 
 static void onMatchEnded(void *context, const char *roomId) {
     App *app = (App *)context;
-    /* The coordinator already cleared the match, so members can rejoin at once. */
+    /* Bộ điều phối đã nhả trận để các thành viên có thể vào phòng ngay. */
     roomsMatchEnded(app, roomId);
     for (int index = 0; index < APP_MATCH_RECORDS; index++) {
         AppMatchRecord *record = &app->matchRecords[index];
-        /* A record still holding a seated user belongs to another match whose
-         * room later reused the same code. */
+        /* Giữ bản ghi còn tài khoản trong trận vì mã phòng có thể được tái sử dụng. */
         if (!record->active || strcmp(record->roomId, roomId) != 0 ||
             recordInMatch(app, record)) {
             continue;
         }
         record->active = false;
-        /* Shutdown aborts matches while closing slots; nobody is left to tell. */
+        /* Bỏ qua cập nhật hiện diện nếu máy chủ đang đóng tất cả kết nối. */
         if (!app->running) continue;
         for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
             UserId seated = record->users[seat];
-            /* A leaving user still reads as connected here; announcing that
-             * would flash online/idle before the offline push appUserLeave
-             * sends once the session is detached. */
+            /* Phiên người đang rời vẫn còn gắn với socket. Đợi appUserLeave
+             * ngắt phiên và gửi trạng thái offline để tránh báo online thoáng qua. */
             if (seated && seated != app->leavingUser) socialPresence(app, seated);
         }
     }
@@ -229,7 +222,7 @@ static Status onMatchStart(App *app, const RoomStart *roomStart, MatchId *outMat
     Status started = matchesStart(app->matches, roomStart, appNowMs(), outMatchId);
     if (started != OK) return started;
     recordMatch(app, roomStart);
-    /* Every in_match transition goes through here, room or queue alike. */
+    /* Cả phòng và hàng chờ báo in_match tại đây để bạn bè không nhận tin trùng. */
     for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
         if (!roomStart->players[seat].isBot) socialPresence(app, roomStart->players[seat].userId);
     }
@@ -265,8 +258,8 @@ static void watchAdd(App *app, PresenceWatch *watch, UserId user) {
     watch->count++;
 }
 
-/* A room, party or queue command can only move the actor and the people
- * sharing their room or party (a kick, a dissolved party, a party entry). */
+/* Theo dõi người ra lệnh và những người có thể đổi trạng thái khi phòng
+ * đổi thành viên, nhóm giải tán hoặc vào hàng chờ. */
 static void watchBegin(App *app, PresenceWatch *watch, UserId actor) {
     memset(watch, 0, sizeof *watch);
     watchAdd(app, watch, actor);
@@ -282,7 +275,7 @@ static void watchBegin(App *app, PresenceWatch *watch, UserId actor) {
     }
 }
 
-/* Accepting a party invite also moves the inviter from idle to online. */
+/* Chấp nhận lời mời vào nhóm có thể đổi cả trạng thái của người mời. */
 static void watchInviter(App *app, PresenceWatch *watch, const Envelope *envelope) {
     json_object *idObj = NULL;
     if (!envelope->payload || !json_object_object_get_ex(envelope->payload, "inviteId", &idObj) ||
@@ -302,14 +295,14 @@ static void watchInviter(App *app, PresenceWatch *watch, const Envelope *envelop
 static void watchEnd(App *app, PresenceWatch *watch) {
     for (size_t index = 0; index < watch->count; index++) {
         Presence now = socialPresenceOf(app, watch->users[index]);
-        /* onMatchStart already announced in_match; skip the duplicate. */
+        /* onMatchStart đã báo in_match cho bạn bè, bỏ qua để tránh gửi trùng. */
         if (now != watch->before[index] && now != PRESENCE_IN_MATCH) {
             socialPresence(app, watch->users[index]);
         }
     }
 }
 
-/* Runs a room or queue command and tells friends about every presence it moved. */
+/* Bao quanh lệnh phòng hoặc hàng chờ để so trạng thái trước và sau xử lý. */
 static Status dispatchWatched(App *app, ConnId conn, const Envelope *envelope, bool roomCommand) {
     PresenceWatch watch;
     UserId actor = 0;
@@ -345,21 +338,19 @@ void appUserLeave(App *app, ConnId conn, UserId user) {
     if (!app || user == 0) return;
     PresenceWatch watch;
     memset(&watch, 0, sizeof watch);
-    /* Shutdown closes every slot; nobody is left to hear about it. */
+    /* Không cần chụp trạng thái hiện diện khi máy chủ đang đóng toàn bộ kết nối. */
     if (app->running) watchBegin(app, &watch, user);
     uint64_t nowMs = appNowMs();
-    /* Mark the seat offline while the session still exists; the room keeps
-     * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
-     * NOT_FOUND just means the user is not in a match. */
+    /* Báo mất kết nối cho trận khi phiên còn gắn. Ghế trong trận đang chạy
+     * được giữ để người chơi vào lại qua RESUME hoặc LOGIN. */
     app->leavingUser = user;
     (void)matchesConnected(app->matches, user, false, nowMs);
     app->leavingUser = 0;
-    /* Before roomsDisconnect dissolves the party: a dropped member takes
-     * the whole party entry out of the queue and the partner is told. */
+    /* Rút cả nhóm khỏi hàng chờ khi còn tra được thành viên, trước khi giải tán. */
     queueUserGone(app, user);
     roomsDisconnect(app, user, nowMs);
     sessionsDisconnect(app, conn);
-    /* After sessionsDisconnect, so the user now reads as offline. */
+    /* Đợi ngắt phiên để trạng thái gửi cho bạn bè phản ánh việc mất kết nối. */
     watchEnd(app, &watch);
 }
 
@@ -382,6 +373,13 @@ void appCloseSlot(App *app, int slotIndex) {
     slot->lastFrameMs = 0;
 }
 
+/**
+ * @brief Kiểm tra kết nối và hạn mức trước khi chuyển yêu cầu đến mô-đun xử lý.
+ * @param[in] envelope Frame đã được giải mã.
+ * @param[in] context Ngữ cảnh FrameContext chứa ô, generation và trạng thái máy chủ.
+ * @return OK nếu vòng đọc có thể tiếp tục, kể cả khi đã trả một lỗi ứng dụng.
+ *         Mã khác được chuyển cho connRead để đánh dấu đóng kết nối.
+ */
 static Status onFrame(const Envelope *envelope, void *context) {
     FrameContext *frameContext = (FrameContext *)context;
     App *app = frameContext->app;
@@ -398,8 +396,7 @@ static Status onFrame(const Envelope *envelope, void *context) {
         return OK;
     }
 
-    /* Spec: ids strictly increase per connection; a replayed or reordered id
-     * is answered without re-running the command. */
+    /* Từ chối id lặp hoặc nhỏ hơn id trước để tránh chạy lại yêu cầu cũ. */
     if (envelope->id <= slot->lastRequestId) {
         appReplyStatus(app, conn, envelope->id, STALE_REQUEST);
         return OK;
@@ -407,12 +404,12 @@ static Status onFrame(const Envelope *envelope, void *context) {
     slot->lastRequestId = envelope->id;
     slot->lastFrameMs = nowMs;
 
-    /* Resolve due deadlines first so no command acts on an already expired turn. */
+    /* Xử lý lượt hết hạn trước để không nhận lệnh cho lượt đã hết giờ. */
     matchesTick(app->matches, nowMs);
 
     if (strcmp(envelope->type, "HELLO") == 0) {
-        /* Wall-clock time on purpose: clients use it to show real timestamps,
-         * while every timer inside the server stays on CLOCK_MONOTONIC. */
+        /* HELLO cần giờ thực để client hiển thị mốc thời gian. Bộ đếm thời hạn
+         * nội bộ dùng CLOCK_MONOTONIC để không nhảy khi hệ thống chỉnh giờ. */
         struct timespec wallClock;
         clock_gettime(CLOCK_REALTIME, &wallClock);
         uint64_t serverTimeMs = (uint64_t)wallClock.tv_sec * MS_PER_SECOND +
@@ -462,14 +459,14 @@ static Status onFrame(const Envelope *envelope, void *context) {
             appReplyStatus(app, conn, envelope->id, UNAUTHENTICATED);
             return OK;
         }
-        /* GAME_STATE pushes go out inside matchesHandle; the reply follows them. */
+        /* matchesHandle có thể gửi GAME_STATE trước phản hồi mang id yêu cầu. */
         Status result = matchesHandle(app->matches, userId, envelope, nowMs);
         appReplyStatus(app, conn, envelope->id, result);
         return OK;
     }
 
-    /* Unknown opcodes, including server-only events such as TIMEOUT or
-     * UNO_PENALTY, are rejected but keep the connection open. */
+    /* TIMEOUT và UNO_PENALTY do máy chủ sinh ra. Yêu cầu kiểu này chỉ nhận
+     * BAD_REQUEST để client vẫn có thể gửi lệnh hợp lệ tiếp theo. */
     appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
     return OK;
 }
@@ -501,10 +498,10 @@ Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, 
     Status queueStatus = queueInit(&app->queue);
     if (queueStatus != OK) return queueStatus;
 
-    /* The auth worker thread writes one byte per finished task so poll() wakes
-     * the main thread; both ends are non-blocking so neither side can stall.
-     * FIXME: pipe() failure leaves no auth worker and fcntl results are ignored.
-     * Return BUSY from appInit so startup fails instead of hanging logins. */
+    /* Luồng xác thực ghi bản ghi AuthResult vào pipe để đánh thức poll().
+     * Hai đầu dùng chế độ không chặn để một luồng không phải chờ luồng kia.
+     * FIXME: Kiểm tra lỗi tạo pipe, đặt cờ và khởi tạo worker. Dọn tài nguyên
+     * rồi báo lỗi khởi động nếu không thiết lập được luồng xác thực. */
     int authPipe[2];
     if (pipe(authPipe) == 0) {
         int flags = fcntl(authPipe[0], F_GETFL, 0);
@@ -518,7 +515,7 @@ Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, 
         authWorkerInit(&app->authWorker, app->authPipeWrite);
     }
 
-    /* A peer that resets mid-send must yield EPIPE, not kill the server. */
+    /* Bỏ qua SIGPIPE để mất kết nối trong lúc gửi không làm dừng cả máy chủ. */
     signal(SIGPIPE, SIG_IGN);
     struct sigaction stopAction;
     memset(&stopAction, 0, sizeof(stopAction));
@@ -526,24 +523,23 @@ Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, 
     sigaction(SIGINT, &stopAction, NULL);
     sigaction(SIGTERM, &stopAction, NULL);
 
-    // Step 1: create the IPv4 TCP listening socket.
+    // Bước 1. Tạo socket TCP/IPv4 dành riêng để nhận kết nối mới.
     int listenSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (listenSocket < 0) return BUSY;
 
-    /* SO_REUSEADDR lets a restarted server bind the port while old
-     * connections are still in TIME_WAIT.
-     * FIXME: setsockopt and fcntl(F_SETFL) results are ignored; a blocking
-     * listen socket would stall the accept loop. Close it and return BUSY. */
+    /* SO_REUSEADDR cho phép mở lại cổng khi kết nối cũ còn ở TIME_WAIT.
+     * FIXME: Kiểm tra lỗi setsockopt và fcntl. Đóng socket và trả BUSY
+     * nếu cấu hình lỗi, vì socket chặn có thể làm treo vòng accept. */
     int reuseAddress = 1;
     setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, &reuseAddress, sizeof(reuseAddress));
 
-    /* Non-blocking so the accept loop can drain the queue until EAGAIN. */
+    /* Dùng chế độ không chặn để accept() dừng ở EAGAIN khi hết hàng chờ. */
     int flags = fcntl(listenSocket, F_GETFL, 0);
     if (flags >= 0) {
         fcntl(listenSocket, F_SETFL, flags | O_NONBLOCK);
     }
 
-    // Step 2: bind to the configured address; htons() puts the port in network byte order.
+    // Bước 2. Gắn địa chỉ lắng nghe. htons() đổi cổng sang thứ tự byte mạng.
     struct sockaddr_in serverAddress;
     memset(&serverAddress, 0, sizeof(serverAddress));
     serverAddress.sin_family = AF_INET;
@@ -558,14 +554,14 @@ Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, 
         return BUSY;
     }
 
-    // Step 3: start listening; accept() happens in appRun's poll loop.
+    // Bước 3. Bật lắng nghe để hệ điều hành xếp hàng kết nối cho appRun.
     if (listen(listenSocket, LISTEN_BACKLOG) < 0) {
         close(listenSocket);
         return BUSY;
     }
 
-    /* Port 0 asks the kernel for an ephemeral port; read it back (ntohs converts
-     * from network byte order) so appRun can print "PORT n" for tests. */
+    /* Nếu truyền cổng 0, hệ điều hành chọn cổng. Đọc lại bằng getsockname()
+     * rồi dùng ntohs() để appRun in số cổng mà kiểm thử có thể kết nối. */
     struct sockaddr_in boundAddress;
     socklen_t addressLength = sizeof(boundAddress);
     if (getsockname(listenSocket, (struct sockaddr *)&boundAddress, &addressLength) == 0) {
@@ -585,7 +581,7 @@ void appStop(App *app) {
 
 void appCleanup(App *app) {
     if (!app) return;
-    /* Read by appCloseSlot: no presence pushes while everything closes. */
+    /* Tắt cập nhật hiện diện trước khi appCloseSlot ngắt các phiên. */
     app->running = false;
     for (int i = 0; i < APP_MAX_CONNS; i++) {
         if (app->slots[i].active) {
@@ -596,6 +592,7 @@ void appCleanup(App *app) {
         close(app->listenFd);
         app->listenFd = -1;
     }
+    /* Dừng luồng xác thực trước khi đóng pipe mà nó có thể còn ghi vào. */
     if (app->authWorker) {
         authWorkerDestroy(app->authWorker);
         app->authWorker = NULL;
@@ -608,7 +605,7 @@ void appCleanup(App *app) {
         close(app->authPipeWrite);
         app->authPipeWrite = -1;
     }
-    /* Every slot is closed above, so no disconnect can reach the queue any more. */
+    /* Giữ hàng chờ và phòng đến khi xử lý xong mọi lượt ngắt phiên. */
     queueDestroy(app->queue);
     app->queue = NULL;
     if (app->rooms) {
@@ -616,7 +613,7 @@ void appCleanup(App *app) {
         app->rooms = NULL;
     }
     sessionsCleanup(app);
-    /* The coordinator borrows the store, so it must go first. */
+    /* Bộ điều phối mượn kho dữ liệu nên cần giải phóng trước khi đóng kho. */
     matchesDestroy(app->matches);
     app->matches = NULL;
     if (app->store) {
@@ -638,9 +635,8 @@ Status appRejectConnection(int connectionSocket) {
     json_object_put(payload);
 
     if (status == OK) {
-        /* One send only: the socket from accept() is still blocking and the frame
-         * is far below any socket buffer, so a short write means the peer is gone.
-         * MSG_NOSIGNAL reports a reset peer as EPIPE instead of raising SIGPIPE. */
+        /* Socket chưa qua connInit nên trên Linux vẫn ở chế độ chặn. Chỉ thử
+         * gửi một lần cho kết nối bị từ chối, kể cả khi gửi thiếu byte. */
         ssize_t bytesSent = send(connectionSocket, fullFrame, frameLength, MSG_NOSIGNAL);
         if (bytesSent < 0) {
             fprintf(stderr, "SERVER_FULL reject: send failed: %s\n", strerror(errno));
@@ -656,7 +652,7 @@ Status appRejectConnection(int connectionSocket) {
     return status;
 }
 
-/* Tell every authenticated client the server is going away before sockets close. */
+/* Báo SERVER_SHUTDOWN trước khi đóng socket để client biết lý do mất kết nối. */
 static void announceShutdown(App *app) {
     json_object *payload = json_object_new_object();
     if (!payload) return;
@@ -672,7 +668,7 @@ static void announceShutdown(App *app) {
     json_object_put(payload);
 }
 
-/* Close connections with no accepted frame within the heartbeat window. */
+/* Thời hạn heartbeat tính từ frame được chấp nhận gần nhất, kể cả ngoài PING. */
 static void sweepIdleConnections(App *app, uint64_t nowMs) {
     uint64_t limitMs = (uint64_t)app->heartbeatMs;
     for (int index = 0; index < APP_MAX_CONNS; index++) {
@@ -723,10 +719,10 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
     int slotByPollIndex[2 + APP_MAX_CONNS];
 
     while (app->running && !gStopRequested) {
-        /* Turn deadlines and bot moves advance even when no socket is readable. */
+        /* Chạy bộ đếm lượt và bot theo thời gian, kể cả khi không có dữ liệu mạng. */
         uint64_t tickMs = appNowMs();
         matchesTick(app->matches, tickMs);
-        /* Retries failed match starts and drops logged-out users from the queue. */
+        /* Hàng chờ thử mở lại trận bị lỗi và loại người đã rời phiên. */
         queueTick(app, tickMs);
 
         pollFds[0].fd = app->listenFd;
@@ -743,6 +739,7 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
             if (app->slots[i].active && app->slots[i].conn.fd >= 0) {
                 pollFds[pollCount].fd = app->slots[i].conn.fd;
                 pollFds[pollCount].events = POLLIN;
+                /* Chỉ chờ POLLOUT khi có byte tồn để socket rảnh không đánh thức poll. */
                 if (app->slots[i].conn.outLen > app->slots[i].conn.outPos) {
                     pollFds[pollCount].events |= POLLOUT;
                 }
@@ -752,20 +749,19 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
             }
         }
 
-        /* Order below matters: auth results, new connections, then client I/O. */
         int readyCount = poll(pollFds, pollCount, POLL_TIMEOUT_MS);
         if (readyCount < 0) {
-            /* A signal (e.g. SIGTERM) interrupted poll; re-check the stop flag. */
+            /* EINTR quay lại đầu vòng để kiểm tra cờ dừng do tín hiệu đặt. */
             if (errno == EINTR) continue;
             break;
         }
 
-        /* Check auth worker pipe for completed auth tasks */
+        /* Áp dụng kết quả xác thực đã sẵn sàng trước khi xử lý lệnh mới của client. */
         if (pollFds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             authDrain(app);
         }
 
-        // Step 4: accept every pending connection on the listening socket.
+        // Bước 4. Nhận hết kết nối đang chờ trên socket lắng nghe.
         if (pollFds[0].revents & POLLIN) {
             while (1) {
                 struct sockaddr_in clientAddress;
@@ -774,10 +770,10 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                                               &clientAddressLength);
                 if (connectionSocket < 0) {
                     if (errno == EINTR) continue;
-                    /* Queue drained: the listening socket is non-blocking. */
+                    /* EAGAIN hoặc EWOULDBLOCK báo hàng chờ hiện đã cạn. */
                     if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    /* Other errors (ECONNABORTED, EMFILE) end this round; the
-                     * next poll() retries any connection still queued. */
+                    /* Lỗi khác kết thúc đợt nhận này để vòng poll tiếp tục phục vụ
+                     * các socket đang hoạt động. */
                     break;
                 }
 
@@ -790,7 +786,7 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                 }
 
                 if (freeSlot < 0) {
-                    /* Best effort: the outcome is logged inside; the loop goes on. */
+                    /* Hàm tự ghi lỗi và đóng socket để vòng nhận vẫn tiếp tục. */
                     (void)appRejectConnection(connectionSocket);
                     continue;
                 }
@@ -798,25 +794,24 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                 AppConnSlot *slot = &app->slots[freeSlot];
                 slot->active = true;
                 slot->generation++;
-                /* Kept as text for the per-IP auth limiter and logs. */
+                /* Đổi địa chỉ sang chuỗi để áp hạn mức xác thực theo IP. */
                 inet_ntop(AF_INET, &clientAddress.sin_addr, slot->clientIp,
                           sizeof(slot->clientIp));
                 slot->rateLastMs = appNowMs();
                 slot->rateTokens = RATE_BURST_TOKENS;
                 slot->lastRequestId = 0;
-                /* A fresh socket gets one full heartbeat window to send its first frame. */
+                /* Cho kết nối mới đủ một khoảng heartbeat để gửi frame đầu tiên. */
                 slot->lastFrameMs = slot->rateLastMs;
                 connInit(&slot->conn, connectionSocket, (uint32_t)freeSlot, slot->generation);
             }
         }
 
-        /* Check client sockets */
         for (int k = 2; k < pollCount; k++) {
             int slotIndex = slotByPollIndex[k];
             AppConnSlot *slot = &app->slots[slotIndex];
             if (!slot->active) continue;
 
-            // Step 5: send queued output first, then recv() and dispatch new frames.
+            // Bước 5. Gửi phần còn tồn trước khi đọc, để nhường chỗ cho phản hồi mới.
             if (pollFds[k].revents & POLLOUT) {
                 Status ioStatus = connFlush(&slot->conn);
                 if (ioStatus != OK || slot->conn.closing) {
@@ -825,6 +820,8 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                 }
             }
 
+            /* TCP có thể chia một frame thành nhiều lần recv(). connRead ghép
+             * đủ frame rồi mới gọi onFrame và báo lỗi khi đầu kia đóng. */
             if (pollFds[k].revents & POLLIN) {
                 FrameContext context = {app, (uint32_t)slotIndex, slot->generation};
                 Status ioStatus = connRead(&slot->conn, onFrame, &context);
@@ -834,16 +831,17 @@ int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
                 }
             }
 
+            // Bước 6. Đóng socket lỗi hoặc đã ngắt và thu hồi ô kết nối.
             if (pollFds[k].revents & (POLLERR | POLLHUP | POLLNVAL)) {
                 appCloseSlot(app, slotIndex);
                 continue;
             }
         }
 
-        /* Drain auth after handling any new client requests */
+        /* Lấy thêm kết quả xác thực hoàn tất trong lúc xử lý I/O của client. */
         authDrain(app);
 
-        /* Teardown slow peers immediately */
+        /* Những push phát sinh giữa vòng có thể đánh dấu client chậm để đóng ngay. */
         for (int i = 0; i < APP_MAX_CONNS; i++) {
             if (app->slots[i].active && app->slots[i].conn.closing) {
                 appCloseSlot(app, i);

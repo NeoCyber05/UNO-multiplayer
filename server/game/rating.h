@@ -15,39 +15,39 @@ enum {
 typedef enum { RANK_BRONZE, RANK_SILVER, RANK_GOLD, RANK_DIAMOND } Rank;
 
 /**
- * @brief Compute the ELO change for one side of a finished match.
- * @param[in] own ELO of the player, or the average ELO of the player's team.
- * @param[in] opposition Average ELO of the opponents.
- * @param[in] won true when this side won (score 1), false when it lost (score 0).
- * @return lround(K * (score - expected)), rounded half away from zero.
+ * @brief Tính mức thay đổi ELO của một người chơi hoặc một đội.
+ * @param[in] own ELO cá nhân hoặc ELO trung bình của đội.
+ * @param[in] opposition ELO trung bình của các đối thủ.
+ * @param[in] won true nếu thắng (điểm 1), false nếu thua (điểm 0).
+ * @return K nhân chênh lệch giữa điểm thực tế và kỳ vọng. lround làm tròn
+ *         phần đúng nửa đơn vị theo hướng xa 0.
  */
 int ratingDelta(double own, double opposition, bool won);
 
 /**
- * @brief Map an ELO value to one of the four rank tiers.
- * @param[in] elo Current ELO (never negative after ratingApply).
- * @return RANK_BRONZE below 1200, RANK_SILVER 1200..1399,
- *         RANK_GOLD 1400..1799, RANK_DIAMOND from 1800.
+ * @brief Xác định hạng theo ELO hiện tại.
+ * @param[in] elo Điểm ELO cần xét.
+ * @return RANK_BRONZE dưới 1200, RANK_SILVER từ 1200 đến 1399,
+ *         RANK_GOLD từ 1400 đến 1799, RANK_DIAMOND từ 1800 trở lên.
  */
 Rank ratingRank(int elo);
 
 /**
- * @brief Return the wire key used for a rank in protocol messages.
- * @param[in] rank Rank tier.
- * @return Static string "bronze", "silver", "gold" or "diamond";
- *         "bronze" for an out-of-range value.
+ * @brief Lấy tên hạng theo định dạng giao thức.
+ * @param[in] rank Hạng cần gửi.
+ * @return Chuỗi tĩnh "bronze", "silver", "gold" hoặc "diamond".
+ *         Giá trị ngoài phạm vi dùng "bronze".
  */
 const char *ratingRankKey(Rank rank);
 
 /**
- * @brief Fill eloAfter for every seat of a match result.
- * @param[in,out] result Result whose eloBefore, mode, team and winner fields are read.
- * @param[in] isBot Per-seat bot flags, or NULL when every seat is human.
+ * @brief Điền ELO sau trận cho từng ghế dựa trên ELO trước trận.
+ * @param[in,out] result Kết quả gồm ELO ban đầu, chế độ, đội và bên thắng.
+ * @param[in] isBot Cờ bot theo ghế. Truyền NULL nếu mọi ghế là người chơi.
  *
- * Only a ranked, finalized match changes ELO; otherwise (and for bot seats)
- * eloAfter equals eloBefore. Solo modes compare each player with the average
- * of the three others; team modes compare team averages and give both
- * teammates the same delta. The result is clamped to be >= 0.
+ * Chỉ tính thay đổi cho người chơi trong trận xếp hạng đã chốt. Chế độ cá nhân
+ * so với trung bình ba đối thủ. Chế độ đội so trung bình hai đội và tính cùng
+ * một mức thay đổi cho đồng đội. Điểm sau cập nhật có sàn bằng 0.
  */
 void ratingApply(MatchResult *result, const bool isBot[4]);
 

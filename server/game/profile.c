@@ -27,6 +27,7 @@ static uint32_t earnedBadges(const ProfileStats *stats) {
     return badges;
 }
 
+/* Chặn tràn số để bộ đếm đã đạt tối đa không quay về 0. */
 static uint32_t addCount(uint32_t base, uint32_t increment) {
     return increment > UINT32_MAX - base ? UINT32_MAX : base + increment;
 }
@@ -36,7 +37,7 @@ Status profileCompute(Store *store, const MatchResult *result,
     if (!store || !result || !out || result->status == MATCH_ACTIVE) return BAD_REQUEST;
     ProfileDelta deltas[PROFILE_SEAT_COUNT] = {0};
     bool teamMode = result->mode == TWO_V_TWO || result->mode == SIDE;
-    // Bot matches count toward participation. Competitive awards require human opponents.
+    // Ghế bot ban đầu có userId bằng 0. Người rời trận vẫn giữ userId để tính kết quả.
     bool vsBots = false;
     for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
         if (!result->players[seat].userId) vsBots = true;
@@ -51,7 +52,7 @@ Status profileCompute(Store *store, const MatchResult *result,
 
             ProfileStats after = before;
             after.matches = addCount(before.matches, 1);
-            // streak/bestStreak/peakElo are written as absolute values, so a bot match keeps them as read.
+            // Các mốc này được ghi theo giá trị tuyệt đối, nên trận có bot giữ số liệu cũ.
             if (!vsBots) {
                 bool won = !player->left && (teamMode ? player->team == result->winnerTeam
                                                       : seat == result->winnerSeat);

@@ -35,7 +35,7 @@ typedef struct {
 typedef enum { PLAY, DRAW, PASS, SAY_UNO, DRAFT_PICK, LEAVE, CHAT } IntentKind;
 typedef struct {
     IntentKind kind;
-    MatchId matchId; /* Bound to a Game by the coordinator. */
+    MatchId matchId; /* Bộ điều phối dùng mã này để xác định trận nhận lệnh. */
     uint32_t turnNo, draftTurn;
     char cardId[5];
     Color color;
@@ -60,71 +60,73 @@ typedef struct {
     Seat turn;
     uint32_t turnNo;
     int direction, winnerSeat, winnerTeam, team[SEAT_COUNT];
-    char drawnCardId[5]; /* Empty until DRAW returns a playable card. */
+    char drawnCardId[5]; /* Nếu có, đây là lá duy nhất được đánh sau khi rút. */
     bool unoDeclared[SEAT_COUNT];
     PlayerStats stats[SEAT_COUNT];
     uint64_t rng, revision, eventSeq;
 } Game;
 
 /**
- * @brief Initialize the game and deal the opening hands from a deterministic shuffle.
- * @param[out] game Game to initialize after player validation.
- * @param[in] mode Mode that determines teams and the initial phase.
- * @param[in] players Seat-indexed player specifications copied into the game.
- * @param[in] seed Initial shuffle state. Zero is a valid seed.
- * @return OK on success or BAD_REQUEST for invalid inputs.
+ * @brief Khởi tạo và chia bài theo seed để có thể tái lập ván đấu.
+ * @param[out] game Trạng thái được khởi tạo sau khi kiểm tra người chơi.
+ * @param[in] mode Chế độ quyết định cách chia đội và giai đoạn đầu trận.
+ * @param[in] players Thông tin người chơi theo ghế, được sao chép vào ván đấu.
+ * @param[in] seed Giá trị khởi tạo bộ xáo bài, có thể bằng 0.
+ * @return OK khi thành công, BAD_REQUEST nếu đầu vào không hợp lệ.
  */
 Status gameInit(Game *game, Mode mode, const PlayerSpec players[SEAT_COUNT], uint64_t seed);
 
 /**
- * @brief Apply one validated move to the caller's candidate game.
- * @param[in,out] game Candidate state. The coordinator owns persistence and publication.
- * @param[in] actor Seat taking the move, whether controlled by a human or a bot.
- * @param[in] intent Move and the turn or draft pick it applies to.
- * @param[out] out Receives the events produced by the move.
- * @return OK on success or a status describing the rejected move.
+ * @brief Kiểm tra và áp dụng một nước đi lên bản sao trước khi bộ điều phối lưu.
+ * @param[in,out] game Trạng thái dự kiến để bộ điều phối lưu và công bố.
+ * @param[in] actor Ghế thực hiện nước đi, có thể do người chơi hoặc bot điều khiển.
+ * @param[in] intent Nước đi và số lượt đánh hoặc lượt chọn bài tương ứng.
+ * @param[out] out Nhận các sự kiện phát sinh khi áp dụng nước đi.
+ * @return OK khi thành công hoặc mã nêu lý do từ chối nước đi.
  */
 Status gameApply(Game *game, Seat actor, const Intent *intent, EventBatch *out);
 
 /**
- * @brief Advance an expired playing turn, drawing a card if the seat has yet to draw.
- * @param[in,out] game Candidate state in the playing phase.
- * @param[in] expectedTurn Turn number captured by the coordinator.
- * @param[out] out Receives the timeout and turn events.
- * @return OK on success, STALE_TURN when the turn changed, or an input or phase error.
+ * @brief Chuyển lượt khi hết giờ và rút một lá nếu ghế hiện tại chưa rút.
+ * @param[in,out] game Trạng thái dự kiến trong giai đoạn đánh bài.
+ * @param[in] expectedTurn Số lượt đã ghi nhận để tránh hết giờ nhầm lượt.
+ * @param[out] out Nhận sự kiện hết giờ và các sự kiện phát sinh.
+ * @return OK, STALE_TURN nếu lượt đã đổi, BAD_REQUEST nếu thiếu con trỏ,
+ *         hoặc INVALID_ACTION nếu ván đang ở giai đoạn khác.
  */
 Status gameTimeout(Game *game, uint32_t expectedTurn, EventBatch *out);
 
 /**
- * @brief Take the first occupied offer when a draft pick expires.
- * @param[in,out] game Candidate state in the draft phase.
- * @param[in] expectedPick Draft pick number captured by the coordinator.
- * @param[out] out Receives the draft events.
- * @return OK on success, STALE_TURN when the pick changed, or an input or phase error.
+ * @brief Khi hết giờ, tự chọn lá chưa được lấy có chỉ số nhỏ nhất.
+ * @param[in,out] game Trạng thái dự kiến trong giai đoạn chọn bài.
+ * @param[in] expectedPick Số lượt chọn đã ghi nhận để tránh chọn nhầm lượt.
+ * @param[out] out Nhận các sự kiện do lượt chọn tự động tạo ra.
+ * @return OK, STALE_TURN nếu lượt chọn đã đổi, BAD_REQUEST nếu thiếu con trỏ,
+ *         hoặc INVALID_ACTION nếu sai giai đoạn hay hết lá để chọn.
  */
 Status gameDraftTimeout(Game *game, uint32_t expectedPick, EventBatch *out);
 
 /**
- * @brief Check whether the active seat may play a card from its hand.
- * @param[in] game Current game state.
- * @param[in] actor Seat whose hand contains the card.
- * @param[in] card Card borrowed from that seat's hand.
- * @return True if the current turn and discard permit the play.
+ * @brief Kiểm tra luật đánh một lá bài trong lượt hiện tại.
+ * @param[in] game Trạng thái ván hiện tại.
+ * @param[in] actor Ghế muốn đánh lá bài.
+ * @param[in] card Lá bài lấy từ tay của ghế đó. Hàm không kiểm tra quyền sở hữu lá.
+ * @return true nếu đúng lượt, lá đánh được theo luật và thỏa giới hạn sau khi rút.
  */
 bool gamePlayable(const Game *game, Seat actor, const Card *card);
 
 /**
- * @brief Check whether the seat can declare UNO for a play that leaves one card.
- * @param[in] game Current game state.
- * @param[in] seat Seat considering the declaration.
- * @return True if an eligible play exists in the current turn.
+ * @brief Kiểm tra quyền hô UNO trước một nước đi khiến tay bài còn đúng một lá.
+ * @param[in] game Trạng thái ván hiện tại.
+ * @param[in] seat Ghế muốn hô UNO.
+ * @return true nếu ghế chưa hô UNO và có nước đi hợp lệ như trên trong lượt này.
  */
 bool gameCanSayUno(const Game *game, Seat seat);
 
 /**
- * @brief Generate a deterministic random word using SplitMix64.
- * @param[in,out] state State to advance. Any initial value is valid.
- * @return Next random word.
+ * @brief Sinh giá trị giả ngẫu nhiên có thể tái lập bằng SplitMix64.
+ * @param[in,out] state Trạng thái được cập nhật, chấp nhận cả giá trị ban đầu bằng 0.
+ * @return Giá trị 64 bit tiếp theo trong chuỗi.
  */
 uint64_t gameRandom(uint64_t *state);
 

@@ -22,27 +22,27 @@ typedef struct {
     Card topCard;
     DraftState draft;
     PlayerView players[SEAT_COUNT];
-    bool legal[CARD_COUNT]; /* Indexed by position in the viewer's hand. */
+    bool legal[CARD_COUNT]; /* Dùng cùng chỉ số với các lá trong tay người xem. */
     bool canDraw, canPass, canSayUno;
-    /* The coordinator supplies match identity, clocks and connection status. */
+    /* Bộ điều phối bổ sung mã trận, mốc thời gian và trạng thái kết nối. */
     MatchId matchId;
     uint64_t deadline, serverNowMs, durationMs;
 } GameView;
 
 /**
- * @brief Build a snapshot with only the hands the viewer is allowed to see.
- * @param[in] game Current game state.
- * @param[in] viewer Seat for which to build the snapshot.
- * @param[out] view Receives the snapshot. The coordinator fills in clocks and presence.
- * @return OK on success or BAD_REQUEST for an invalid argument.
+ * @brief Tạo bản trạng thái chỉ lộ tay bài của người xem và đồng đội.
+ * @param[in] game Trạng thái hiện tại của ván đấu.
+ * @param[in] viewer Ghế nhận bản trạng thái.
+ * @param[out] view Nhận dữ liệu ván. Bộ điều phối bổ sung thời gian và kết nối.
+ * @return OK khi thành công, BAD_REQUEST nếu đối số không hợp lệ.
  */
 Status viewBuild(const Game *game, Seat viewer, GameView *view);
 
 /**
- * @brief Serialize the seat-specific GAME_STATE payload.
- * @param[in] view Snapshot for the intended viewer.
- * @param[out] out Receives one caller-owned JSON reference on success.
- * @return OK on success, BAD_REQUEST for an invalid argument, or BUSY on encoding failure.
+ * @brief Mã hóa bản trạng thái riêng của một ghế thành payload GAME_STATE.
+ * @param[in] view Bản trạng thái đã lọc theo ghế nhận.
+ * @param[out] out Nhận tham chiếu JSON mà bên gọi phải giải phóng nếu thành công.
+ * @return OK khi thành công, BAD_REQUEST nếu đối số sai, BUSY nếu không tạo được JSON.
  */
 Status viewJson(const GameView *view, json_object **out);
 

@@ -15,7 +15,6 @@ enum {
     MISSED_UNO_PENALTY = 2
 };
 
-/* SplitMix64 accepts every seed, including zero. */
 uint64_t gameRandom(uint64_t *state) {
     uint64_t word = (*state += UINT64_C(0x9e3779b97f4a7c15));
     word = (word ^ (word >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
@@ -31,6 +30,7 @@ static void pushCard(Pile *pile, Card card) {
     pile->cards[pile->count++] = card;
 }
 
+/* Fisher–Yates dùng trạng thái riêng của ván để cùng seed cho cùng thứ tự bài. */
 static void shuffleDeck(Game *game) {
     for (int i = game->deck.count - 1; i > 0; i--) {
         int j = (int)(gameRandom(&game->rng) % (i + 1));
@@ -69,6 +69,7 @@ Status gameInit(Game *game, Mode mode, const PlayerSpec players[SEAT_COUNT], uin
     memcpy(game->players, players, sizeof game->players);
     for (int seat = 0; seat < SEAT_COUNT; seat++) {
         game->team[seat] = -1;
+        /* 2v2 ghép hai ghế đối diện. Side ghép hai ghế liền nhau. */
         if (mode == TWO_V_TWO) game->team[seat] = seat % 2;
         if (mode == SIDE) game->team[seat] = seat / 2;
     }
@@ -92,7 +93,7 @@ Status gameInit(Game *game, Mode mode, const PlayerSpec players[SEAT_COUNT], uin
         }
     }
     if (mode == DRAFT) dealOffers(game);
-    // An opening number card avoids applying an effect before the first turn.
+    // Mở bàn bằng lá số để tránh kích hoạt hiệu ứng trước lượt đầu tiên.
     int openingIndex = 0;
     while (game->deck.cards[openingIndex].value > NINE)
         openingIndex++;
@@ -103,6 +104,7 @@ Status gameInit(Game *game, Mode mode, const PlayerSpec players[SEAT_COUNT], uin
     return OK;
 }
 
+/* Các sự kiện cùng nước đi dùng chung revision nhưng có số thứ tự riêng. */
 static void recordEvent(Game *game, EventBatch *out, int actor, const char *type,
                         const char *format, ...) {
     assert(out->count < sizeof out->events / sizeof out->events[0]);
@@ -136,7 +138,7 @@ bool gameCanSayUno(const Game *game, Seat seat) {
     const Pile *hand = &game->hands[seat];
     if (hand->count < 2) return false;
 
-    // Discard All can also bring a larger hand down to one card.
+    // Lá bỏ cùng màu có thể đưa tay bài nhiều hơn hai lá về đúng một lá.
     int colorCounts[WILD_COLOR + 1] = {0};
     for (int index = 0; index < hand->count; index++) {
         colorCounts[hand->cards[index].color]++;
@@ -153,6 +155,7 @@ static void drawCards(Game *game, Seat seat, int count, EventBatch *out) {
     for (int i = 0; i < count; i++) {
         if (!game->deck.count) {
             if (game->discard.count == 1) break;
+            /* Giữ lá trên cùng để luật so màu và số vẫn có lá đối chiếu. */
             Card top = popCard(&game->discard);
             game->deck = game->discard;
             game->discard.count = 0;
@@ -184,7 +187,7 @@ static void playCard(Game *game, Seat seat, Card card, Color chosen, EventBatch 
     Pile *hand = &game->hands[seat];
     game->currentColor = card.color == WILD_COLOR ? chosen : card.color;
     int kept = 0, discarded = 0;
-    /* All extras fit in one event, even if a hand contains every card of its color. */
+    /* Chừa đủ chỗ cho mọi mã lá bỏ kèm trong cùng sự kiện PLAY. */
     char extras[CARD_COUNT * 8 + 1] = "";
     size_t used = 0;
     for (int i = 0; i < hand->count; i++) {
@@ -222,6 +225,7 @@ static void playCard(Game *game, Seat seat, Card card, Color chosen, EventBatch 
     if (attack)
         drawCards(game, nextSeat(game, 1),
                   card.value == DRAW_TWO ? DRAW_TWO_PENALTY : WILD_FOUR_PENALTY, out);
+    /* UNO phải được hô trước khi đánh. Áp dụng phạt ngay trong nước đi này. */
     if (kept == 1 && !game->unoDeclared[seat]) {
         recordEvent(game, out, -1, "UNO_PENALTY", "{\"seat\":%u,\"penalties\":%u}", (unsigned)seat,
                     ++stats->penalties);
@@ -245,6 +249,7 @@ static void draftPick(Game *game, int index, bool timeout, EventBatch *out) {
         recordEvent(game, out, -1, "TURN", "{\"turn\":0,\"turnNo\":1,\"direction\":1}");
     } else {
         if (draftTurn % DRAFT_OFFER_COUNT == 0) dealOffers(game);
+        /* Đổi ghế chọn đầu tiên qua mỗi vòng để chia đều lợi thế chọn trước. */
         game->turn =
             (Seat)((draftTurn / DRAFT_OFFER_COUNT + draftTurn % DRAFT_OFFER_COUNT) % SEAT_COUNT);
     }
@@ -278,6 +283,7 @@ Status gameApply(Game *game, Seat seat, const Intent *intent, EventBatch *out) {
         return OK;
     }
     if (game->phase != PLAYING) return INVALID_ACTION;
+    /* SAY_UNO không mang turnNo. gameCanSayUno kiểm tra theo lượt hiện tại. */
     if (intent->kind == SAY_UNO) {
         if (!gameCanSayUno(game, seat)) return INVALID_ACTION;
         game->revision++;
@@ -309,6 +315,7 @@ Status gameApply(Game *game, Seat seat, const Intent *intent, EventBatch *out) {
         int before = hand->count;
         recordEvent(game, out, seat, "DRAW", "{}");
         drawCards(game, seat, 1, out);
+        /* Chỉ giữ lượt nếu lá vừa rút đánh được. Người chơi có thể đánh lá đó hoặc bỏ qua. */
         if (hand->count > before && matchesTopCard(game, &hand->cards[before]))
             memcpy(game->drawnCardId, hand->cards[before].id, sizeof game->drawnCardId);
         else

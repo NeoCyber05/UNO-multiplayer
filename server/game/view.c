@@ -30,6 +30,7 @@ Status viewBuild(const Game *game, Seat viewer, GameView *view) {
         PlayerView *player = &view->players[seat];
         player->player = game->players[seat];
         player->team = game->team[seat];
+        /* Người xem biết số lá của đối thủ để theo dõi ván, còn tay bài được giữ kín. */
         player->cardCount = game->hands[seat].count;
         player->handVisible =
             seat == viewer || (player->team >= 0 && player->team == game->team[viewer]);
@@ -50,7 +51,7 @@ static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
 static const char *const PHASE_NAMES[] = {"PLAYING", "FINISHED", "DRAFT"};
 static const char *const BOT_LEVEL_NAMES[] = {"easy", "normal", "hard"};
 
-/* Both helpers consume the child, including on allocation/insertion failure. */
+/* Hai hàm dưới nhận quyền sở hữu child và giải phóng nếu không thêm được vào JSON. */
 static bool addField(json_object *obj, const char *key, json_object *child) {
     if (obj && child && json_object_object_add(obj, key, child) == 0) return true;
     json_object_put(child);
@@ -143,6 +144,7 @@ Status viewJson(const GameView *view, json_object **out) {
     if (!addField(root, "offers", offers)) goto fail;
     if (view->phase == DRAFTING) {
         if (!addField(root, "draftTurn", json_object_new_uint64(view->draft.turn))) goto fail;
+        /* Giữ null ở ô đã lấy để chỉ số client gửi vẫn khớp với ô trên máy chủ. */
         for (int i = 0; i < DRAFT_OFFER_COUNT; i++) {
             if (view->draft.offers[i].occupied) {
                 if (!appendItem(offers, cardJson(&view->draft.offers[i].card))) goto fail;
