@@ -46,7 +46,7 @@ static void testPartialWriteAndFlush(void) {
     assert(setsockopt(socketPair[1], SOL_SOCKET, SO_RCVBUF, &bufferSize, sizeof(bufferSize)) == 0);
 
     Conn connection;
-    assert(conn_init(&connection, socketPair[0], 0, 1) == OK);
+    assert(connInit(&connection, socketPair[0], 0, 1) == OK);
 
     /* Construct an envelope with ~8KB payload to force partial write */
     struct json_object *payload = json_object_new_object();
@@ -56,17 +56,17 @@ static void testPartialWriteAndFlush(void) {
     json_object_object_add(payload, "bulk", json_object_new_string(bigString));
 
     Envelope envelope = {1, 42, "HELLO", payload};
-    assert(conn_queue(&connection, &envelope) == OK);
+    assert(connQueue(&connection, &envelope) == OK);
     json_object_put(payload);
 
-    assert(connection.out_len > 8000);
-    assert(connection.out_pos == 0);
+    assert(connection.outLen > 8000);
+    assert(connection.outPos == 0);
 
     /* Flush once: should write until kernel buffer is full and hit EAGAIN */
-    Status status = conn_flush(&connection);
+    Status status = connFlush(&connection);
     assert(status == OK);
-    assert(connection.out_pos > 0);
-    assert(connection.out_pos < connection.out_len);
+    assert(connection.outPos > 0);
+    assert(connection.outPos < connection.outLen);
 
     /* Read some bytes from socketPair[1] */
     uint8_t receiveBuffer[16384];
@@ -81,22 +81,22 @@ static void testPartialWriteAndFlush(void) {
         if (byteCount == 0) break;
         totalReceived += (size_t)byteCount;
     }
-    assert(totalReceived == connection.out_pos);
+    assert(totalReceived == connection.outPos);
 
     /* Flush again to send remaining data */
-    status = conn_flush(&connection);
+    status = connFlush(&connection);
     assert(status == OK);
 
     /* If still remaining, drain and flush until fully sent */
-    while (connection.out_pos < connection.out_len) {
+    while (connection.outPos < connection.outLen) {
         ssize_t byteCount = recv(socketPair[1], receiveBuffer + totalReceived,
                                  sizeof(receiveBuffer) - totalReceived, 0);
         if (byteCount > 0) totalReceived += (size_t)byteCount;
-        status = conn_flush(&connection);
+        status = connFlush(&connection);
         assert(status == OK);
     }
-    assert(connection.out_len == 0);
-    assert(connection.out_pos == 0);
+    assert(connection.outLen == 0);
+    assert(connection.outPos == 0);
 
     /* Drain any remaining bytes from receiver */
     while (1) {
@@ -108,14 +108,14 @@ static void testPartialWriteAndFlush(void) {
 
     /* Verify receiver got the full envelope */
     FrameReader reader;
-    frame_reader_reset(&reader);
+    frameReaderReset(&reader);
     TestReceiver receiver = {0};
-    assert(frame_feed(&reader, receiveBuffer, totalReceived, onFrameReceived, &receiver) == OK);
+    assert(frameFeed(&reader, receiveBuffer, totalReceived, onFrameReceived, &receiver) == OK);
     assert(receiver.count == 1);
     assert(receiver.lastId == 42);
     assert(strcmp(receiver.lastType, "HELLO") == 0);
 
-    conn_close(&connection);
+    connClose(&connection);
     close(socketPair[1]);
 }
 
@@ -126,14 +126,14 @@ static void testFragmentedRead(void) {
     assert(setNonBlocking(socketPair[1]) == 0);
 
     Conn connection;
-    assert(conn_init(&connection, socketPair[0], 0, 1) == OK);
+    assert(connInit(&connection, socketPair[0], 0, 1) == OK);
 
     /* Encode two envelopes into a buffer */
     struct json_object *firstPayload = json_object_new_object();
     Envelope firstEnvelope = {1, 1, "PING", firstPayload};
     uint8_t firstFrame[256];
     size_t firstLength = 0;
-    assert(frame_encode(&firstEnvelope, firstFrame, sizeof(firstFrame), &firstLength) == OK);
+    assert(frameEncode(&firstEnvelope, firstFrame, sizeof(firstFrame), &firstLength) == OK);
     json_object_put(firstPayload);
 
     struct json_object *secondPayload = json_object_new_object();
@@ -141,7 +141,7 @@ static void testFragmentedRead(void) {
     Envelope secondEnvelope = {1, 2, "HELLO", secondPayload};
     uint8_t secondFrame[256];
     size_t secondLength = 0;
-    assert(frame_encode(&secondEnvelope, secondFrame, sizeof(secondFrame), &secondLength) == OK);
+    assert(frameEncode(&secondEnvelope, secondFrame, sizeof(secondFrame), &secondLength) == OK);
     json_object_put(secondPayload);
 
     uint8_t combined[512];
@@ -164,7 +164,7 @@ static void testFragmentedRead(void) {
         chunkIndex++;
 
         /* Read whatever is available into conn */
-        Status status = conn_read(&connection, onFrameReceived, &receiver);
+        Status status = connRead(&connection, onFrameReceived, &receiver);
         assert(status == OK);
     }
 
@@ -172,7 +172,7 @@ static void testFragmentedRead(void) {
     assert(receiver.lastId == 2);
     assert(strcmp(receiver.lastType, "HELLO") == 0);
 
-    conn_close(&connection);
+    connClose(&connection);
     close(socketPair[1]);
 }
 
@@ -183,7 +183,7 @@ static void testSlowConsumerThreshold(void) {
     assert(setNonBlocking(socketPair[1]) == 0);
 
     Conn connection;
-    assert(conn_init(&connection, socketPair[0], 0, 1) == OK);
+    assert(connInit(&connection, socketPair[0], 0, 1) == OK);
 
     /* Construct payload of ~32KB */
     struct json_object *payload = json_object_new_object();
@@ -196,7 +196,7 @@ static void testSlowConsumerThreshold(void) {
     Status lastStatus = OK;
     int queuedCount = 0;
     for (int i = 0; i < 20; i++) {
-        lastStatus = conn_queue(&connection, &envelope);
+        lastStatus = connQueue(&connection, &envelope);
         if (lastStatus != OK) break;
         queuedCount++;
     }
@@ -206,44 +206,44 @@ static void testSlowConsumerThreshold(void) {
      * Queuing ~32KB repeatedly should trigger RATE_LIMITED before 10 frames. */
     assert(lastStatus == RATE_LIMITED);
     assert(connection.closing == true);
-    assert(connection.out_len <= CONN_OUT_BUF_SIZE);
+    assert(connection.outLen <= CONN_OUT_BUF_SIZE);
 
-    conn_close(&connection);
+    connClose(&connection);
     close(socketPair[1]);
 }
 
 static void testConnCloseIdempotent(void) {
     Conn connection;
-    assert(conn_init(&connection, -1, 0, 1) == OK);
-    conn_close(&connection);
-    conn_close(&connection);
+    assert(connInit(&connection, -1, 0, 1) == OK);
+    connClose(&connection);
+    connClose(&connection);
     assert(connection.fd == -1);
 }
 
 static void testClientConnectFail(void) {
     Client *client = NULL;
     /* Connecting to a non-listening port should return error, not hang */
-    Status status = client_connect(&client, "127.0.0.1", 1);
+    Status status = clientConnect(&client, "127.0.0.1", 1);
     assert(status != OK);
     assert(client == NULL);
 
     /* Invalid hostname */
-    status = client_connect(&client, "this.host.does.not.exist.invalid.local", 9090);
+    status = clientConnect(&client, "this.host.does.not.exist.invalid.local", 9090);
     assert(status != OK);
     assert(client == NULL);
 }
 
 static void testClientResolve(void) {
     ClientAddress address;
-    assert(client_resolve(NULL, 9090, &address) == BAD_REQUEST);
-    assert(client_resolve("127.0.0.1", 0, &address) == BAD_REQUEST);
-    assert(client_resolve("127.0.0.1", 9090, NULL) == BAD_REQUEST);
+    assert(clientResolve(NULL, 9090, &address) == BAD_REQUEST);
+    assert(clientResolve("127.0.0.1", 0, &address) == BAD_REQUEST);
+    assert(clientResolve("127.0.0.1", 9090, NULL) == BAD_REQUEST);
 
     /* A numeric address resolves without DNS. */
-    assert(client_resolve("127.0.0.1", 9090, &address) == OK);
+    assert(clientResolve("127.0.0.1", 9090, &address) == OK);
     assert(address.length > 0);
 
-    assert(client_resolve("this.host.does.not.exist.invalid.local", 9090, &address) == NOT_FOUND);
+    assert(clientResolve("this.host.does.not.exist.invalid.local", 9090, &address) == NOT_FOUND);
 }
 
 /* Listening socket on an ephemeral loopback port; returns the fd. */
@@ -273,35 +273,35 @@ static void testClientConnectStartFinish(void) {
     int fd = -1;
     bool inProgress = false;
     Client *client = NULL;
-    assert(client_connect_start(NULL, &fd, &inProgress) == BAD_REQUEST);
-    assert(client_connect_finish(-1, &client) == BAD_REQUEST);
+    assert(clientConnectStart(NULL, &fd, &inProgress) == BAD_REQUEST);
+    assert(clientConnectFinish(-1, &client) == BAD_REQUEST);
     assert(client == NULL);
 
     uint16_t port = 0;
     int listenFd = openListener(&port);
     ClientAddress address;
-    assert(client_resolve("127.0.0.1", port, &address) == OK);
+    assert(clientResolve("127.0.0.1", port, &address) == OK);
 
     /* Success: the start never blocks; finish turns the fd into a Client. */
-    assert(client_connect_start(&address, &fd, &inProgress) == OK);
+    assert(clientConnectStart(&address, &fd, &inProgress) == OK);
     assert(fd >= 0);
     assert((fcntl(fd, F_GETFL, 0) & O_NONBLOCK) != 0);
     if (inProgress) {
         waitWritable(fd);
     }
-    assert(client_connect_finish(fd, &client) == OK);
+    assert(clientConnectFinish(fd, &client) == OK);
     assert(client != NULL);
-    assert(client_fd(client) == fd);
-    client_close(client);
+    assert(clientFd(client) == fd);
+    clientClose(client);
     client = NULL;
 
     /* Refused: either start fails at once or finish reports SO_ERROR. */
     close(listenFd);
-    Status started = client_connect_start(&address, &fd, &inProgress);
+    Status started = clientConnectStart(&address, &fd, &inProgress);
     if (started == OK) {
         assert(inProgress);
         waitWritable(fd);
-        assert(client_connect_finish(fd, &client) != OK);
+        assert(clientConnectFinish(fd, &client) != OK);
         assert(client == NULL);
     } else {
         assert(started == BAD_REQUEST);
@@ -309,9 +309,9 @@ static void testClientConnectStartFinish(void) {
 
     /* Abort closes a pending attempt's fd. */
     listenFd = openListener(&port);
-    assert(client_resolve("127.0.0.1", port, &address) == OK);
-    assert(client_connect_start(&address, &fd, &inProgress) == OK);
-    client_connect_abort(fd);
+    assert(clientResolve("127.0.0.1", port, &address) == OK);
+    assert(clientConnectStart(&address, &fd, &inProgress) == OK);
+    clientConnectAbort(fd);
     assert(fcntl(fd, F_GETFD) == -1 && errno == EBADF);
     close(listenFd);
 }
@@ -320,32 +320,32 @@ static void testTokenBucketRateLimiter(void) {
     AppConnSlot slot;
     memset(&slot, 0, sizeof(slot));
     uint64_t nowMs = 1000000;
-    slot.rate_last_ms = nowMs;
-    slot.rate_tokens = 60.0;
+    slot.rateLastMs = nowMs;
+    slot.rateTokens = 60.0;
 
     /* Burst cap: 60 requests in the same millisecond should succeed */
     for (int i = 0; i < 60; i++) {
-        assert(app_conn_check_rate_limit(&slot, nowMs) == true);
+        assert(appConnCheckRateLimit(&slot, nowMs) == true);
     }
 
     /* 61st request in the same millisecond should be rejected */
-    assert(app_conn_check_rate_limit(&slot, nowMs) == false);
+    assert(appConnCheckRateLimit(&slot, nowMs) == false);
 
     /* After 100ms, refill: 100ms * 0.03 = 3 tokens */
     nowMs += 100;
     for (int i = 0; i < 3; i++) {
-        assert(app_conn_check_rate_limit(&slot, nowMs) == true);
+        assert(appConnCheckRateLimit(&slot, nowMs) == true);
     }
     /* 4th request after refill should be rejected */
-    assert(app_conn_check_rate_limit(&slot, nowMs) == false);
+    assert(appConnCheckRateLimit(&slot, nowMs) == false);
 
     /* Burst cap clamp: after 10000ms (+300 tokens), should be capped at 60 */
     nowMs += 10000;
     for (int i = 0; i < 60; i++) {
-        assert(app_conn_check_rate_limit(&slot, nowMs) == true);
+        assert(appConnCheckRateLimit(&slot, nowMs) == true);
     }
     /* 61st request should be rejected */
-    assert(app_conn_check_rate_limit(&slot, nowMs) == false);
+    assert(appConnCheckRateLimit(&slot, nowMs) == false);
 }
 
 /* Copy of the one envelope a rejected client receives; the decoder frees its own. */
@@ -394,9 +394,9 @@ static void testRejectConnectionSendsServerFull(void) {
     }
 
     FrameReader reader;
-    frame_reader_reset(&reader);
+    frameReaderReset(&reader);
     RejectFrame frame = {0};
-    assert(frame_feed(&reader, receiveBuffer, totalReceived, onRejectFrame, &frame) == OK);
+    assert(frameFeed(&reader, receiveBuffer, totalReceived, onRejectFrame, &frame) == OK);
     assert(reader.used == 0);
     assert(frame.count == 1);
     assert(frame.version == 1 && frame.id == 0);

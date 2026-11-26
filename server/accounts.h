@@ -11,44 +11,44 @@
 /* Validation helpers: each returns true only for input the spec accepts. */
 
 /** @brief Lowercase ASCII address, 3..254 bytes, exactly one '@' with text on both sides. */
-bool accounts_validate_email(const char *email);
+bool accountsValidateEmail(const char *email);
 /** @brief 6..128 bytes; content is not restricted because it is only hashed. */
-bool accounts_validate_password(const char *password);
+bool accountsValidatePassword(const char *password);
 /** @brief Well-formed UTF-8, 1..64 bytes and 1..16 code points, no control characters. */
-bool accounts_validate_name(const char *name);
+bool accountsValidateName(const char *name);
 /** @brief One of the whitelisted avatar ids (fox, panda, ...). */
-bool accounts_validate_avatar(const char *avatar);
+bool accountsValidateAvatar(const char *avatar);
 
 /**
  * @brief Fill @p outToken with 32 random bytes from libsodium as 64 hex chars.
  * @param[out] outToken Buffer of 65 bytes, NUL-terminated on return.
  */
-void accounts_generate_token(char outToken[65]);
+void accountsGenerateToken(char outToken[65]);
 
 /**
  * @brief Format the public friend tag "UNO#<userId>".
  * @param[in] userId Account id.
  * @param[out] outTag Buffer of 32 bytes.
  */
-void accounts_format_tag(UserId userId, char outTag[32]);
+void accountsFormatTag(UserId userId, char outTag[32]);
 
 /**
  * @brief Milliseconds from CLOCK_MONOTONIC plus a fixed offset, used for
- *        session age and the auth rate limit. Not comparable with app_now_ms.
+ *        session age and the auth rate limit. Not comparable with appNowMs.
  */
-uint64_t accounts_get_now_ms(void);
+uint64_t accountsGetNowMs(void);
 
 #define MAX_SESSIONS 256
 
 /* A login session. It outlives its socket (connected = false) so RESUME can
  * move it to a new connection within the 24 h token lifetime. */
 typedef struct {
-    bool in_use;
-    UserId user_id;
+    bool inUse;
+    UserId userId;
     char token[65];
-    ConnId conn_id;
+    ConnId connId;
     bool connected;
-    uint64_t created_at_ms;
+    uint64_t createdAtMs;
 } SessionEntry;
 
 struct Sessions {
@@ -59,10 +59,10 @@ struct Sessions {
  * @brief Allocate the session table and the per-IP rate limiter.
  * @return OK, BAD_REQUEST for NULL @p app, or STORAGE_ERROR when out of memory.
  */
-Status sessions_init(App *app);
+Status sessionsInit(App *app);
 
 /** @brief Free the session table and rate limiter; safe to call twice. */
-void sessions_cleanup(App *app);
+void sessionsCleanup(App *app);
 
 /**
  * @brief Attach a freshly logged-in account to a connection.
@@ -76,7 +76,7 @@ void sessions_cleanup(App *app);
  * @return OK, BAD_REQUEST for invalid arguments, or BUSY when every entry is
  *         connected.
  */
-Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token);
+Status sessionsBind(App *app, ConnId connId, UserId userId, const char *token);
 
 /**
  * @brief Find the account currently bound to a live connection.
@@ -84,14 +84,14 @@ Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token);
  * @return OK, or UNAUTHENTICATED when the slot is closed, reused (generation
  *         mismatch) or carries no session.
  */
-Status sessions_user(App *app, ConnId connId, UserId *outUserId);
+Status sessionsUser(App *app, ConnId connId, UserId *outUserId);
 
 /**
  * @brief Find the connection a logged-in account is using.
  * @param[out] outConn Receives the connection on success.
  * @return OK, or NOT_FOUND when the account has no connected session.
  */
-Status sessions_find_conn(App *app, UserId userId, ConnId *outConn);
+Status sessionsFindConn(App *app, UserId userId, ConnId *outConn);
 
 /**
  * @brief Move a session to a new connection by its token (RESUME).
@@ -99,26 +99,26 @@ Status sessions_find_conn(App *app, UserId userId, ConnId *outConn);
  * @param[in] token 64-hex-char token from LOGIN; an expired one is forgotten.
  * @return OK, or UNAUTHENTICATED for an unknown/expired token or a dead slot.
  */
-Status sessions_resume(App *app, ConnId connId, const char *token);
+Status sessionsResume(App *app, ConnId connId, const char *token);
 
 /** @brief Mark the session on @p connId disconnected but keep it for RESUME. */
-void sessions_disconnect(App *app, ConnId connId);
+void sessionsDisconnect(App *app, ConnId connId);
 
 /** @brief Forget the session on @p connId entirely (LOGOUT or re-login). */
-void sessions_logout(App *app, ConnId connId);
+void sessionsLogout(App *app, ConnId connId);
 
 /**
  * @brief Count one auth request from @p ip against its sliding one-minute window.
  * @return true if the request may proceed; always true when the limit is off
- *         (auth_limit <= 0) or @p ip is empty.
+ *         (authLimit <= 0) or @p ip is empty.
  */
-bool accounts_rate_limit_check(App *app, const char *ip);
+bool accountsRateLimitCheck(App *app, const char *ip);
 
 /**
  * @brief Handle REGISTER, LOGIN, RESUME and LOGOUT.
  *
  * REGISTER and LOGIN are only validated here and then queued on the auth
- * worker; their replies are sent later by auth_drain. RESUME and LOGOUT
+ * worker; their replies are sent later by authDrain. RESUME and LOGOUT
  * reply at once. The session token only ever goes back in the LOGIN reply.
  *
  * @param[in] connId Connection that sent @p envelope.
@@ -126,7 +126,7 @@ bool accounts_rate_limit_check(App *app, const char *ip);
  * @return OK once a reply was sent or queued, BAD_REQUEST for another opcode
  *         or a dead connection.
  */
-Status accounts_handle(App *app, ConnId connId, const Envelope *envelope);
+Status accountsHandle(App *app, ConnId connId, const Envelope *envelope);
 
 /**
  * @brief Read every finished auth job from the worker pipe and reply.
@@ -135,6 +135,6 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope);
  * A successful LOGIN closes the account's previous socket, binds the session
  * and resyncs room, queue and presence for the new socket.
  */
-void auth_drain(App *app);
+void authDrain(App *app);
 
 #endif

@@ -14,28 +14,28 @@ typedef enum {
 /* One request copied by value into the worker queue. The worker wipes its own
  * copy of the plaintext password after hashing or verifying it.
  * FIXME: the queue slot it was copied from and the caller's stack AuthJob in
- * accounts_handle keep the plaintext until overwritten. Wipe the slot with
+ * accountsHandle keep the plaintext until overwritten. Wipe the slot with
  * sodium_memzero under the lock when dequeuing, and wipe job.password in
- * accounts_handle right after auth_submit. */
+ * accountsHandle right after authSubmit. */
 typedef struct {
     AuthJobKind kind;
-    ConnId conn_id;
-    int32_t req_id;
+    ConnId connId;
+    int32_t reqId;
     char email[255];
     char password[129];
     char name[65];
     char avatar[32];
     char hash[128];
     Account account;
-    bool user_exists;
+    bool userExists;
 } AuthJob;
 
 /* Written whole to the notify pipe; small enough for an atomic pipe write. */
 typedef struct {
-    ConnId conn_id;
-    int32_t req_id;
+    ConnId connId;
+    int32_t reqId;
     Status status;
-    UserId user_id;
+    UserId userId;
     char token[65];
     Account account;
     AuthJobKind kind;
@@ -50,12 +50,12 @@ typedef struct AuthWorker AuthWorker;
  * as much time as one for a real account.
  *
  * @param[out] outWorker Receives the worker on success.
- * @param[in] notifyPipeFd Non-blocking write end of the pipe app_run polls;
+ * @param[in] notifyPipeFd Non-blocking write end of the pipe appRun polls;
  *            stays owned by the caller.
  * @return OK, BAD_REQUEST for invalid arguments, or STORAGE_ERROR when
  *         libsodium or pthread setup fails.
  */
-Status auth_worker_init(AuthWorker **outWorker, int notifyPipeFd);
+Status authWorkerInit(AuthWorker **outWorker, int notifyPipeFd);
 
 /**
  * @brief Queue a REGISTER or LOGIN job without blocking the poll thread.
@@ -64,13 +64,13 @@ Status auth_worker_init(AuthWorker **outWorker, int notifyPipeFd);
  * @return OK, BAD_REQUEST for NULL arguments, or BUSY when the queue
  *         (AUTH_QUEUE_CAPACITY jobs) is full or the worker is stopping.
  */
-Status auth_submit(AuthWorker *worker, const AuthJob *job);
+Status authSubmit(AuthWorker *worker, const AuthJob *job);
 
 /**
  * @brief Stop and join the thread, wipe queued passwords and free the worker.
  * @param[in] worker Worker to destroy; NULL is ignored. Jobs still queued are
  *            finished first, so the call can block for a few hash rounds.
  */
-void auth_worker_destroy(AuthWorker *worker);
+void authWorkerDestroy(AuthWorker *worker);
 
 #endif

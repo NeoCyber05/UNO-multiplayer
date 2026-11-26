@@ -31,14 +31,14 @@ typedef struct {
  * left ACTIVE by a crash as ABORTED, and prepares every statement once so
  * later calls never re-parse SQL.
  *
- * @param[out] out Receives the store; close it with store_close.
+ * @param[out] out Receives the store; close it with storeClose.
  * @param[in] path File path or ":memory:".
  * @return OK, BAD_REQUEST for NULL arguments, or STORAGE_ERROR.
  */
-Status store_open(Store **out, const char *path);
+Status storeOpen(Store **out, const char *path);
 
 /** @brief Finalize all statements, close the database and free @p store; NULL is ignored. */
-void store_close(Store *store);
+void storeClose(Store *store);
 
 /**
  * @brief Insert a new ACTIVE match and its four seats in one transaction.
@@ -50,7 +50,7 @@ void store_close(Store *store);
  *         when the id already exists with different data or is no longer
  *         ACTIVE; STORAGE_ERROR after a rolled-back write.
  */
-Status store_match_start(Store *store, const MatchId *matchId, const PlayerSpec players[4],
+Status storeMatchStart(Store *store, const MatchId *matchId, const PlayerSpec players[4],
                          Mode mode, bool ranked);
 
 /**
@@ -62,7 +62,7 @@ Status store_match_start(Store *store, const MatchId *matchId, const PlayerSpec 
  * @return OK (also for an empty batch); NOT_FOUND for an unknown match;
  *         INVALID_ACTION when a stored seq differs; STORAGE_ERROR after rollback.
  */
-Status store_events(Store *store, const MatchId *matchId, const EventBatch *batch);
+Status storeEvents(Store *store, const MatchId *matchId, const EventBatch *batch);
 
 /**
  * @brief Close a match: status, seats, ELO, profile stats and badges in one
@@ -72,13 +72,13 @@ Status store_events(Store *store, const MatchId *matchId, const EventBatch *batc
  * same result returns OK and changes nothing, so ELO and stats are applied at
  * most once even when the caller retries after a crash or a timeout.
  *
- * @param[in] result Final result; eloAfter must already be filled (rating_apply).
+ * @param[in] result Final result; eloAfter must already be filled (ratingApply).
  * @param[in] deltas Per-seat profile changes from profileCompute, or NULL.
  * @return OK; BAD_REQUEST; NOT_FOUND for an unknown match; INVALID_ACTION when
  *         the match was aborted or finalized with a different result;
  *         STORAGE_ERROR after rollback.
  */
-Status store_finalize(Store *store, const MatchResult *result, const ProfileDelta deltas[4]);
+Status storeFinalize(Store *store, const MatchResult *result, const ProfileDelta deltas[4]);
 
 /**
  * @brief Write one match, its seats and events as a JSON file (debug/demo aid).
@@ -86,7 +86,7 @@ Status store_finalize(Store *store, const MatchResult *result, const ProfileDelt
  * @return OK, BAD_REQUEST for NULL arguments, NOT_FOUND for an unknown match,
  *         or STORAGE_ERROR.
  */
-Status store_export_match(Store *store, const MatchId *matchId, const char *path);
+Status storeExportMatch(Store *store, const MatchId *matchId, const char *path);
 
 /**
  * @brief Mark an active match ABORTED and record its abort event atomically.
@@ -100,7 +100,7 @@ Status store_export_match(Store *store, const MatchId *matchId, const char *path
  *         INVALID_ACTION when the match is already FINALIZED;
  *         STORAGE_ERROR when SQLite fails (the match stays ACTIVE).
  */
-Status store_abort(Store *store, const MatchId *id, const MatchEvent *event, uint64_t durationMs);
+Status storeAbort(Store *store, const MatchId *id, const MatchEvent *event, uint64_t durationMs);
 
 enum { STORE_LEADERBOARD_MAX = 20 };
 
@@ -115,7 +115,7 @@ typedef struct { UserId userId; char name[65], avatar[32]; int elo; } Leaderboar
  * @return OK on success (count may be 0); BAD_REQUEST for NULL arguments;
  *         STORAGE_ERROR when SQLite fails (count is left unchanged).
  */
-Status store_leaderboard(Store *store, LeaderboardEntry out[STORE_LEADERBOARD_MAX], size_t *count);
+Status storeLeaderboard(Store *store, LeaderboardEntry out[STORE_LEADERBOARD_MAX], size_t *count);
 
 enum {
     STORE_FRIEND_MAX = 64,
@@ -142,7 +142,7 @@ typedef struct { UserId userId; char name[65], avatar[32]; int elo; FriendLink l
  *         direction (pending or accepted);
  *         STORAGE_ERROR when SQLite fails (nothing is written).
  */
-Status store_friend_request(Store *store, UserId from, UserId to);
+Status storeFriendRequest(Store *store, UserId from, UserId to);
 
 /**
  * @brief Accept or reject a pending request sent by requester to me.
@@ -156,7 +156,7 @@ Status store_friend_request(Store *store, UserId from, UserId to);
  *         NOT_FOUND when there is no pending request requester -> me;
  *         STORAGE_ERROR when SQLite fails (the request is unchanged).
  */
-Status store_friend_reply(Store *store, UserId me, UserId requester, bool accept);
+Status storeFriendReply(Store *store, UserId me, UserId requester, bool accept);
 
 /**
  * @brief List every friend and pending request involving an account.
@@ -170,7 +170,7 @@ Status store_friend_reply(Store *store, UserId me, UserId requester, bool accept
  * @return OK on success (count may be 0); BAD_REQUEST for NULL arguments;
  *         STORAGE_ERROR when SQLite fails (count is left unchanged).
  */
-Status store_friend_list(Store *store, UserId me, FriendRow out[STORE_FRIEND_MAX], size_t *count);
+Status storeFriendList(Store *store, UserId me, FriendRow out[STORE_FRIEND_MAX], size_t *count);
 
 /* endedAt is Unix seconds, the same clock as matches.created_at. */
 typedef struct { char matchId[37]; Mode mode; bool won; int eloDelta; int64_t endedAt; } HistoryRow;
@@ -194,25 +194,25 @@ typedef struct {
  *         NOT_FOUND when the account does not exist;
  *         STORAGE_ERROR when SQLite fails (out may be partly written).
  */
-Status store_profile_get(Store *store, UserId id, Profile *out);
+Status storeProfileGet(Store *store, UserId id, Profile *out);
 
 /**
  * @brief Change an account's display name and avatar.
  * @param[in] store Open store.
  * @param[in] id Account to update.
- * @param[in] name New name, already checked by accounts_validate_name.
- * @param[in] avatar New avatar key, already checked by accounts_validate_avatar.
+ * @param[in] name New name, already checked by accountsValidateName.
+ * @param[in] avatar New avatar key, already checked by accountsValidateAvatar.
  * @return OK when the account was updated; BAD_REQUEST for NULL arguments;
  *         NOT_FOUND when the account does not exist;
  *         STORAGE_ERROR when SQLite fails (the account is unchanged).
  */
-Status store_profile_update(Store *store, UserId id, const char *name, const char *avatar);
+Status storeProfileUpdate(Store *store, UserId id, const char *name, const char *avatar);
 
-Status store_account_create(Store *store, const AccountCreate *newAccount, UserId *outId);
-Status store_account_get(Store *store, const char *email, Account *out);
-Status store_account_get_by_id(Store *store, UserId id, Account *out);
-Status store_profile_stats(Store *store, UserId userId, ProfileStats *out);
+Status storeAccountCreate(Store *store, const AccountCreate *newAccount, UserId *outId);
+Status storeAccountGet(Store *store, const char *email, Account *out);
+Status storeAccountGetById(Store *store, UserId id, Account *out);
+Status storeProfileStats(Store *store, UserId userId, ProfileStats *out);
 
-sqlite3 *store_get_db(Store *store);
+sqlite3 *storeGetDb(Store *store);
 
 #endif

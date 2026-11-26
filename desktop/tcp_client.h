@@ -13,8 +13,8 @@ typedef void (*ClientPendingCallback)(void *context, bool hasPending);
 typedef struct Client {
     Conn conn;
     bool connected;
-    ClientPendingCallback on_pending_cb;
-    void *pending_ctx;
+    ClientPendingCallback onPendingCb;
+    void *pendingCtx;
 } Client;
 
 /* A resolved server address, reused for every reconnect attempt. */
@@ -24,8 +24,8 @@ typedef struct {
 } ClientAddress;
 
 /* Blocking connect (resolves and waits up to 3 s); kept for tools and tests.
- * A GUI must use client_resolve + client_connect_start/finish instead. */
-Status client_connect(Client **out, const char *host, uint16_t port);
+ * A GUI must use clientResolve + clientConnectStart/finish instead. */
+Status clientConnect(Client **out, const char *host, uint16_t port);
 
 /**
  * @brief Resolve a host once, so later connect attempts need no DNS.
@@ -39,69 +39,69 @@ Status client_connect(Client **out, const char *host, uint16_t port);
  * @return OK when resolved; BAD_REQUEST when an argument is NULL or the port
  *         is 0; NOT_FOUND when the name cannot be resolved.
  */
-Status client_resolve(const char *host, uint16_t port, ClientAddress *out);
+Status clientResolve(const char *host, uint16_t port, ClientAddress *out);
 
 /**
  * @brief Begin a connect that never blocks.
- * @param[in] address Address from client_resolve.
+ * @param[in] address Address from clientResolve.
  * @param[out] outFd Non-blocking socket of the attempt, owned by the caller
- *             until client_connect_finish or client_connect_abort.
+ *             until clientConnectFinish or clientConnectAbort.
  * @param[out] outInProgress true when the result is pending: wait for the fd
  *             to become writable (or report an error), then call
- *             client_connect_finish. false when already connected.
+ *             clientConnectFinish. false when already connected.
  * @return OK when the attempt is underway or done;
  *         BAD_REQUEST when an argument is NULL or connect() failed at once
  *         (e.g. refused or unreachable; no fd is left open);
  *         BUSY when no socket could be created.
  */
-Status client_connect_start(const ClientAddress *address, int *outFd, bool *outInProgress);
+Status clientConnectStart(const ClientAddress *address, int *outFd, bool *outInProgress);
 
 /**
- * @brief Complete a connect started by client_connect_start.
+ * @brief Complete a connect started by clientConnectStart.
  *
  * Reads SO_ERROR to learn whether the pending connect succeeded.
- * @param[in] connectionSocket Socket from client_connect_start; ownership passes
+ * @param[in] connectionSocket Socket from clientConnectStart; ownership passes
  *            to this call (it ends up in the Client or is closed).
  * @param[out] out The connected client on OK, otherwise NULL.
  * @return OK when connected; BAD_REQUEST when @p connectionSocket is negative, @p out is
  *         NULL or the connect failed; BUSY when out of memory.
  */
-Status client_connect_finish(int connectionSocket, Client **out);
+Status clientConnectFinish(int connectionSocket, Client **out);
 
 /**
  * @brief Cancel a pending connect (timeout or shutdown) and close its fd.
- * @param[in] connectionSocket Socket from client_connect_start; negative is ignored.
+ * @param[in] connectionSocket Socket from clientConnectStart; negative is ignored.
  */
-void client_connect_abort(int connectionSocket);
+void clientConnectAbort(int connectionSocket);
 
 /**
  * @brief Queue an envelope and try to send it at once.
  *
- * Whatever the kernel does not take now stays queued; call client_flush when
+ * Whatever the kernel does not take now stays queued; call clientFlush when
  * the socket becomes writable. The pending callback reports which case it was.
  *
  * @return OK, an encode/queue error, or BAD_REQUEST when not connected or the
  *         socket broke (the client is then `closing`).
  */
-Status client_send(Client *client, const Envelope *envelope);
+Status clientSend(Client *client, const Envelope *envelope);
 
 /**
  * @brief Read everything available and decode complete frames; never blocks.
  * @return OK, or an error after which the connection should be dropped
- *         (BAD_REQUEST on EOF or a socket error); see conn_read.
+ *         (BAD_REQUEST on EOF or a socket error); see connRead.
  */
-Status client_read(Client *client, FrameCallback callback, void *context);
+Status clientRead(Client *client, FrameCallback callback, void *context);
 
-/** @brief Send queued output until done or the socket would block; see conn_flush. */
-Status client_flush(Client *client);
+/** @brief Send queued output until done or the socket would block; see connFlush. */
+Status clientFlush(Client *client);
 
 /** @brief Register the callback that reports whether output is still queued. */
-void client_set_pending_callback(Client *client, ClientPendingCallback callback, void *context);
+void clientSetPendingCallback(Client *client, ClientPendingCallback callback, void *context);
 
 /** @brief Socket of a connected client for poll/GIO watches, or -1. */
-int client_fd(const Client *client);
+int clientFd(const Client *client);
 
 /** @brief Close the socket and free the client; NULL is ignored. */
-void client_close(Client *client);
+void clientClose(Client *client);
 
 #endif

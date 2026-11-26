@@ -11,14 +11,14 @@ enum {
 static const double RATING_SCALE = 400.0;
 static const double RATING_BASE = 10.0;
 
-int rating_delta(double own, double opposition, bool won) {
+int ratingDelta(double own, double opposition, bool won) {
     double expected = 1.0 / (1.0 + pow(RATING_BASE, (opposition - own) / RATING_SCALE));
     double score = won ? 1.0 : 0.0;
     /* lround rounds half away from zero, as the spec requires. */
     return (int)lround(RATING_K_FACTOR * (score - expected));
 }
 
-Rank rating_rank(int elo) {
+Rank ratingRank(int elo) {
     if (elo >= RATING_DIAMOND_MIN) {
         return RANK_DIAMOND;
     }
@@ -31,7 +31,7 @@ Rank rating_rank(int elo) {
     return RANK_BRONZE;
 }
 
-const char *rating_rank_key(Rank rank) {
+const char *ratingRankKey(Rank rank) {
     switch (rank) {
     case RANK_SILVER:
         return "silver";
@@ -90,10 +90,10 @@ static int seatDelta(const MatchResult *result, int seat) {
         }
         won = seat == result->winnerSeat;
     }
-    return rating_delta(own, opposition, won);
+    return ratingDelta(own, opposition, won);
 }
 
-void rating_apply(MatchResult *result, const bool isBot[4]) {
+void ratingApply(MatchResult *result, const bool isBot[4]) {
     if (result == NULL) {
         return;
     }

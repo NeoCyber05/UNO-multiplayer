@@ -14,7 +14,7 @@
 #include <time.h>
 
 static uint64_t monotonicNowMs(void) {
-    return accounts_get_now_ms();
+    return accountsGetNowMs();
 }
 
 static const char *const MODE_NAMES[] = {"classic", "2v2", "side", "draft"};
@@ -26,7 +26,7 @@ enum {
 };
 
 /* "Q" + 5 digits is reserved for queue matches; a room with such a code would
- * be freed by rooms_match_ended when the queue match of the same id ends. */
+ * be freed by roomsMatchEnded when the queue match of the same id ends. */
 static bool isQueueRoomId(const char *code) {
     if (code[0] != QUEUE_ROOM_PREFIX) return false;
     for (int i = 1; i < ROOM_CODE_LENGTH; i++) {
@@ -46,9 +46,9 @@ static void sendError(App *app, ConnId connId, int32_t requestId, const char *co
     json_object_object_add(payload, "message", json_object_new_string(message));
 
     Envelope response = {1, requestId, "ERROR", payload};
-    conn_queue(&slot->conn, &response);
+    connQueue(&slot->conn, &response);
     json_object_put(payload);
-    conn_flush(&slot->conn);
+    connFlush(&slot->conn);
 }
 
 static void sendOk(App *app, ConnId connId, int32_t requestId, struct json_object *payload) {
@@ -57,9 +57,9 @@ static void sendOk(App *app, ConnId connId, int32_t requestId, struct json_objec
     if (!slot->active || slot->generation != connId.generation) return;
 
     Envelope response = {1, requestId, "OK", payload ? payload : json_object_new_object()};
-    conn_queue(&slot->conn, &response);
+    connQueue(&slot->conn, &response);
     if (!payload) json_object_put(response.payload);
-    conn_flush(&slot->conn);
+    connFlush(&slot->conn);
 }
 
 /* Random RFC 4122 version-4 UUID text for invite ids, so ids cannot be guessed. */
@@ -76,7 +76,7 @@ static void generateUuid(char outUuid[37]) {
              randomBytes[12], randomBytes[13], randomBytes[14], randomBytes[15]);
 }
 
-void rooms_generate_code(Rooms *rooms, char outCode[7]) {
+void roomsGenerateCode(Rooms *rooms, char outCode[7]) {
     /* 6 characters from 36 symbols: about 2.2 billion codes, short enough to
      * read out loud. Collisions with live rooms or queue ids are retried. */
     static const char codeAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -156,7 +156,7 @@ static bool rejectIfInMatch(App *app, ConnId connId, int32_t requestId, UserId u
 
 /* Spec: a user waiting in matchmaking cannot also sit in a room or party. */
 static bool rejectIfQueued(App *app, ConnId connId, int32_t requestId, UserId userId) {
-    if (!queue_contains(app->queue, userId)) return false;
+    if (!queueContains(app->queue, userId)) return false;
     sendError(app, connId, requestId, "BUSY", "User is in matchmaking");
     return true;
 }
@@ -184,24 +184,24 @@ static bool parseBotLevel(struct json_object *valueJson, BotLevel *outLevel) {
     return false;
 }
 
-Status rooms_init(Rooms **outRooms, App *app, OnMatchStart onStart) {
+Status roomsInit(Rooms **outRooms, App *app, OnMatchStart onStart) {
     if (!outRooms) return BAD_REQUEST;
     Rooms *rooms = calloc(1, sizeof(Rooms));
     if (!rooms) return STORAGE_ERROR;
     rooms->app = app;
-    rooms->on_start = onStart;
-    rooms->next_party_id = 1;
-    rooms->next_invite_id = 1;
+    rooms->onStart = onStart;
+    rooms->nextPartyId = 1;
+    rooms->nextInviteId = 1;
     *outRooms = rooms;
     return OK;
 }
 
-void rooms_destroy(Rooms *rooms) {
+void roomsDestroy(Rooms *rooms) {
     if (!rooms) return;
     free(rooms);
 }
 
-Room *rooms_find_by_code(Rooms *rooms, const char *code) {
+Room *roomsFindByCode(Rooms *rooms, const char *code) {
     if (!rooms || !code) return NULL;
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (rooms->rooms[i].active && strcasecmp(rooms->rooms[i].code, code) == 0) {
@@ -211,13 +211,13 @@ Room *rooms_find_by_code(Rooms *rooms, const char *code) {
     return NULL;
 }
 
-Room *rooms_find_by_user(Rooms *rooms, UserId userId) {
+Room *roomsFindByUser(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return NULL;
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (rooms->rooms[i].active) {
             for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
-                if (rooms->rooms[i].seats[seat].occupied && !rooms->rooms[i].seats[seat].is_bot &&
-                    rooms->rooms[i].seats[seat].user_id == userId) {
+                if (rooms->rooms[i].seats[seat].occupied && !rooms->rooms[i].seats[seat].isBot &&
+                    rooms->rooms[i].seats[seat].userId == userId) {
                     return &rooms->rooms[i];
                 }
             }
@@ -226,11 +226,11 @@ Room *rooms_find_by_user(Rooms *rooms, UserId userId) {
     return NULL;
 }
 
-Status rooms_create(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
+Status roomsCreate(Rooms *rooms, UserId hostId, const char *name, const char *avatar, Mode mode,
                     char outCode[7]) {
     if (!rooms || hostId == 0) return BAD_REQUEST;
 
-    if (rooms_find_by_user(rooms, hostId) != NULL) return BUSY;
+    if (roomsFindByUser(rooms, hostId) != NULL) return BUSY;
 
     /* Find empty room slot */
     int slot = -1;
@@ -244,17 +244,17 @@ Status rooms_create(Rooms *rooms, UserId hostId, const char *name, const char *a
 
     Room *room = &rooms->rooms[slot];
     memset(room, 0, sizeof(*room));
-    rooms_generate_code(rooms, room->code);
+    roomsGenerateCode(rooms, room->code);
     room->active = true;
     room->mode = mode;
     room->ranked = false;
-    room->host_seat = 0;
+    room->hostSeat = 0;
     room->revision = 1;
     room->status = ROOM_STATUS_WAITING;
 
     room->seats[0].occupied = true;
-    room->seats[0].is_bot = false;
-    room->seats[0].user_id = hostId;
+    room->seats[0].isBot = false;
+    room->seats[0].userId = hostId;
     strncpy(room->seats[0].name, name ? name : "Host", sizeof(room->seats[0].name) - 1);
     strncpy(room->seats[0].avatar, avatar ? avatar : "fox", sizeof(room->seats[0].avatar) - 1);
 
@@ -264,13 +264,13 @@ Status rooms_create(Rooms *rooms, UserId hostId, const char *name, const char *a
     return OK;
 }
 
-Status rooms_join(Rooms *rooms, UserId userId, const char *name, const char *avatar,
+Status roomsJoin(Rooms *rooms, UserId userId, const char *name, const char *avatar,
                   const char *code, Seat *outSeat) {
     if (!rooms || userId == 0 || !code) return BAD_REQUEST;
 
-    if (rooms_find_by_user(rooms, userId) != NULL) return BUSY;
+    if (roomsFindByUser(rooms, userId) != NULL) return BUSY;
 
-    Room *room = rooms_find_by_code(rooms, code);
+    Room *room = roomsFindByCode(rooms, code);
     if (!room) return NOT_FOUND;
 
     /* Find lowest-numbered empty seat */
@@ -284,8 +284,8 @@ Status rooms_join(Rooms *rooms, UserId userId, const char *name, const char *ava
     if (emptySeat < 0) return ROOM_FULL;
 
     room->seats[emptySeat].occupied = true;
-    room->seats[emptySeat].is_bot = false;
-    room->seats[emptySeat].user_id = userId;
+    room->seats[emptySeat].isBot = false;
+    room->seats[emptySeat].userId = userId;
     strncpy(room->seats[emptySeat].name, name ? name : "Player",
             sizeof(room->seats[emptySeat].name) - 1);
     strncpy(room->seats[emptySeat].avatar, avatar ? avatar : "fox",
@@ -296,15 +296,15 @@ Status rooms_join(Rooms *rooms, UserId userId, const char *name, const char *ava
     return OK;
 }
 
-Status rooms_leave(Rooms *rooms, UserId userId) {
+Status roomsLeave(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return OK;
 
-    Room *room = rooms_find_by_user(rooms, userId);
+    Room *room = roomsFindByUser(rooms, userId);
     if (!room) return OK;
 
     int seatIndex = -1;
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].is_bot && room->seats[i].user_id == userId) {
+        if (room->seats[i].occupied && !room->seats[i].isBot && room->seats[i].userId == userId) {
             seatIndex = i;
             break;
         }
@@ -318,7 +318,7 @@ Status rooms_leave(Rooms *rooms, UserId userId) {
     int humanCount = 0;
     int lowestHumanSeat = -1;
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].is_bot) {
+        if (room->seats[i].occupied && !room->seats[i].isBot) {
             humanCount++;
             if (lowestHumanSeat < 0) lowestHumanSeat = i;
         }
@@ -331,33 +331,33 @@ Status rooms_leave(Rooms *rooms, UserId userId) {
     }
 
     /* If the host left, migrate host to remaining human with lowest seat */
-    if (seatIndex == room->host_seat) {
-        room->host_seat = (Seat)lowestHumanSeat;
+    if (seatIndex == room->hostSeat) {
+        room->hostSeat = (Seat)lowestHumanSeat;
     }
 
     return OK;
 }
 
-Status rooms_set_bot(Rooms *rooms, UserId requesterId, int seat, BotLevel level) {
+Status roomsSetBot(Rooms *rooms, UserId requesterId, int seat, BotLevel level) {
     if (!rooms || requesterId == 0) return BAD_REQUEST;
     if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
 
-    Room *room = rooms_find_by_user(rooms, requesterId);
+    Room *room = roomsFindByUser(rooms, requesterId);
     if (!room) return NOT_FOUND;
 
     /* Must be host */
-    if (room->seats[room->host_seat].user_id != requesterId) return FORBIDDEN;
+    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
 
     /* Host cannot turn themselves into a bot */
-    if (seat == room->host_seat) return INVALID_ACTION;
+    if (seat == room->hostSeat) return INVALID_ACTION;
 
     /* Cannot overwrite an existing human */
-    if (room->seats[seat].occupied && !room->seats[seat].is_bot) return INVALID_ACTION;
+    if (room->seats[seat].occupied && !room->seats[seat].isBot) return INVALID_ACTION;
 
     room->seats[seat].occupied = true;
-    room->seats[seat].is_bot = true;
-    room->seats[seat].user_id = 0;
-    room->seats[seat].bot_level = level;
+    room->seats[seat].isBot = true;
+    room->seats[seat].userId = 0;
+    room->seats[seat].botLevel = level;
     snprintf(room->seats[seat].name, sizeof(room->seats[seat].name), "Bot %u",
              (unsigned)(seat + 1));
     strcpy(room->seats[seat].avatar, "robot");
@@ -366,18 +366,18 @@ Status rooms_set_bot(Rooms *rooms, UserId requesterId, int seat, BotLevel level)
     return OK;
 }
 
-Status rooms_kick(Rooms *rooms, UserId requesterId, int seat) {
+Status roomsKick(Rooms *rooms, UserId requesterId, int seat) {
     if (!rooms || requesterId == 0) return BAD_REQUEST;
     if (seat < 0 || seat >= ROOM_MAX_SEATS) return BAD_REQUEST;
 
-    Room *room = rooms_find_by_user(rooms, requesterId);
+    Room *room = roomsFindByUser(rooms, requesterId);
     if (!room) return NOT_FOUND;
 
     /* Must be host */
-    if (room->seats[room->host_seat].user_id != requesterId) return FORBIDDEN;
+    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
 
     /* Cannot kick self */
-    if (seat == room->host_seat) return INVALID_ACTION;
+    if (seat == room->hostSeat) return INVALID_ACTION;
 
     /* Must be occupied */
     if (!room->seats[seat].occupied) return INVALID_ACTION;
@@ -388,25 +388,25 @@ Status rooms_kick(Rooms *rooms, UserId requesterId, int seat) {
     return OK;
 }
 
-Status rooms_set_mode(Rooms *rooms, UserId requesterId, Mode mode) {
+Status roomsSetMode(Rooms *rooms, UserId requesterId, Mode mode) {
     if (!rooms || requesterId == 0) return BAD_REQUEST;
 
-    Room *room = rooms_find_by_user(rooms, requesterId);
+    Room *room = roomsFindByUser(rooms, requesterId);
     if (!room) return NOT_FOUND;
 
     /* Must be host */
-    if (room->seats[room->host_seat].user_id != requesterId) return FORBIDDEN;
+    if (room->seats[room->hostSeat].userId != requesterId) return FORBIDDEN;
 
     room->mode = mode;
     room->revision++;
     return OK;
 }
 
-Status rooms_start(App *app, const char *roomId) {
+Status roomsStart(App *app, const char *roomId) {
     if (!app || !app->rooms || !roomId) return BAD_REQUEST;
     Rooms *rooms = app->rooms;
 
-    Room *room = rooms_find_by_code(rooms, roomId);
+    Room *room = roomsFindByCode(rooms, roomId);
     if (!room) return NOT_FOUND;
 
     if (room->status != ROOM_STATUS_WAITING) return INVALID_ACTION;
@@ -416,7 +416,7 @@ Status rooms_start(App *app, const char *roomId) {
         if (!room->seats[i].occupied) return INVALID_ACTION;
     }
 
-    if (!rooms->on_start) return BUSY;
+    if (!rooms->onStart) return BUSY;
 
     RoomStart roomStart;
     memset(&roomStart, 0, sizeof(roomStart));
@@ -424,17 +424,17 @@ Status rooms_start(App *app, const char *roomId) {
     roomStart.mode = room->mode;
     roomStart.ranked = room->ranked;
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        roomStart.players[i].userId = room->seats[i].user_id;
+        roomStart.players[i].userId = room->seats[i].userId;
         strncpy(roomStart.players[i].name, room->seats[i].name,
                 sizeof(roomStart.players[i].name) - 1);
         strncpy(roomStart.players[i].avatar, room->seats[i].avatar,
                 sizeof(roomStart.players[i].avatar) - 1);
-        roomStart.players[i].isBot = room->seats[i].is_bot;
-        roomStart.players[i].botLevel = room->seats[i].bot_level;
+        roomStart.players[i].isBot = room->seats[i].isBot;
+        roomStart.players[i].botLevel = room->seats[i].botLevel;
     }
 
     MatchId outMatchId = {0};
-    Status status = rooms->on_start(app, &roomStart, &outMatchId);
+    Status status = rooms->onStart(app, &roomStart, &outMatchId);
     if (status != OK) {
         /* Callback failed: room remains intact without mutating to in-match */
         return status;
@@ -444,42 +444,42 @@ Status rooms_start(App *app, const char *roomId) {
     return OK;
 }
 
-void rooms_disconnect(App *app, UserId userId, uint64_t nowMs) {
+void roomsDisconnect(App *app, UserId userId, uint64_t nowMs) {
     (void)nowMs;
     if (!app || !app->rooms || userId == 0) return;
     Rooms *rooms = app->rooms;
 
-    party_leave(rooms, userId);
+    partyLeave(rooms, userId);
 
     /* Cancel any pending invites involving this user */
     for (int i = 0; i < MAX_INVITES; i++) {
         if (rooms->invites[i].active &&
-            (rooms->invites[i].sender_id == userId || rooms->invites[i].recipient_id == userId)) {
+            (rooms->invites[i].senderId == userId || rooms->invites[i].recipientId == userId)) {
             rooms->invites[i].active = false;
         }
     }
 
-    Room *room = rooms_find_by_user(rooms, userId);
+    Room *room = roomsFindByUser(rooms, userId);
     if (room && room->status == ROOM_STATUS_WAITING) {
         char code[7];
         strcpy(code, room->code);
-        rooms_leave(rooms, userId);
-        Room *after = rooms_find_by_code(rooms, code);
+        roomsLeave(rooms, userId);
+        Room *after = roomsFindByCode(rooms, code);
         if (after) {
-            rooms_broadcast_state(app, after);
+            roomsBroadcastState(app, after);
         }
     }
 }
 
-Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *outMatchId) {
+Status roomsMakeMatch(App *app, Mode mode, const UserId users[4], MatchId *outMatchId) {
     if (!app || !app->rooms || !users || !outMatchId) return BAD_REQUEST;
     Rooms *rooms = app->rooms;
-    if (!rooms->on_start) return BUSY;
+    if (!rooms->onStart) return BUSY;
     if (!app->store) return STORAGE_ERROR;
 
     RoomStart roomStart;
     memset(&roomStart, 0, sizeof(roomStart));
-    unsigned serial = (unsigned)(rooms->next_queue_room % QUEUE_ROOM_SERIAL_LIMIT);
+    unsigned serial = (unsigned)(rooms->nextQueueRoom % QUEUE_ROOM_SERIAL_LIMIT);
     snprintf(roomStart.roomId, sizeof(roomStart.roomId), "%c%05u", QUEUE_ROOM_PREFIX, serial);
     roomStart.mode = mode;
     /* Spec: only matchmaking with four humans is ranked; no bot ever fills a seat. */
@@ -487,7 +487,7 @@ Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *out
     for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
         if (users[seat] == 0) return BAD_REQUEST;
         Account account;
-        Status lookup = store_account_get_by_id(app->store, users[seat], &account);
+        Status lookup = storeAccountGetById(app->store, users[seat], &account);
         if (lookup != OK) return lookup;
         PlayerSpec *player = &roomStart.players[seat];
         player->userId = users[seat];
@@ -496,8 +496,8 @@ Status rooms_make_match(App *app, Mode mode, const UserId users[4], MatchId *out
     }
 
     /* The coordinator persists the match and pushes GAME_STATE itself. */
-    Status started = rooms->on_start(app, &roomStart, outMatchId);
-    if (started == OK) rooms->next_queue_room++;
+    Status started = rooms->onStart(app, &roomStart, outMatchId);
+    if (started == OK) rooms->nextQueueRoom++;
     return started;
 }
 
@@ -516,7 +516,7 @@ static json_object *roomStateJson(const Room *room) {
     json_object_object_add(payload, "code", json_object_new_string(room->code));
     json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[room->mode]));
     json_object_object_add(payload, "ranked", json_object_new_boolean(room->ranked));
-    json_object_object_add(payload, "hostSeat", json_object_new_int(room->host_seat));
+    json_object_object_add(payload, "hostSeat", json_object_new_int(room->hostSeat));
 
     struct json_object *seatsJson = json_object_new_array();
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
@@ -526,18 +526,18 @@ static json_object *roomStateJson(const Room *room) {
             struct json_object *seatStateJson = json_object_new_object();
             json_object_object_add(seatStateJson, "seat", json_object_new_int(i));
             json_object_object_add(seatStateJson, "isBot",
-                                   json_object_new_boolean(room->seats[i].is_bot));
-            if (room->seats[i].is_bot) {
+                                   json_object_new_boolean(room->seats[i].isBot));
+            if (room->seats[i].isBot) {
                 json_object_object_add(seatStateJson, "name",
                                        json_object_new_string(room->seats[i].name));
                 json_object_object_add(seatStateJson, "avatar",
                                        json_object_new_string(room->seats[i].avatar));
                 const char *levelNames[] = {"easy", "normal", "hard"};
-                const char *levelName = levelNames[room->seats[i].bot_level];
+                const char *levelName = levelNames[room->seats[i].botLevel];
                 json_object_object_add(seatStateJson, "botLevel",
                                        json_object_new_string(levelName));
             } else {
-                json_object_object_add(seatStateJson, "userId", userIdJson(room->seats[i].user_id));
+                json_object_object_add(seatStateJson, "userId", userIdJson(room->seats[i].userId));
                 json_object_object_add(seatStateJson, "name",
                                        json_object_new_string(room->seats[i].name));
                 json_object_object_add(seatStateJson, "avatar",
@@ -552,14 +552,14 @@ static json_object *roomStateJson(const Room *room) {
 
 static void pushToSeatedHumans(App *app, const Room *room, json_object *payload) {
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
-        if (room->seats[i].occupied && !room->seats[i].is_bot) {
-            /* Offline members miss the push; LOGIN resyncs them via rooms_sync_user. */
-            (void)app_push(app, room->seats[i].user_id, "ROOM_STATE", payload);
+        if (room->seats[i].occupied && !room->seats[i].isBot) {
+            /* Offline members miss the push; LOGIN resyncs them via roomsSyncUser. */
+            (void)appPush(app, room->seats[i].userId, "ROOM_STATE", payload);
         }
     }
 }
 
-Status rooms_broadcast_state(App *app, const Room *room) {
+Status roomsBroadcastState(App *app, const Room *room) {
     if (!app || !room) return BAD_REQUEST;
     json_object *payload = roomStateJson(room);
     pushToSeatedHumans(app, room, payload);
@@ -567,36 +567,36 @@ Status rooms_broadcast_state(App *app, const Room *room) {
     return OK;
 }
 
-void rooms_update_identity(App *app, UserId userId, const char *name, const char *avatar) {
+void roomsUpdateIdentity(App *app, UserId userId, const char *name, const char *avatar) {
     if (!app || !app->rooms || userId == 0 || !name || !avatar) return;
-    Room *room = rooms_find_by_user(app->rooms, userId);
+    Room *room = roomsFindByUser(app->rooms, userId);
     /* matchesStart already copied the seats; a live match keeps its own copy. */
     if (!room || room->status != ROOM_STATUS_WAITING) return;
     for (int i = 0; i < ROOM_MAX_SEATS; i++) {
         RoomSeat *seat = &room->seats[i];
-        if (!seat->occupied || seat->is_bot || seat->user_id != userId) continue;
+        if (!seat->occupied || seat->isBot || seat->userId != userId) continue;
         snprintf(seat->name, sizeof(seat->name), "%s", name);
         snprintf(seat->avatar, sizeof(seat->avatar), "%s", avatar);
         room->revision++;
-        rooms_broadcast_state(app, room);
+        roomsBroadcastState(app, room);
         return;
     }
 }
 
-void rooms_match_ended(App *app, const char *roomId) {
+void roomsMatchEnded(App *app, const char *roomId) {
     if (!app || !app->rooms || !roomId || roomId[0] == '\0') return;
-    Room *room = rooms_find_by_code(app->rooms, roomId);
+    Room *room = roomsFindByCode(app->rooms, roomId);
     /* If every human left mid-match the code may since name a new waiting room. */
     if (!room || room->status != ROOM_STATUS_IN_MATCH) return;
     /* Clearing the slot frees every seat at once; members already got MATCH_RESULT. */
     memset(room, 0, sizeof(*room));
 }
 
-Party *party_find_by_user(Rooms *rooms, UserId userId) {
+Party *partyFindByUser(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return NULL;
     for (int i = 0; i < MAX_PARTIES; i++) {
         if (rooms->parties[i].active) {
-            for (size_t member = 0; member < rooms->parties[i].member_count; member++) {
+            for (size_t member = 0; member < rooms->parties[i].memberCount; member++) {
                 if (rooms->parties[i].members[member] == userId) {
                     return &rooms->parties[i];
                 }
@@ -608,13 +608,13 @@ Party *party_find_by_user(Rooms *rooms, UserId userId) {
 
 static json_object *partyStateJson(const Party *party) {
     struct json_object *payload = json_object_new_object();
-    json_object_object_add(payload, "partyId", json_object_new_int((int)party->party_id));
-    json_object_object_add(payload, "leaderId", userIdJson(party->leader_id));
+    json_object_object_add(payload, "partyId", json_object_new_int((int)party->partyId));
+    json_object_object_add(payload, "leaderId", userIdJson(party->leaderId));
     json_object_object_add(payload, "revision", json_object_new_int64(party->revision));
     json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[party->mode]));
 
     struct json_object *membersJson = json_object_new_array();
-    for (size_t i = 0; i < party->member_count; i++) {
+    for (size_t i = 0; i < party->memberCount; i++) {
         json_object_array_add(membersJson, userIdJson(party->members[i]));
     }
     json_object_object_add(payload, "members", membersJson);
@@ -625,40 +625,40 @@ static void broadcastPartyState(App *app, const Party *party) {
     if (!app || !party) return;
 
     json_object *payload = partyStateJson(party);
-    for (size_t i = 0; i < party->member_count; i++) {
-        (void)app_push(app, party->members[i], "PARTY_STATE", payload);
+    for (size_t i = 0; i < party->memberCount; i++) {
+        (void)appPush(app, party->members[i], "PARTY_STATE", payload);
     }
     json_object_put(payload);
 }
 
-void rooms_sync_user(App *app, UserId userId) {
+void roomsSyncUser(App *app, UserId userId) {
     if (!app || !app->rooms || userId == 0) return;
-    Room *room = rooms_find_by_user(app->rooms, userId);
+    Room *room = roomsFindByUser(app->rooms, userId);
     if (room) {
         json_object *roomState = roomStateJson(room);
-        (void)app_push(app, userId, "ROOM_STATE", roomState);
+        (void)appPush(app, userId, "ROOM_STATE", roomState);
         json_object_put(roomState);
     }
-    Party *party = party_find_by_user(app->rooms, userId);
+    Party *party = partyFindByUser(app->rooms, userId);
     if (party) {
         json_object *partyState = partyStateJson(party);
-        (void)app_push(app, userId, "PARTY_STATE", partyState);
+        (void)appPush(app, userId, "PARTY_STATE", partyState);
         json_object_put(partyState);
     }
 }
 
-Status party_leave(Rooms *rooms, UserId userId) {
+Status partyLeave(Rooms *rooms, UserId userId) {
     if (!rooms || userId == 0) return OK;
-    Party *party = party_find_by_user(rooms, userId);
+    Party *party = partyFindByUser(rooms, userId);
     if (!party) return OK;
 
     if (rooms->app) {
         UserId oldMembers[PARTY_MAX_MEMBERS];
-        size_t oldCount = party->member_count;
+        size_t oldCount = party->memberCount;
         for (size_t i = 0; i < oldCount; i++) {
             oldMembers[i] = party->members[i];
         }
-        uint32_t partyId = party->party_id;
+        uint32_t partyId = party->partyId;
         uint64_t revision = party->revision + 1;
 
         struct json_object *payload = json_object_new_object();
@@ -671,12 +671,12 @@ Status party_leave(Rooms *rooms, UserId userId) {
         Envelope pushEnvelope = {1, 0, "PARTY_STATE", payload};
         for (size_t i = 0; i < oldCount; i++) {
             ConnId connId;
-            if (sessions_find_conn(rooms->app, oldMembers[i], &connId) == OK) {
+            if (sessionsFindConn(rooms->app, oldMembers[i], &connId) == OK) {
                 if (connId.slot < APP_MAX_CONNS) {
                     AppConnSlot *recipientSlot = &rooms->app->slots[connId.slot];
                     if (recipientSlot->active && recipientSlot->generation == connId.generation) {
-                        conn_queue(&recipientSlot->conn, &pushEnvelope);
-                        conn_flush(&recipientSlot->conn);
+                        connQueue(&recipientSlot->conn, &pushEnvelope);
+                        connFlush(&recipientSlot->conn);
                     }
                 }
             }
@@ -689,7 +689,7 @@ Status party_leave(Rooms *rooms, UserId userId) {
     return OK;
 }
 
-Status rooms_invite_create(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
+Status roomsInviteCreate(Rooms *rooms, UserId senderId, UserId recipientId, const char *kind,
                            const char *roomCode, char outInviteId[37]) {
     if (!rooms || senderId == 0 || recipientId == 0) return BAD_REQUEST;
 
@@ -697,8 +697,8 @@ Status rooms_invite_create(Rooms *rooms, UserId senderId, UserId recipientId, co
     int inviteSlot = -1;
     for (int i = 0; i < MAX_INVITES; i++) {
         const Invite *slot = &rooms->invites[i];
-        bool expired = nowMs > slot->created_at_ms &&
-                       nowMs - slot->created_at_ms > INVITE_TIMEOUT_MS;
+        bool expired = nowMs > slot->createdAtMs &&
+                       nowMs - slot->createdAtMs > INVITE_TIMEOUT_MS;
         if (!slot->active || expired) {
             inviteSlot = i;
             break;
@@ -711,25 +711,25 @@ Status rooms_invite_create(Rooms *rooms, UserId senderId, UserId recipientId, co
     Invite *invite = &rooms->invites[inviteSlot];
     memset(invite, 0, sizeof(*invite));
     invite->active = true;
-    generateUuid(invite->invite_id);
-    invite->sender_id = senderId;
-    invite->recipient_id = recipientId;
+    generateUuid(invite->inviteId);
+    invite->senderId = senderId;
+    invite->recipientId = recipientId;
     if (kind) strncpy(invite->kind, kind, sizeof(invite->kind) - 1);
-    if (roomCode) strncpy(invite->room_code, roomCode, sizeof(invite->room_code) - 1);
-    invite->created_at_ms = nowMs;
+    if (roomCode) strncpy(invite->roomCode, roomCode, sizeof(invite->roomCode) - 1);
+    invite->createdAtMs = nowMs;
 
     if (outInviteId) {
-        strcpy(outInviteId, invite->invite_id);
+        strcpy(outInviteId, invite->inviteId);
     }
     return OK;
 }
 
-Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
+Status roomsHandle(App *app, ConnId connId, const Envelope *envelope) {
     if (!app || !app->rooms || !envelope) return BAD_REQUEST;
     Rooms *rooms = app->rooms;
 
     UserId userId = 0;
-    if (sessions_user(app, connId, &userId) != OK) {
+    if (sessionsUser(app, connId, &userId) != OK) {
         sendError(app, connId, envelope->id, "UNAUTHENTICATED", "Authentication required");
         return OK;
     }
@@ -737,7 +737,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
     Account account;
     memset(&account, 0, sizeof(account));
     if (app->store) {
-        store_account_get_by_id(app->store, userId, &account);
+        storeAccountGetById(app->store, userId, &account);
     }
     if (account.name[0] == '\0') {
         snprintf(account.name, sizeof(account.name), "Player%llu", (unsigned long long)userId);
@@ -754,7 +754,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         }
 
         char code[7] = {0};
-        Status status = rooms_create(rooms, userId, account.name, account.avatar, mode, code);
+        Status status = roomsCreate(rooms, userId, account.name, account.avatar, mode, code);
         if (status == BUSY) {
             sendError(app, connId, envelope->id, "BUSY", "User already in a room");
             return OK;
@@ -775,8 +775,8 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         json_object_object_add(responsePayload, "seat", json_object_new_int(0));
         sendOk(app, connId, envelope->id, responsePayload);
 
-        Room *room = rooms_find_by_code(rooms, code);
-        if (room) rooms_broadcast_state(app, room);
+        Room *room = roomsFindByCode(rooms, code);
+        if (room) roomsBroadcastState(app, room);
         return OK;
     }
 
@@ -791,7 +791,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         if (rejectIfQueued(app, connId, envelope->id, userId)) return OK;
         const char *code = json_object_get_string(codeJson);
         Seat seat = 0;
-        Status status = rooms_join(rooms, userId, account.name, account.avatar, code, &seat);
+        Status status = roomsJoin(rooms, userId, account.name, account.avatar, code, &seat);
         if (status == BUSY) {
             sendError(app, connId, envelope->id, "BUSY", "User already in a room");
             return OK;
@@ -815,25 +815,25 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         json_object_object_add(responsePayload, "seat", json_object_new_int(seat));
         sendOk(app, connId, envelope->id, responsePayload);
 
-        Room *room = rooms_find_by_code(rooms, code);
-        if (room) rooms_broadcast_state(app, room);
+        Room *room = roomsFindByCode(rooms, code);
+        if (room) roomsBroadcastState(app, room);
         return OK;
     }
 
     if (strcmp(envelope->type, "ROOM_LEAVE") == 0) {
-        Room *room = rooms_find_by_user(rooms, userId);
+        Room *room = roomsFindByUser(rooms, userId);
         if (!room) {
             sendOk(app, connId, envelope->id, NULL);
             return OK;
         }
         char code[7];
         strcpy(code, room->code);
-        rooms_leave(rooms, userId);
+        roomsLeave(rooms, userId);
         sendOk(app, connId, envelope->id, NULL);
 
-        Room *after = rooms_find_by_code(rooms, code);
+        Room *after = roomsFindByCode(rooms, code);
         if (after) {
-            rooms_broadcast_state(app, after);
+            roomsBroadcastState(app, after);
         }
         return OK;
     }
@@ -850,7 +850,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
             sendError(app, connId, envelope->id, "BAD_REQUEST", "Invalid mode");
             return OK;
         }
-        Status status = rooms_set_mode(rooms, userId, mode);
+        Status status = roomsSetMode(rooms, userId, mode);
         if (status == FORBIDDEN) {
             sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can change room mode");
             return OK;
@@ -868,8 +868,8 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         json_object_object_add(responsePayload, "mode", json_object_new_string(MODE_NAMES[mode]));
         sendOk(app, connId, envelope->id, responsePayload);
 
-        Room *room = rooms_find_by_user(rooms, userId);
-        if (room) rooms_broadcast_state(app, room);
+        Room *room = roomsFindByUser(rooms, userId);
+        if (room) roomsBroadcastState(app, room);
         return OK;
     }
 
@@ -892,7 +892,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
             return OK;
         }
 
-        Status status = rooms_set_bot(rooms, userId, seatValue, level);
+        Status status = roomsSetBot(rooms, userId, seatValue, level);
         if (status == FORBIDDEN) {
             sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can configure bots");
             return OK;
@@ -912,8 +912,8 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         json_object_object_add(responsePayload, "level", json_object_new_string(levelNames[level]));
         sendOk(app, connId, envelope->id, responsePayload);
 
-        Room *room = rooms_find_by_user(rooms, userId);
-        if (room) rooms_broadcast_state(app, room);
+        Room *room = roomsFindByUser(rooms, userId);
+        if (room) roomsBroadcastState(app, room);
         return OK;
     }
 
@@ -929,13 +929,13 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
             sendError(app, connId, envelope->id, "BAD_REQUEST", "Seat must be between 0 and 3");
             return OK;
         }
-        /* rooms_kick wipes the seat, so remember who sat there to notify them. */
+        /* roomsKick wipes the seat, so remember who sat there to notify them. */
         UserId kickedUser = 0;
-        Room *before = rooms_find_by_user(rooms, userId);
-        if (before && before->seats[seatValue].occupied && !before->seats[seatValue].is_bot) {
-            kickedUser = before->seats[seatValue].user_id;
+        Room *before = roomsFindByUser(rooms, userId);
+        if (before && before->seats[seatValue].occupied && !before->seats[seatValue].isBot) {
+            kickedUser = before->seats[seatValue].userId;
         }
-        Status status = rooms_kick(rooms, userId, seatValue);
+        Status status = roomsKick(rooms, userId, seatValue);
         if (status == FORBIDDEN) {
             sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can kick members");
             return OK;
@@ -953,30 +953,30 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         json_object_object_add(responsePayload, "seat", json_object_new_int(seatValue));
         sendOk(app, connId, envelope->id, responsePayload);
 
-        Room *room = rooms_find_by_user(rooms, userId);
+        Room *room = roomsFindByUser(rooms, userId);
         if (room) {
             /* The kicked user is no longer seated, so the broadcast skips them;
              * the same snapshot tells their client it left the room. */
             json_object *state = roomStateJson(room);
             pushToSeatedHumans(app, room, state);
-            if (kickedUser) (void)app_push(app, kickedUser, "ROOM_STATE", state);
+            if (kickedUser) (void)appPush(app, kickedUser, "ROOM_STATE", state);
             json_object_put(state);
         }
         return OK;
     }
 
     if (strcmp(envelope->type, "ROOM_START") == 0) {
-        Room *room = rooms_find_by_user(rooms, userId);
+        Room *room = roomsFindByUser(rooms, userId);
         if (!room) {
             sendError(app, connId, envelope->id, "NOT_FOUND", "Room not found");
             return OK;
         }
-        if (room->seats[room->host_seat].user_id != userId) {
+        if (room->seats[room->hostSeat].userId != userId) {
             sendError(app, connId, envelope->id, "FORBIDDEN", "Only host can start room");
             return OK;
         }
 
-        Status status = rooms_start(app, room->code);
+        Status status = roomsStart(app, room->code);
         if (status == BUSY) {
             sendError(app, connId, envelope->id, "BUSY", "Match engine not available");
             return OK;
@@ -1026,14 +1026,14 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
 
         /* Check recipient is online */
         ConnId recipientConn;
-        if (sessions_find_conn(app, targetUserId, &recipientConn) != OK) {
+        if (sessionsFindConn(app, targetUserId, &recipientConn) != OK) {
             sendError(app, connId, envelope->id, "NOT_FOUND", "User is offline");
             return OK;
         }
 
         char roomCode[7] = {0};
         if (strcasecmp(kind, "room") == 0) {
-            Room *room = rooms_find_by_user(rooms, userId);
+            Room *room = roomsFindByUser(rooms, userId);
             if (!room) {
                 sendError(app, connId, envelope->id, "INVALID_ACTION", "You are not in a room");
                 return OK;
@@ -1046,19 +1046,19 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
                 sendError(app, connId, envelope->id, "ROOM_FULL", "Room is full");
                 return OK;
             }
-            if (rooms_find_by_user(rooms, targetUserId) != NULL) {
+            if (roomsFindByUser(rooms, targetUserId) != NULL) {
                 sendError(app, connId, envelope->id, "BUSY", "Target user is already in a room");
                 return OK;
             }
             strcpy(roomCode, room->code);
         } else {
             /* Party */
-            Party *party = party_find_by_user(rooms, userId);
-            if (party && party->member_count >= PARTY_MAX_MEMBERS) {
+            Party *party = partyFindByUser(rooms, userId);
+            if (party && party->memberCount >= PARTY_MAX_MEMBERS) {
                 sendError(app, connId, envelope->id, "BUSY", "Party is full");
                 return OK;
             }
-            if (party_find_by_user(rooms, targetUserId) != NULL) {
+            if (partyFindByUser(rooms, targetUserId) != NULL) {
                 sendError(app, connId, envelope->id, "BUSY", "Target user is already in a party");
                 return OK;
             }
@@ -1066,7 +1066,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
 
         /* Create invite */
         char inviteIdBuffer[37];
-        Status inviteStatus = rooms_invite_create(rooms, userId, targetUserId, kind, roomCode,
+        Status inviteStatus = roomsInviteCreate(rooms, userId, targetUserId, kind, roomCode,
                                                   inviteIdBuffer);
         if (inviteStatus != OK) {
             sendError(app, connId, envelope->id, "SERVER_FULL", "Too many active invites");
@@ -1074,7 +1074,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         }
         Invite *invite = NULL;
         for (int i = 0; i < MAX_INVITES; i++) {
-            if (rooms->invites[i].active && strcmp(rooms->invites[i].invite_id,
+            if (rooms->invites[i].active && strcmp(rooms->invites[i].inviteId,
                                                    inviteIdBuffer) == 0) {
                 invite = &rooms->invites[i];
                 break;
@@ -1088,7 +1088,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
 
         /* Push INVITE to recipient */
         struct json_object *pushPayload = json_object_new_object();
-        json_object_object_add(pushPayload, "inviteId", json_object_new_string(invite->invite_id));
+        json_object_object_add(pushPayload, "inviteId", json_object_new_string(invite->inviteId));
         char senderText[32];
         snprintf(senderText, sizeof(senderText), "%llu", (unsigned long long)userId);
         json_object_object_add(pushPayload, "senderId", json_object_new_string(senderText));
@@ -1106,8 +1106,8 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         if (recipientConn.slot < APP_MAX_CONNS) {
             AppConnSlot *recipientSlot = &app->slots[recipientConn.slot];
             if (recipientSlot->active && recipientSlot->generation == recipientConn.generation) {
-                conn_queue(&recipientSlot->conn, &pushEnvelope);
-                conn_flush(&recipientSlot->conn);
+                connQueue(&recipientSlot->conn, &pushEnvelope);
+                connFlush(&recipientSlot->conn);
             }
         }
         json_object_put(pushPayload);
@@ -1115,7 +1115,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         /* Send OK to sender */
         struct json_object *responsePayload = json_object_new_object();
         json_object_object_add(responsePayload, "inviteId",
-                               json_object_new_string(invite->invite_id));
+                               json_object_new_string(invite->inviteId));
         sendOk(app, connId, envelope->id, responsePayload);
         return OK;
     }
@@ -1134,19 +1134,19 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
 
         Invite *invite = NULL;
         for (int i = 0; i < MAX_INVITES; i++) {
-            if (rooms->invites[i].active && strcmp(rooms->invites[i].invite_id, inviteId) == 0) {
+            if (rooms->invites[i].active && strcmp(rooms->invites[i].inviteId, inviteId) == 0) {
                 invite = &rooms->invites[i];
                 break;
             }
         }
 
-        if (!invite || invite->recipient_id != userId) {
+        if (!invite || invite->recipientId != userId) {
             sendError(app, connId, envelope->id, "NOT_FOUND", "Invite not found");
             return OK;
         }
 
         uint64_t now = monotonicNowMs();
-        if (now - invite->created_at_ms > INVITE_TIMEOUT_MS) {
+        if (now - invite->createdAtMs > INVITE_TIMEOUT_MS) {
             invite->active = false;
             sendError(app, connId, envelope->id, "NOT_FOUND", "Invite has expired");
             return OK;
@@ -1164,18 +1164,18 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
         /* A party entry always holds both members, so a solo-queued inviter
          * cannot gain a partner either. */
         if (strcasecmp(invite->kind,
-                       "party") == 0 && queue_contains(app->queue, invite->sender_id)) {
+                       "party") == 0 && queueContains(app->queue, invite->senderId)) {
             sendError(app, connId, envelope->id, "BUSY", "Inviter is in matchmaking");
             return OK;
         }
         if (strcasecmp(invite->kind, "room") == 0) {
-            if (rooms_find_by_user(rooms, userId) != NULL) {
+            if (roomsFindByUser(rooms, userId) != NULL) {
                 sendError(app, connId, envelope->id, "BUSY", "Already in a room");
                 return OK;
             }
             Seat seat = 0;
-            Status status = rooms_join(rooms, userId, account.name, account.avatar,
-                                       invite->room_code, &seat);
+            Status status = roomsJoin(rooms, userId, account.name, account.avatar,
+                                       invite->roomCode, &seat);
             if (status == BUSY) {
                 sendError(app, connId, envelope->id, "BUSY", "Already in a room");
                 return OK;
@@ -1197,7 +1197,7 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
             }
 
             char code[7];
-            strcpy(code, invite->room_code);
+            strcpy(code, invite->roomCode);
             invite->active = false;
 
             struct json_object *responsePayload = json_object_new_object();
@@ -1206,16 +1206,16 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
             json_object_object_add(responsePayload, "seat", json_object_new_int(seat));
             sendOk(app, connId, envelope->id, responsePayload);
 
-            Room *room = rooms_find_by_code(rooms, code);
-            if (room) rooms_broadcast_state(app, room);
+            Room *room = roomsFindByCode(rooms, code);
+            if (room) roomsBroadcastState(app, room);
             return OK;
         } else {
             /* Party invite accepted */
-            if (party_find_by_user(rooms, userId) != NULL) {
+            if (partyFindByUser(rooms, userId) != NULL) {
                 sendError(app, connId, envelope->id, "BUSY", "Already in a party");
                 return OK;
             }
-            Party *party = party_find_by_user(rooms, invite->sender_id);
+            Party *party = partyFindByUser(rooms, invite->senderId);
             if (!party) {
                 /* Create new party */
                 int partySlot = -1;
@@ -1228,17 +1228,17 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
                 if (partySlot >= 0) {
                     party = &rooms->parties[partySlot];
                     party->active = true;
-                    party->party_id = rooms->next_party_id++;
-                    party->leader_id = invite->sender_id;
-                    party->members[0] = invite->sender_id;
+                    party->partyId = rooms->nextPartyId++;
+                    party->leaderId = invite->senderId;
+                    party->members[0] = invite->senderId;
                     party->members[1] = userId;
-                    party->member_count = 2;
+                    party->memberCount = 2;
                     party->mode = invite->mode;
                     party->revision = 1;
                 }
             } else {
-                if (party->member_count < PARTY_MAX_MEMBERS) {
-                    party->members[party->member_count++] = userId;
+                if (party->memberCount < PARTY_MAX_MEMBERS) {
+                    party->members[party->memberCount++] = userId;
                     party->revision++;
                 } else {
                     invite->active = false;
@@ -1257,8 +1257,8 @@ Status rooms_handle(App *app, ConnId connId, const Envelope *envelope) {
 
     if (strcmp(envelope->type, "PARTY_LEAVE") == 0) {
         /* The queued party entry cannot outlive the party; a solo entry stays. */
-        if (party_find_by_user(rooms, userId)) queue_user_gone(app, userId);
-        party_leave(rooms, userId);
+        if (partyFindByUser(rooms, userId)) queueUserGone(app, userId);
+        partyLeave(rooms, userId);
         sendOk(app, connId, envelope->id, NULL);
         return OK;
     }

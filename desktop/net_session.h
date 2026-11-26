@@ -23,15 +23,15 @@ typedef struct NetSession NetSession;
 
 /**
  * @brief Allocate a session in NS_DISCONNECTED with no token.
- * @return The new session (release with ns_destroy), or NULL on out of memory.
+ * @return The new session (release with nsDestroy), or NULL on out of memory.
  */
-NetSession *ns_create(void);
+NetSession *nsCreate(void);
 
 /**
  * @brief Wipe the token, then free the session.
  * @param[in] session Session to free; NULL is ignored.
  */
-void ns_destroy(NetSession *session);
+void nsDestroy(NetSession *session);
 
 /**
  * @brief Record that a new TCP connection is up.
@@ -39,12 +39,12 @@ void ns_destroy(NetSession *session);
  * Wire ids restart at 1 because the server enforces strictly increasing ids
  * per connection; pending requests of the old connection are forgotten.
  * State becomes NS_RESUMING when a token is
- * held (the host must then send RESUME via ns_internal), otherwise
+ * held (the host must then send RESUME via nsInternal), otherwise
  * NS_CONNECTED. The reconnect backoff is reset only on NS_CONNECTED; while
- * resuming it is kept until the RESUME answer (see ns_incoming).
+ * resuming it is kept until the RESUME answer (see nsIncoming).
  * @param[in,out] session Session; NULL is ignored.
  */
-void ns_on_connected(NetSession *session);
+void nsOnConnected(NetSession *session);
 
 /**
  * @brief Record that the TCP connection dropped.
@@ -53,19 +53,19 @@ void ns_on_connected(NetSession *session);
  * token is kept so the next connection can RESUME.
  * @param[in,out] session Session; NULL is ignored.
  */
-void ns_on_disconnected(NetSession *session);
+void nsOnDisconnected(NetSession *session);
 
 /**
  * @brief Current connection state.
  * @param[in] session Session.
  * @return The state; NS_DISCONNECTED when @p session is NULL.
  */
-NsState ns_state(const NetSession *session);
+NsState nsState(const NetSession *session);
 
 /**
  * @brief Allocate a wire id for a request coming from JS.
  * @param[in,out] session Session.
- * @param[in] jsId Id the JS side chose (> 0); echoed back by ns_incoming.
+ * @param[in] jsId Id the JS side chose (> 0); echoed back by nsIncoming.
  * @param[in] type Request type; LOGIN/LOGOUT responses update the token.
  * @param[out] wireId Id to put on the wire envelope.
  * @return OK when the request was registered;
@@ -75,7 +75,7 @@ NsState ns_state(const NetSession *session);
  *         BUSY when the state is not NS_CONNECTED, all NS_MAX_PENDING slots
  *         are in use, or the connection ran out of wire ids.
  */
-Status ns_outgoing(NetSession *session, int32_t jsId, const char *type, int32_t *wireId);
+Status nsOutgoing(NetSession *session, int32_t jsId, const char *type, int32_t *wireId);
 
 /**
  * @brief Allocate a wire id for a request the native side sends itself.
@@ -86,7 +86,7 @@ Status ns_outgoing(NetSession *session, int32_t jsId, const char *type, int32_t 
  * @return The wire id (> 0), or 0 when nothing may be sent: NULL argument,
  *         NS_DISCONNECTED/NS_CONNECTING, table full, or ids exhausted.
  */
-int32_t ns_internal(NetSession *session, const char *type);
+int32_t nsInternal(NetSession *session, const char *type);
 
 /**
  * @brief Classify an envelope received from the server.
@@ -108,7 +108,7 @@ int32_t ns_internal(NetSession *session, const char *type);
  * @return NS_FORWARD when the host must emit @p envelope to JS with @p jsId;
  *         NS_DROP when it must not.
  */
-NsVerdict ns_incoming(NetSession *session, const Envelope *envelope, int32_t *jsId,
+NsVerdict nsIncoming(NetSession *session, const Envelope *envelope, int32_t *jsId,
                       json_object **outConnState);
 
 /**
@@ -116,16 +116,16 @@ NsVerdict ns_incoming(NetSession *session, const Envelope *envelope, int32_t *js
  * @param[in] session Session.
  * @return true when a token from LOGIN is held; false otherwise or for NULL.
  */
-bool ns_has_token(const NetSession *session);
+bool nsHasToken(const NetSession *session);
 
 /**
  * @brief The held token, for building the native RESUME request only.
  * @param[in] session Session.
  * @return The token string owned by the session; its storage is wiped (not
  *         freed) by the next LOGIN/LOGOUT/RESUME failure and freed by
- *         ns_destroy. NULL when no token is held.
+ *         nsDestroy. NULL when no token is held.
  */
-const char *ns_token(const NetSession *session);
+const char *nsToken(const NetSession *session);
 
 /**
  * @brief Delay before the next reconnect attempt.
@@ -136,6 +136,6 @@ const char *ns_token(const NetSession *session);
  * @param[in,out] session Session.
  * @return 1000, 2000, 4000, 8000, 8000, ... milliseconds; 0 when @p session is NULL.
  */
-uint32_t ns_next_backoff_ms(NetSession *session);
+uint32_t nsNextBackoffMs(NetSession *session);
 
 #endif

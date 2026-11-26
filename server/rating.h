@@ -21,15 +21,15 @@ typedef enum { RANK_BRONZE, RANK_SILVER, RANK_GOLD, RANK_DIAMOND } Rank;
  * @param[in] won true when this side won (score 1), false when it lost (score 0).
  * @return lround(K * (score - expected)), rounded half away from zero.
  */
-int rating_delta(double own, double opposition, bool won);
+int ratingDelta(double own, double opposition, bool won);
 
 /**
  * @brief Map an ELO value to one of the four rank tiers.
- * @param[in] elo Current ELO (never negative after rating_apply).
+ * @param[in] elo Current ELO (never negative after ratingApply).
  * @return RANK_BRONZE below 1200, RANK_SILVER 1200..1399,
  *         RANK_GOLD 1400..1799, RANK_DIAMOND from 1800.
  */
-Rank rating_rank(int elo);
+Rank ratingRank(int elo);
 
 /**
  * @brief Return the wire key used for a rank in protocol messages.
@@ -37,7 +37,7 @@ Rank rating_rank(int elo);
  * @return Static string "bronze", "silver", "gold" or "diamond";
  *         "bronze" for an out-of-range value.
  */
-const char *rating_rank_key(Rank rank);
+const char *ratingRankKey(Rank rank);
 
 /**
  * @brief Fill eloAfter for every seat of a match result.
@@ -49,6 +49,6 @@ const char *rating_rank_key(Rank rank);
  * of the three others; team modes compare team averages and give both
  * teammates the same delta. The result is clamped to be >= 0.
  */
-void rating_apply(MatchResult *result, const bool isBot[4]);
+void ratingApply(MatchResult *result, const bool isBot[4]);
 
 #endif

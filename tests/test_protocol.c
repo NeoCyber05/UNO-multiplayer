@@ -15,32 +15,32 @@ static Status countHello(const Envelope *envelope, void *context) {
 static Status feedBody(const char *body, size_t length, FrameCallback onFrame, void *context) {
     FrameReader reader = {0};
     uint8_t prefix[] = {0, (uint8_t)(length >> 16), (uint8_t)(length >> 8), (uint8_t)length};
-    Status status = frame_feed(&reader, prefix, sizeof prefix, onFrame, context);
+    Status status = frameFeed(&reader, prefix, sizeof prefix, onFrame, context);
     if (status != OK) return status;
-    return frame_feed(&reader, (const uint8_t *)body, length, onFrame, context);
+    return frameFeed(&reader, (const uint8_t *)body, length, onFrame, context);
 }
 
 static void testFragmentedAndCoalesced(void) {
     Envelope hello = {1, 1, "HELLO", json_object_new_object()};
     uint8_t pair[256];
     size_t length;
-    assert(frame_encode(&hello, pair, sizeof pair / 2, &length) == OK);
+    assert(frameEncode(&hello, pair, sizeof pair / 2, &length) == OK);
     assert(length == sizeof HELLO + 3 && pair[3] == length - 4);
     json_object_put(hello.payload);
     FrameReader reader;
-    frame_reader_reset(&reader);
+    frameReaderReset(&reader);
     int callbacks = 0;
     for (size_t i = 0; i < length; i++)
-        assert(frame_feed(&reader, pair + i, 1, countHello, &callbacks) == OK);
+        assert(frameFeed(&reader, pair + i, 1, countHello, &callbacks) == OK);
     memcpy(pair + length, pair, length);
-    assert(frame_feed(&reader, pair, 2 * length, countHello, &callbacks) == OK);
+    assert(frameFeed(&reader, pair, 2 * length, countHello, &callbacks) == OK);
     assert(callbacks == 3);
 }
 
 static bool rejectLength(size_t length) {
     FrameReader reader = {0};
     uint8_t prefix[] = {0, (uint8_t)(length >> 16), (uint8_t)(length >> 8), (uint8_t)length};
-    return frame_feed(&reader, prefix, 4, countHello, NULL) == BAD_REQUEST;
+    return frameFeed(&reader, prefix, 4, countHello, NULL) == BAD_REQUEST;
 }
 
 static Status observed(const Envelope *envelope, void *context) {
@@ -124,19 +124,19 @@ static void testFixtures(void) {
                       json_object_object_get(fixture, "payload")};
         uint8_t out[FRAME_CAPACITY];
         size_t length;
-        assert(frame_encode(&envelope, out, 4, &length) == BAD_REQUEST && length == 0);
-        assert(frame_encode(&envelope, out, sizeof out, &length) == OK);
+        assert(frameEncode(&envelope, out, 4, &length) == BAD_REQUEST && length == 0);
+        assert(frameEncode(&envelope, out, sizeof out, &length) == OK);
         FrameReader reader = {0};
-        assert(frame_feed(&reader, out, length, matchFixture, fixture) == BUSY);
+        assert(frameFeed(&reader, out, length, matchFixture, fixture) == BUSY);
     }
     json_object_put(rows);
 }
 
 static void testStatusCode(void) {
-    assert(strcmp(status_code(OK), "OK") == 0);
-    assert(strcmp(status_code(STALE_REQUEST), "STALE_REQUEST") == 0);
-    assert(strcmp(status_code(SERVER_FULL), "SERVER_FULL") == 0);
-    assert(strcmp(status_code((Status)99), "BAD_REQUEST") == 0);
+    assert(strcmp(statusCode(OK), "OK") == 0);
+    assert(strcmp(statusCode(STALE_REQUEST), "STALE_REQUEST") == 0);
+    assert(strcmp(statusCode(SERVER_FULL), "SERVER_FULL") == 0);
+    assert(strcmp(statusCode((Status)99), "BAD_REQUEST") == 0);
 }
 
 int main(void) {

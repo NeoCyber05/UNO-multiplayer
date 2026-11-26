@@ -21,14 +21,14 @@ typedef struct {
     struct json_object *payload;
 } Envelope;
 
-/* Receives a decoded envelope; a non-OK result stops frame_feed. */
+/* Receives a decoded envelope; a non-OK result stops frameFeed. */
 typedef Status (*FrameCallback)(const Envelope *, void *);
 
 /**
  * @brief Drop any partial frame, e.g. after a connection is reused.
  * @param[out] reader Reader to clear.
  */
-void frame_reader_reset(FrameReader *reader);
+void frameReaderReset(FrameReader *reader);
 
 /**
  * @brief Append received bytes and decode every frame they complete.
@@ -46,7 +46,7 @@ void frame_reader_reset(FrameReader *reader);
  *         length prefix or an invalid envelope; otherwise the first non-OK
  *         callback result. After an error the connection should be closed.
  */
-Status frame_feed(FrameReader *reader, const uint8_t *data, size_t length, FrameCallback onFrame,
+Status frameFeed(FrameReader *reader, const uint8_t *data, size_t length, FrameCallback onFrame,
                   void *context);
 
 /**
@@ -58,7 +58,7 @@ Status frame_feed(FrameReader *reader, const uint8_t *data, size_t length, Frame
  * @return OK, BAD_REQUEST for an invalid envelope or a frame that does not fit,
  *         or BUSY when json-c cannot allocate.
  */
-Status frame_encode(const Envelope *envelope, uint8_t *out, size_t capacity, size_t *written);
+Status frameEncode(const Envelope *envelope, uint8_t *out, size_t capacity, size_t *written);
 
 /**
  * @brief Map a Status to the wire error code string used in ERROR payloads.
@@ -67,6 +67,6 @@ Status frame_encode(const Envelope *envelope, uint8_t *out, size_t capacity, siz
  *         STALE_REQUEST -> "STALE_REQUEST", ...). A value outside the enum
  *         returns "BAD_REQUEST" so a corrupted status never leaks to the wire.
  */
-const char *status_code(Status status);
+const char *statusCode(Status status);
 
 #endif

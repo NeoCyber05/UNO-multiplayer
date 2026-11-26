@@ -46,7 +46,7 @@ Status profileCompute(Store *store, const MatchResult *result,
             const PlayerResult *player = &result->players[seat];
             if (!player->userId) continue;
             ProfileStats before;
-            Status status = store_profile_stats(store, player->userId, &before);
+            Status status = storeProfileStats(store, player->userId, &before);
             if (status != OK) return status;
 
             ProfileStats after = before;

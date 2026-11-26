@@ -25,11 +25,11 @@ typedef struct {
     Conn conn;
     bool active;
     uint32_t generation;
-    char client_ip[64];
-    uint64_t rate_last_ms;
-    double rate_tokens;
-    int32_t last_request_id; /* request ids must strictly increase per connection */
-    uint64_t last_frame_ms;  /* monotonic time of the last accepted frame */
+    char clientIp[64];
+    uint64_t rateLastMs;
+    double rateTokens;
+    int32_t lastRequestId; /* request ids must strictly increase per connection */
+    uint64_t lastFrameMs;  /* monotonic time of the last accepted frame */
 } AppConnSlot;
 
 typedef struct AuthWorker AuthWorker;
@@ -37,27 +37,27 @@ typedef struct Sessions Sessions;
 typedef struct RateLimiter RateLimiter;
 
 struct App {
-    int listen_fd;
-    uint16_t bound_port;
-    char bind_ip[64];
-    char db_path[256];
-    int auth_limit;
+    int listenFd;
+    uint16_t boundPort;
+    char bindIp[64];
+    char dbPath[256];
+    int authLimit;
     bool running;
     Store *store;
     AppConnSlot slots[APP_MAX_CONNS];
-    AuthWorker *auth_worker;
-    int auth_pipe_read;
-    int auth_pipe_write;
+    AuthWorker *authWorker;
+    int authPipeRead;
+    int authPipeWrite;
     Sessions *sessions;
-    RateLimiter *rate_limiter;
+    RateLimiter *rateLimiter;
     Rooms *rooms;
     Queue *queue;
     Matches *matches;
-    int heartbeat_ms;
-    AppMatchRecord match_records[APP_MATCH_RECORDS];
-    /* Set only while app_user_leave runs: its own presence push replaces the
+    int heartbeatMs;
+    AppMatchRecord matchRecords[APP_MATCH_RECORDS];
+    /* Set only while appUserLeave runs: its own presence push replaces the
      * one a match abort would send for this user. */
-    UserId leaving_user;
+    UserId leavingUser;
 };
 
 /**
@@ -65,19 +65,19 @@ struct App {
  *
  * Also starts the auth worker thread with its wake-up pipe, ignores SIGPIPE and
  * installs the SIGINT/SIGTERM handler. The store and match coordinator are
- * opened later by app_run, so tests can inject their own.
+ * opened later by appRun, so tests can inject their own.
  *
  * @param[out] app State to initialize; zeroed first.
  * @param[in] bindIp IPv4 address in dotted form, or NULL for "0.0.0.0".
  * @param[in] port TCP port in host byte order; 0 picks an ephemeral port
- *            stored in `bound_port`.
+ *            stored in `boundPort`.
  * @param[in] dbPath SQLite path, or NULL for "uno.db".
  * @param[in] authLimit Auth requests allowed per IP per minute.
  * @return OK; BAD_REQUEST for an unparsable @p bindIp; BUSY when socket(),
  *         bind() or listen() fails (the socket is closed again), or an error
- *         from queue_init.
+ *         from queueInit.
  */
-Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath, int authLimit);
+Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, int authLimit);
 
 /**
  * @brief Run the server poll loop until SIGINT/SIGTERM.
@@ -88,13 +88,13 @@ Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath,
  * @param[in] heartbeatMs Idle time after which a connection is closed.
  * @return 0 after a clean shutdown, 1 if startup failed.
  */
-int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
+int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
             int heartbeatMs);
 /**
  * @brief Ask the poll loop to exit after the current iteration.
  * @param[in,out] app Server state; NULL is ignored.
  */
-void app_stop(App *app);
+void appStop(App *app);
 
 /**
  * @brief Close every connection, the listening socket and the auth pipe, then
@@ -105,7 +105,7 @@ void app_stop(App *app);
  *
  * @param[in,out] app Server state; the App struct itself is not freed.
  */
-void app_cleanup(App *app);
+void appCleanup(App *app);
 
 /**
  * @brief Detach the session, close the socket and free the slot for reuse.
@@ -116,7 +116,7 @@ void app_cleanup(App *app);
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] slotIndex Index into `slots`; out-of-range values are ignored.
  */
-void app_close_slot(App *app, int slotIndex);
+void appCloseSlot(App *app, int slotIndex);
 
 /**
  * @brief Refuse a freshly accepted connection because every slot is taken.
@@ -143,12 +143,12 @@ Status appRejectConnection(int connectionSocket);
  * because the session is detached (connected = false) only afterwards.
  * Friends then get one presence update per user whose presence changed.
  * The caller decides whether the detached session is also forgotten
- * (sessions_logout) or kept for RESUME.
+ * (sessionsLogout) or kept for RESUME.
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] conn Connection the user is leaving.
  * @param[in] user Account bound to @p conn; 0 is ignored.
  */
-void app_user_leave(App *app, ConnId conn, UserId user);
+void appUserLeave(App *app, ConnId conn, UserId user);
 
 /**
  * @brief Spend one token from the connection's request bucket.
@@ -157,16 +157,16 @@ void app_user_leave(App *app, ConnId conn, UserId user);
  * burst 60 requests and then sustain 30 per second.
  *
  * @param[in,out] slot Connection whose bucket is updated.
- * @param[in] nowMs Monotonic time from app_now_ms.
+ * @param[in] nowMs Monotonic time from appNowMs.
  * @return true if the request may run, false if it must get RATE_LIMITED.
  */
-bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t nowMs);
+bool appConnCheckRateLimit(AppConnSlot *slot, uint64_t nowMs);
 
 /**
  * @brief Read the clock shared by the poll loop, heartbeat and match timers.
  * @return Milliseconds from CLOCK_MONOTONIC, immune to wall-clock jumps.
  */
-uint64_t app_now_ms(void);
+uint64_t appNowMs(void);
 
 /**
  * @brief Queue and flush a server push (envelope id 0) to a user's live connection.
@@ -175,18 +175,18 @@ uint64_t app_now_ms(void);
  * @param[in] type Push opcode, e.g. "GAME_STATE".
  * @param[in] payload JSON object borrowed for the call; ownership stays with the caller.
  * @return OK when queued, NOT_FOUND if the user has no connected session,
- *         BAD_REQUEST on invalid arguments, or the conn_queue/conn_flush error.
+ *         BAD_REQUEST on invalid arguments, or the connQueue/connFlush error.
  */
-Status app_push(App *app, UserId user, const char *type, json_object *payload);
+Status appPush(App *app, UserId user, const char *type, json_object *payload);
 
 /**
  * @brief Answer a request with OK {} or ERROR {code, message} derived from a Status.
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] conn Connection that sent the request; ignored if already closed.
  * @param[in] id Request id echoed back to the client.
- * @param[in] status OK sends an empty OK; any other value sends ERROR with status_code(status).
+ * @param[in] status OK sends an empty OK; any other value sends ERROR with statusCode(status).
  */
-void app_reply_status(App *app, ConnId conn, int32_t id, Status status);
+void appReplyStatus(App *app, ConnId conn, int32_t id, Status status);
 
 /**
  * @brief Answer a request with OK and a result object.
@@ -195,6 +195,6 @@ void app_reply_status(App *app, ConnId conn, int32_t id, Status status);
  * @param[in] id Request id echoed back to the client.
  * @param[in] payload JSON object borrowed for the call; ownership stays with the caller.
  */
-void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload);
+void appReplyOk(App *app, ConnId conn, int32_t id, json_object *payload);
 
 #endif

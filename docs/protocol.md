@@ -74,10 +74,10 @@ ROOM_KICK gửi cho người bị kick cùng ROOM_STATE như các ghế còn l�
 
 ## Ownership của API C
 
-Khởi tạo một `FrameReader` bằng `{0}` hoặc `frame_reader_reset` cho mỗi byte stream. Gọi `frame_feed` với từng phần dữ liệu nhận được. Reader giữ phần frame còn thiếu. Callback chạy đồng bộ một lần cho mỗi envelope hoàn chỉnh. Con trỏ envelope, type và payload được mượn đến khi callback trả về. Để giữ payload lâu hơn, gọi `json_object_get` và giải phóng bằng `json_object_put`; sao chép type nếu cần.
+Khởi tạo một `FrameReader` bằng `{0}` hoặc `frameReaderReset` cho mỗi byte stream. Gọi `frameFeed` với từng phần dữ liệu nhận được. Reader giữ phần frame còn thiếu. Callback chạy đồng bộ một lần cho mỗi envelope hoàn chỉnh. Con trỏ envelope, type và payload được mượn đến khi callback trả về. Để giữ payload lâu hơn, gọi `json_object_get` và giải phóng bằng `json_object_put`; sao chép type nếu cần.
 
 Callback trả `OK` để tiếp tục đọc. Status khác dừng lần feed ngay và được trả nguyên cho caller. API không trả offset để tiếp tục phần còn lại của chunk sau lỗi. Để tiếp tục kết nối khi command bị từ chối, callback xếp response ERROR rồi trả OK. Khi đóng hoặc thay stream, reset reader để bỏ frame dở.
 
-`frame_encode` mượn type và payload trong lần gọi. Caller sở hữu output buffer. Thành công ghi cả header và JSON vào buffer, trả số byte qua `written`. Khi lỗi, `written` bằng 0.
+`frameEncode` mượn type và payload trong lần gọi. Caller sở hữu output buffer. Thành công ghi cả header và JSON vào buffer, trả số byte qua `written`. Khi lỗi, `written` bằng 0.
 
 [Fixture request, response và push](../tests/fixtures/requests.json) · [Schema nghiệp vụ, giới hạn và snapshot](superpowers/specs/2026-11-11-ubuntu-tcp-design.md)

@@ -62,13 +62,13 @@ static const char *const MATCH_COMMANDS[] = {
     "PLAY", "DRAW", "PASS", "SAY_UNO", "DRAFT_PICK", "MATCH_LEAVE", "CHAT"
 };
 
-/* Opcodes routed to rooms_handle. */
+/* Opcodes routed to roomsHandle. */
 static const char *const ROOM_COMMANDS[] = {
     "ROOM_CREATE", "ROOM_JOIN", "ROOM_LEAVE", "ROOM_BOT", "ROOM_KICK", "ROOM_MODE",
     "ROOM_START", "INVITE_SEND", "INVITE_REPLY", "PARTY_LEAVE"
 };
 
-/* Opcodes routed to social_handle. */
+/* Opcodes routed to socialHandle. */
 static const char *const SOCIAL_COMMANDS[] = {
     "FRIEND_LIST", "FRIEND_REQUEST", "FRIEND_REPLY", "PROFILE_GET", "PROFILE_UPDATE",
     "LEADERBOARD_GET", "LOBBY_GET"
@@ -87,7 +87,7 @@ typedef struct {
     size_t count;
 } PresenceWatch;
 
-uint64_t app_now_ms(void) {
+uint64_t appNowMs(void) {
     struct timespec now;
     /* CLOCK_MONOTONIC cannot fail on Linux; 0 keeps callers defined if it ever does. */
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
@@ -124,15 +124,15 @@ static AppConnSlot *liveSlot(App *app, ConnId conn) {
 /* Queue then flush immediately; a failed flush marks the conn closing and the
  * poll loop tears it down, so callers never close a slot mid-dispatch. */
 static Status sendEnvelope(AppConnSlot *slot, const Envelope *envelope) {
-    Status queued = conn_queue(&slot->conn, envelope);
+    Status queued = connQueue(&slot->conn, envelope);
     if (queued != OK) return queued;
-    return conn_flush(&slot->conn);
+    return connFlush(&slot->conn);
 }
 
-Status app_push(App *app, UserId user, const char *type, json_object *payload) {
+Status appPush(App *app, UserId user, const char *type, json_object *payload) {
     if (!app || !user || !type || !payload) return BAD_REQUEST;
     ConnId conn;
-    if (sessions_find_conn(app, user, &conn) != OK) return NOT_FOUND;
+    if (sessionsFindConn(app, user, &conn) != OK) return NOT_FOUND;
     AppConnSlot *slot = liveSlot(app, conn);
     if (!slot) return NOT_FOUND;
     /* Protocol: pushes carry id 0 so clients never match them to a request. */
@@ -140,14 +140,14 @@ Status app_push(App *app, UserId user, const char *type, json_object *payload) {
     return sendEnvelope(slot, &push);
 }
 
-void app_reply_status(App *app, ConnId conn, int32_t id, Status status) {
+void appReplyStatus(App *app, ConnId conn, int32_t id, Status status) {
     if (!app) return;
     AppConnSlot *slot = liveSlot(app, conn);
     if (!slot) return;
     json_object *payload = json_object_new_object();
     if (!payload) return;
     if (status != OK) {
-        json_object_object_add(payload, "code", json_object_new_string(status_code(status)));
+        json_object_object_add(payload, "code", json_object_new_string(statusCode(status)));
         json_object_object_add(payload, "message",
                                json_object_new_string(statusMessage(status)));
     }
@@ -157,7 +157,7 @@ void app_reply_status(App *app, ConnId conn, int32_t id, Status status) {
     json_object_put(payload);
 }
 
-void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload) {
+void appReplyOk(App *app, ConnId conn, int32_t id, json_object *payload) {
     if (!app || !payload) return;
     AppConnSlot *slot = liveSlot(app, conn);
     if (!slot) return;
@@ -169,7 +169,7 @@ void app_reply_ok(App *app, ConnId conn, int32_t id, json_object *payload) {
 static void onMatchPush(void *context, UserId userId, const char *type,
                            json_object *payload) {
     /* An offline seat simply misses the push; RESUME resends the current view. */
-    (void)app_push((App *)context, userId, type, payload);
+    (void)appPush((App *)context, userId, type, payload);
 }
 
 static bool recordInMatch(const App *app, const AppMatchRecord *record) {
@@ -182,12 +182,12 @@ static bool recordInMatch(const App *app, const AppMatchRecord *record) {
 static void recordMatch(App *app, const RoomStart *roomStart) {
     AppMatchRecord *slot = NULL;
     for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
-        if (!app->match_records[index].active) slot = &app->match_records[index];
+        if (!app->matchRecords[index].active) slot = &app->matchRecords[index];
     }
     /* Safety net only: reuse a record whose match is already over. */
     for (int index = 0; index < APP_MATCH_RECORDS && !slot; index++) {
-        if (!recordInMatch(app, &app->match_records[index])) {
-            slot = &app->match_records[index];
+        if (!recordInMatch(app, &app->matchRecords[index])) {
+            slot = &app->matchRecords[index];
         }
     }
     if (!slot) return;
@@ -202,9 +202,9 @@ static void recordMatch(App *app, const RoomStart *roomStart) {
 static void onMatchEnded(void *context, const char *roomId) {
     App *app = (App *)context;
     /* The coordinator already cleared the match, so members can rejoin at once. */
-    rooms_match_ended(app, roomId);
+    roomsMatchEnded(app, roomId);
     for (int index = 0; index < APP_MATCH_RECORDS; index++) {
-        AppMatchRecord *record = &app->match_records[index];
+        AppMatchRecord *record = &app->matchRecords[index];
         /* A record still holding a seated user belongs to another match whose
          * room later reused the same code. */
         if (!record->active || strcmp(record->roomId, roomId) != 0 ||
@@ -217,21 +217,21 @@ static void onMatchEnded(void *context, const char *roomId) {
         for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
             UserId seated = record->users[seat];
             /* A leaving user still reads as connected here; announcing that
-             * would flash online/idle before the offline push app_user_leave
+             * would flash online/idle before the offline push appUserLeave
              * sends once the session is detached. */
-            if (seated && seated != app->leaving_user) social_presence(app, seated);
+            if (seated && seated != app->leavingUser) socialPresence(app, seated);
         }
     }
 }
 
 static Status onMatchStart(App *app, const RoomStart *roomStart, MatchId *outMatchId) {
     if (!app || !app->matches) return BUSY;
-    Status started = matchesStart(app->matches, roomStart, app_now_ms(), outMatchId);
+    Status started = matchesStart(app->matches, roomStart, appNowMs(), outMatchId);
     if (started != OK) return started;
     recordMatch(app, roomStart);
     /* Every in_match transition goes through here, room or queue alike. */
     for (int seat = 0; seat < ROOM_MAX_SEATS; seat++) {
-        if (!roomStart->players[seat].isBot) social_presence(app, roomStart->players[seat].userId);
+        if (!roomStart->players[seat].isBot) socialPresence(app, roomStart->players[seat].userId);
     }
     return OK;
 }
@@ -261,7 +261,7 @@ static void watchAdd(App *app, PresenceWatch *watch, UserId user) {
         if (watch->users[index] == user) return;
     }
     watch->users[watch->count] = user;
-    watch->before[watch->count] = social_presence_of(app, user);
+    watch->before[watch->count] = socialPresenceOf(app, user);
     watch->count++;
 }
 
@@ -270,14 +270,14 @@ static void watchAdd(App *app, PresenceWatch *watch, UserId user) {
 static void watchBegin(App *app, PresenceWatch *watch, UserId actor) {
     memset(watch, 0, sizeof *watch);
     watchAdd(app, watch, actor);
-    const Room *room = rooms_find_by_user(app->rooms, actor);
+    const Room *room = roomsFindByUser(app->rooms, actor);
     for (int seat = 0; room && seat < ROOM_MAX_SEATS; seat++) {
-        if (room->seats[seat].occupied && !room->seats[seat].is_bot) {
-            watchAdd(app, watch, room->seats[seat].user_id);
+        if (room->seats[seat].occupied && !room->seats[seat].isBot) {
+            watchAdd(app, watch, room->seats[seat].userId);
         }
     }
-    const Party *party = party_find_by_user(app->rooms, actor);
-    for (size_t member = 0; party && member < party->member_count; member++) {
+    const Party *party = partyFindByUser(app->rooms, actor);
+    for (size_t member = 0; party && member < party->memberCount; member++) {
         watchAdd(app, watch, party->members[member]);
     }
 }
@@ -292,8 +292,8 @@ static void watchInviter(App *app, PresenceWatch *watch, const Envelope *envelop
     const char *inviteId = json_object_get_string(idObj);
     for (int index = 0; index < MAX_INVITES; index++) {
         const Invite *invite = &app->rooms->invites[index];
-        if (invite->active && strcmp(invite->invite_id, inviteId) == 0) {
-            watchAdd(app, watch, invite->sender_id);
+        if (invite->active && strcmp(invite->inviteId, inviteId) == 0) {
+            watchAdd(app, watch, invite->senderId);
             return;
         }
     }
@@ -301,10 +301,10 @@ static void watchInviter(App *app, PresenceWatch *watch, const Envelope *envelop
 
 static void watchEnd(App *app, PresenceWatch *watch) {
     for (size_t index = 0; index < watch->count; index++) {
-        Presence now = social_presence_of(app, watch->users[index]);
+        Presence now = socialPresenceOf(app, watch->users[index]);
         /* onMatchStart already announced in_match; skip the duplicate. */
         if (now != watch->before[index] && now != PRESENCE_IN_MATCH) {
-            social_presence(app, watch->users[index]);
+            socialPresence(app, watch->users[index]);
         }
     }
 }
@@ -314,72 +314,72 @@ static Status dispatchWatched(App *app, ConnId conn, const Envelope *envelope, b
     PresenceWatch watch;
     UserId actor = 0;
     memset(&watch, 0, sizeof watch);
-    if (app->rooms && sessions_user(app, conn, &actor) == OK && actor != 0) {
+    if (app->rooms && sessionsUser(app, conn, &actor) == OK && actor != 0) {
         watchBegin(app, &watch, actor);
         if (strcmp(envelope->type, "INVITE_REPLY") == 0) watchInviter(app, &watch, envelope);
     }
-    Status result = roomCommand ? rooms_handle(app, conn, envelope)
-                                : queue_handle(app, conn, envelope);
+    Status result = roomCommand ? roomsHandle(app, conn, envelope)
+                                : queueHandle(app, conn, envelope);
     watchEnd(app, &watch);
     return result;
 }
 
-bool app_conn_check_rate_limit(AppConnSlot *slot, uint64_t nowMs) {
+bool appConnCheckRateLimit(AppConnSlot *slot, uint64_t nowMs) {
     if (!slot) return false;
-    if (nowMs > slot->rate_last_ms) {
-        uint64_t elapsed = nowMs - slot->rate_last_ms;
-        slot->rate_tokens += (double)elapsed * RATE_TOKENS_PER_MS;
-        if (slot->rate_tokens > RATE_BURST_TOKENS) {
-            slot->rate_tokens = RATE_BURST_TOKENS;
+    if (nowMs > slot->rateLastMs) {
+        uint64_t elapsed = nowMs - slot->rateLastMs;
+        slot->rateTokens += (double)elapsed * RATE_TOKENS_PER_MS;
+        if (slot->rateTokens > RATE_BURST_TOKENS) {
+            slot->rateTokens = RATE_BURST_TOKENS;
         }
-        slot->rate_last_ms = nowMs;
+        slot->rateLastMs = nowMs;
     }
-    if (slot->rate_tokens < 1.0) {
+    if (slot->rateTokens < 1.0) {
         return false;
     }
-    slot->rate_tokens -= 1.0;
+    slot->rateTokens -= 1.0;
     return true;
 }
 
-void app_user_leave(App *app, ConnId conn, UserId user) {
+void appUserLeave(App *app, ConnId conn, UserId user) {
     if (!app || user == 0) return;
     PresenceWatch watch;
     memset(&watch, 0, sizeof watch);
     /* Shutdown closes every slot; nobody is left to hear about it. */
     if (app->running) watchBegin(app, &watch, user);
-    uint64_t nowMs = app_now_ms();
+    uint64_t nowMs = appNowMs();
     /* Mark the seat offline while the session still exists; the room keeps
      * an in-match member so the seat can be reclaimed by RESUME or LOGIN.
      * NOT_FOUND just means the user is not in a match. */
-    app->leaving_user = user;
+    app->leavingUser = user;
     (void)matchesConnected(app->matches, user, false, nowMs);
-    app->leaving_user = 0;
-    /* Before rooms_disconnect dissolves the party: a dropped member takes
+    app->leavingUser = 0;
+    /* Before roomsDisconnect dissolves the party: a dropped member takes
      * the whole party entry out of the queue and the partner is told. */
-    queue_user_gone(app, user);
-    rooms_disconnect(app, user, nowMs);
-    sessions_disconnect(app, conn);
-    /* After sessions_disconnect, so the user now reads as offline. */
+    queueUserGone(app, user);
+    roomsDisconnect(app, user, nowMs);
+    sessionsDisconnect(app, conn);
+    /* After sessionsDisconnect, so the user now reads as offline. */
     watchEnd(app, &watch);
 }
 
-void app_close_slot(App *app, int slotIndex) {
+void appCloseSlot(App *app, int slotIndex) {
     if (slotIndex < 0 || slotIndex >= APP_MAX_CONNS) return;
     AppConnSlot *slot = &app->slots[slotIndex];
     if (!slot->active) return;
     ConnId conn = {(uint32_t)slotIndex, slot->generation};
     UserId userId = 0;
-    if (sessions_user(app, conn, &userId) == OK && userId != 0) {
-        app_user_leave(app, conn, userId);
+    if (sessionsUser(app, conn, &userId) == OK && userId != 0) {
+        appUserLeave(app, conn, userId);
     }
-    conn_close(&slot->conn);
+    connClose(&slot->conn);
     slot->active = false;
     slot->generation++;
-    slot->client_ip[0] = '\0';
-    slot->rate_last_ms = 0;
-    slot->rate_tokens = 0.0;
-    slot->last_request_id = 0;
-    slot->last_frame_ms = 0;
+    slot->clientIp[0] = '\0';
+    slot->rateLastMs = 0;
+    slot->rateTokens = 0.0;
+    slot->lastRequestId = 0;
+    slot->lastFrameMs = 0;
 }
 
 static Status onFrame(const Envelope *envelope, void *context) {
@@ -392,20 +392,20 @@ static Status onFrame(const Envelope *envelope, void *context) {
     }
 
     ConnId conn = {frameContext->slotIndex, frameContext->generation};
-    uint64_t nowMs = app_now_ms();
-    if (!app_conn_check_rate_limit(slot, nowMs)) {
-        app_reply_status(app, conn, envelope->id, RATE_LIMITED);
+    uint64_t nowMs = appNowMs();
+    if (!appConnCheckRateLimit(slot, nowMs)) {
+        appReplyStatus(app, conn, envelope->id, RATE_LIMITED);
         return OK;
     }
 
     /* Spec: ids strictly increase per connection; a replayed or reordered id
      * is answered without re-running the command. */
-    if (envelope->id <= slot->last_request_id) {
-        app_reply_status(app, conn, envelope->id, STALE_REQUEST);
+    if (envelope->id <= slot->lastRequestId) {
+        appReplyStatus(app, conn, envelope->id, STALE_REQUEST);
         return OK;
     }
-    slot->last_request_id = envelope->id;
-    slot->last_frame_ms = nowMs;
+    slot->lastRequestId = envelope->id;
+    slot->lastFrameMs = nowMs;
 
     /* Resolve due deadlines first so no command acts on an already expired turn. */
     matchesTick(app->matches, nowMs);
@@ -422,26 +422,26 @@ static Status onFrame(const Envelope *envelope, void *context) {
         json_object_object_add(payload, "serverTimeMs", json_object_new_int64(serverTimeMs));
 
         Envelope response = {1, envelope->id, "OK", payload};
-        Status status = conn_queue(&slot->conn, &response);
+        Status status = connQueue(&slot->conn, &response);
         json_object_put(payload);
         if (status != OK) return status;
-        return conn_flush(&slot->conn);
+        return connFlush(&slot->conn);
     }
 
     if (strcmp(envelope->type, "PING") == 0) {
         struct json_object *payload = json_object_new_object();
         Envelope response = {1, envelope->id, "OK", payload};
-        Status status = conn_queue(&slot->conn, &response);
+        Status status = connQueue(&slot->conn, &response);
         json_object_put(payload);
         if (status != OK) return status;
-        return conn_flush(&slot->conn);
+        return connFlush(&slot->conn);
     }
 
     if (strcmp(envelope->type, "REGISTER") == 0 ||
         strcmp(envelope->type, "LOGIN") == 0 ||
         strcmp(envelope->type, "RESUME") == 0 ||
         strcmp(envelope->type, "LOGOUT") == 0) {
-        return accounts_handle(app, conn, envelope);
+        return accountsHandle(app, conn, envelope);
     }
 
     if (isRoomCommand(envelope->type)) {
@@ -453,58 +453,58 @@ static Status onFrame(const Envelope *envelope, void *context) {
     }
 
     if (isSocialCommand(envelope->type)) {
-        return social_handle(app, conn, envelope);
+        return socialHandle(app, conn, envelope);
     }
 
     if (isMatchCommand(envelope->type)) {
         UserId userId = 0;
-        if (sessions_user(app, conn, &userId) != OK) {
-            app_reply_status(app, conn, envelope->id, UNAUTHENTICATED);
+        if (sessionsUser(app, conn, &userId) != OK) {
+            appReplyStatus(app, conn, envelope->id, UNAUTHENTICATED);
             return OK;
         }
         /* GAME_STATE pushes go out inside matchesHandle; the reply follows them. */
         Status result = matchesHandle(app->matches, userId, envelope, nowMs);
-        app_reply_status(app, conn, envelope->id, result);
+        appReplyStatus(app, conn, envelope->id, result);
         return OK;
     }
 
     /* Unknown opcodes, including server-only events such as TIMEOUT or
      * UNO_PENALTY, are rejected but keep the connection open. */
-    app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+    appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
     return OK;
 }
 
-Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath, int authLimit) {
+Status appInit(App *app, const char *bindIp, uint16_t port, const char *dbPath, int authLimit) {
     if (!app) return BAD_REQUEST;
     memset(app, 0, sizeof(*app));
-    app->listen_fd = -1;
-    app->auth_pipe_read = -1;
-    app->auth_pipe_write = -1;
+    app->listenFd = -1;
+    app->authPipeRead = -1;
+    app->authPipeWrite = -1;
     app->running = false;
-    app->auth_limit = authLimit;
-    app->heartbeat_ms = APP_DEFAULT_HEARTBEAT_MS;
+    app->authLimit = authLimit;
+    app->heartbeatMs = APP_DEFAULT_HEARTBEAT_MS;
 
     if (bindIp) {
-        strncpy(app->bind_ip, bindIp, sizeof(app->bind_ip) - 1);
+        strncpy(app->bindIp, bindIp, sizeof(app->bindIp) - 1);
     } else {
-        strcpy(app->bind_ip, "0.0.0.0");
+        strcpy(app->bindIp, "0.0.0.0");
     }
 
     if (dbPath) {
-        strncpy(app->db_path, dbPath, sizeof(app->db_path) - 1);
+        strncpy(app->dbPath, dbPath, sizeof(app->dbPath) - 1);
     } else {
-        strcpy(app->db_path, "uno.db");
+        strcpy(app->dbPath, "uno.db");
     }
 
-    sessions_init(app);
-    rooms_init(&app->rooms, app, onMatchStart);
-    Status queueStatus = queue_init(&app->queue);
+    sessionsInit(app);
+    roomsInit(&app->rooms, app, onMatchStart);
+    Status queueStatus = queueInit(&app->queue);
     if (queueStatus != OK) return queueStatus;
 
     /* The auth worker thread writes one byte per finished task so poll() wakes
      * the main thread; both ends are non-blocking so neither side can stall.
      * FIXME: pipe() failure leaves no auth worker and fcntl results are ignored.
-     * Return BUSY from app_init so startup fails instead of hanging logins. */
+     * Return BUSY from appInit so startup fails instead of hanging logins. */
     int authPipe[2];
     if (pipe(authPipe) == 0) {
         int flags = fcntl(authPipe[0], F_GETFL, 0);
@@ -512,10 +512,10 @@ Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath,
         flags = fcntl(authPipe[1], F_GETFL, 0);
         if (flags >= 0) fcntl(authPipe[1], F_SETFL, flags | O_NONBLOCK);
 
-        app->auth_pipe_read = authPipe[0];
-        app->auth_pipe_write = authPipe[1];
+        app->authPipeRead = authPipe[0];
+        app->authPipeWrite = authPipe[1];
 
-        auth_worker_init(&app->auth_worker, app->auth_pipe_write);
+        authWorkerInit(&app->authWorker, app->authPipeWrite);
     }
 
     /* A peer that resets mid-send must yield EPIPE, not kill the server. */
@@ -548,7 +548,7 @@ Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath,
     memset(&serverAddress, 0, sizeof(serverAddress));
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(port);
-    if (inet_pton(AF_INET, app->bind_ip, &serverAddress.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, app->bindIp, &serverAddress.sin_addr) <= 0) {
         close(listenSocket);
         return BAD_REQUEST;
     }
@@ -558,69 +558,69 @@ Status app_init(App *app, const char *bindIp, uint16_t port, const char *dbPath,
         return BUSY;
     }
 
-    // Step 3: start listening; accept() happens in app_run's poll loop.
+    // Step 3: start listening; accept() happens in appRun's poll loop.
     if (listen(listenSocket, LISTEN_BACKLOG) < 0) {
         close(listenSocket);
         return BUSY;
     }
 
     /* Port 0 asks the kernel for an ephemeral port; read it back (ntohs converts
-     * from network byte order) so app_run can print "PORT n" for tests. */
+     * from network byte order) so appRun can print "PORT n" for tests. */
     struct sockaddr_in boundAddress;
     socklen_t addressLength = sizeof(boundAddress);
     if (getsockname(listenSocket, (struct sockaddr *)&boundAddress, &addressLength) == 0) {
-        app->bound_port = ntohs(boundAddress.sin_port);
+        app->boundPort = ntohs(boundAddress.sin_port);
     } else {
-        app->bound_port = port;
+        app->boundPort = port;
     }
 
-    app->listen_fd = listenSocket;
+    app->listenFd = listenSocket;
     app->running = true;
     return OK;
 }
 
-void app_stop(App *app) {
+void appStop(App *app) {
     if (app) app->running = false;
 }
 
-void app_cleanup(App *app) {
+void appCleanup(App *app) {
     if (!app) return;
-    /* Read by app_close_slot: no presence pushes while everything closes. */
+    /* Read by appCloseSlot: no presence pushes while everything closes. */
     app->running = false;
     for (int i = 0; i < APP_MAX_CONNS; i++) {
         if (app->slots[i].active) {
-            app_close_slot(app, i);
+            appCloseSlot(app, i);
         }
     }
-    if (app->listen_fd >= 0) {
-        close(app->listen_fd);
-        app->listen_fd = -1;
+    if (app->listenFd >= 0) {
+        close(app->listenFd);
+        app->listenFd = -1;
     }
-    if (app->auth_worker) {
-        auth_worker_destroy(app->auth_worker);
-        app->auth_worker = NULL;
+    if (app->authWorker) {
+        authWorkerDestroy(app->authWorker);
+        app->authWorker = NULL;
     }
-    if (app->auth_pipe_read >= 0) {
-        close(app->auth_pipe_read);
-        app->auth_pipe_read = -1;
+    if (app->authPipeRead >= 0) {
+        close(app->authPipeRead);
+        app->authPipeRead = -1;
     }
-    if (app->auth_pipe_write >= 0) {
-        close(app->auth_pipe_write);
-        app->auth_pipe_write = -1;
+    if (app->authPipeWrite >= 0) {
+        close(app->authPipeWrite);
+        app->authPipeWrite = -1;
     }
     /* Every slot is closed above, so no disconnect can reach the queue any more. */
-    queue_destroy(app->queue);
+    queueDestroy(app->queue);
     app->queue = NULL;
     if (app->rooms) {
-        rooms_destroy(app->rooms);
+        roomsDestroy(app->rooms);
         app->rooms = NULL;
     }
-    sessions_cleanup(app);
+    sessionsCleanup(app);
     /* The coordinator borrows the store, so it must go first. */
     matchesDestroy(app->matches);
     app->matches = NULL;
     if (app->store) {
-        store_close(app->store);
+        storeClose(app->store);
         app->store = NULL;
     }
     app->running = false;
@@ -634,7 +634,7 @@ Status appRejectConnection(int connectionSocket) {
     Envelope fullEnvelope = {1, 0, "ERROR", payload};
     uint8_t fullFrame[SERVER_FULL_FRAME_SIZE];
     size_t frameLength = 0;
-    Status status = frame_encode(&fullEnvelope, fullFrame, sizeof(fullFrame), &frameLength);
+    Status status = frameEncode(&fullEnvelope, fullFrame, sizeof(fullFrame), &frameLength);
     json_object_put(payload);
 
     if (status == OK) {
@@ -665,8 +665,8 @@ static void announceShutdown(App *app) {
         UserId userId = 0;
         if (!slot->active) continue;
         ConnId conn = {(uint32_t)index, slot->generation};
-        if (sessions_user(app, conn, &userId) == OK && userId != 0) {
-            (void)app_push(app, userId, "SERVER_SHUTDOWN", payload);
+        if (sessionsUser(app, conn, &userId) == OK && userId != 0) {
+            (void)appPush(app, userId, "SERVER_SHUTDOWN", payload);
         }
     }
     json_object_put(payload);
@@ -674,15 +674,15 @@ static void announceShutdown(App *app) {
 
 /* Close connections with no accepted frame within the heartbeat window. */
 static void sweepIdleConnections(App *app, uint64_t nowMs) {
-    uint64_t limitMs = (uint64_t)app->heartbeat_ms;
+    uint64_t limitMs = (uint64_t)app->heartbeatMs;
     for (int index = 0; index < APP_MAX_CONNS; index++) {
         AppConnSlot *slot = &app->slots[index];
-        if (!slot->active || nowMs < slot->last_frame_ms) continue;
-        if (nowMs - slot->last_frame_ms >= limitMs) app_close_slot(app, index);
+        if (!slot->active || nowMs < slot->lastFrameMs) continue;
+        if (nowMs - slot->lastFrameMs >= limitMs) appCloseSlot(app, index);
     }
 }
 
-int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
+int appRun(const char *bindIp, uint16_t port, const char *dbPath, int authLimit,
             int heartbeatMs) {
     App *app = calloc(1, sizeof(App));
     if (!app) {
@@ -690,19 +690,19 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
         return 1;
     }
 
-    Status status = app_init(app, bindIp, port, dbPath, authLimit);
+    Status status = appInit(app, bindIp, port, dbPath, authLimit);
     if (status != OK) {
         fprintf(stderr, "Failed to initialize server (error %d)\n", status);
         free(app);
         return 1;
     }
-    if (heartbeatMs > 0) app->heartbeat_ms = heartbeatMs;
+    if (heartbeatMs > 0) app->heartbeatMs = heartbeatMs;
 
     if (!app->store) {
-        status = store_open(&app->store, app->db_path);
+        status = storeOpen(&app->store, app->dbPath);
         if (status != OK) {
-            fprintf(stderr, "Failed to open database at %s (error %d)\n", app->db_path, status);
-            app_cleanup(app);
+            fprintf(stderr, "Failed to open database at %s (error %d)\n", app->dbPath, status);
+            appCleanup(app);
             free(app);
             return 1;
         }
@@ -711,12 +711,12 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
     app->matches = matchesCreate(app->store, onMatchPush, onMatchEnded, app);
     if (!app->matches) {
         fprintf(stderr, "Failed to create match coordinator\n");
-        app_cleanup(app);
+        appCleanup(app);
         free(app);
         return 1;
     }
 
-    printf("PORT %u\n", app->bound_port);
+    printf("PORT %u\n", app->boundPort);
     fflush(stdout);
 
     struct pollfd pollFds[2 + APP_MAX_CONNS];
@@ -724,17 +724,17 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
 
     while (app->running && !gStopRequested) {
         /* Turn deadlines and bot moves advance even when no socket is readable. */
-        uint64_t tickMs = app_now_ms();
+        uint64_t tickMs = appNowMs();
         matchesTick(app->matches, tickMs);
         /* Retries failed match starts and drops logged-out users from the queue. */
-        queue_tick(app, tickMs);
+        queueTick(app, tickMs);
 
-        pollFds[0].fd = app->listen_fd;
+        pollFds[0].fd = app->listenFd;
         pollFds[0].events = POLLIN;
         pollFds[0].revents = 0;
 
-        pollFds[1].fd = app->auth_pipe_read;
-        pollFds[1].events = (app->auth_pipe_read >= 0) ? POLLIN : 0;
+        pollFds[1].fd = app->authPipeRead;
+        pollFds[1].events = (app->authPipeRead >= 0) ? POLLIN : 0;
         pollFds[1].revents = 0;
 
         int pollCount = 2;
@@ -743,7 +743,7 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
             if (app->slots[i].active && app->slots[i].conn.fd >= 0) {
                 pollFds[pollCount].fd = app->slots[i].conn.fd;
                 pollFds[pollCount].events = POLLIN;
-                if (app->slots[i].conn.out_len > app->slots[i].conn.out_pos) {
+                if (app->slots[i].conn.outLen > app->slots[i].conn.outPos) {
                     pollFds[pollCount].events |= POLLOUT;
                 }
                 pollFds[pollCount].revents = 0;
@@ -762,7 +762,7 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
 
         /* Check auth worker pipe for completed auth tasks */
         if (pollFds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
-            auth_drain(app);
+            authDrain(app);
         }
 
         // Step 4: accept every pending connection on the listening socket.
@@ -770,7 +770,7 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
             while (1) {
                 struct sockaddr_in clientAddress;
                 socklen_t clientAddressLength = sizeof(clientAddress);
-                int connectionSocket = accept(app->listen_fd, (struct sockaddr *)&clientAddress,
+                int connectionSocket = accept(app->listenFd, (struct sockaddr *)&clientAddress,
                                               &clientAddressLength);
                 if (connectionSocket < 0) {
                     if (errno == EINTR) continue;
@@ -799,14 +799,14 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
                 slot->active = true;
                 slot->generation++;
                 /* Kept as text for the per-IP auth limiter and logs. */
-                inet_ntop(AF_INET, &clientAddress.sin_addr, slot->client_ip,
-                          sizeof(slot->client_ip));
-                slot->rate_last_ms = app_now_ms();
-                slot->rate_tokens = RATE_BURST_TOKENS;
-                slot->last_request_id = 0;
+                inet_ntop(AF_INET, &clientAddress.sin_addr, slot->clientIp,
+                          sizeof(slot->clientIp));
+                slot->rateLastMs = appNowMs();
+                slot->rateTokens = RATE_BURST_TOKENS;
+                slot->lastRequestId = 0;
                 /* A fresh socket gets one full heartbeat window to send its first frame. */
-                slot->last_frame_ms = slot->rate_last_ms;
-                conn_init(&slot->conn, connectionSocket, (uint32_t)freeSlot, slot->generation);
+                slot->lastFrameMs = slot->rateLastMs;
+                connInit(&slot->conn, connectionSocket, (uint32_t)freeSlot, slot->generation);
             }
         }
 
@@ -818,43 +818,43 @@ int app_run(const char *bindIp, uint16_t port, const char *dbPath, int authLimit
 
             // Step 5: send queued output first, then recv() and dispatch new frames.
             if (pollFds[k].revents & POLLOUT) {
-                Status ioStatus = conn_flush(&slot->conn);
+                Status ioStatus = connFlush(&slot->conn);
                 if (ioStatus != OK || slot->conn.closing) {
-                    app_close_slot(app, slotIndex);
+                    appCloseSlot(app, slotIndex);
                     continue;
                 }
             }
 
             if (pollFds[k].revents & POLLIN) {
                 FrameContext context = {app, (uint32_t)slotIndex, slot->generation};
-                Status ioStatus = conn_read(&slot->conn, onFrame, &context);
+                Status ioStatus = connRead(&slot->conn, onFrame, &context);
                 if (ioStatus != OK || slot->conn.closing) {
-                    app_close_slot(app, slotIndex);
+                    appCloseSlot(app, slotIndex);
                     continue;
                 }
             }
 
             if (pollFds[k].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                app_close_slot(app, slotIndex);
+                appCloseSlot(app, slotIndex);
                 continue;
             }
         }
 
         /* Drain auth after handling any new client requests */
-        auth_drain(app);
+        authDrain(app);
 
         /* Teardown slow peers immediately */
         for (int i = 0; i < APP_MAX_CONNS; i++) {
             if (app->slots[i].active && app->slots[i].conn.closing) {
-                app_close_slot(app, i);
+                appCloseSlot(app, i);
             }
         }
 
-        sweepIdleConnections(app, app_now_ms());
+        sweepIdleConnections(app, appNowMs());
     }
 
     announceShutdown(app);
-    app_cleanup(app);
+    appCleanup(app);
     free(app);
     return 0;
 }

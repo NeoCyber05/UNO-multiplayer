@@ -14,23 +14,23 @@ static BridgeDisconnectCallback gDisconnectCallback = NULL;
 static void *gDisconnectContext = NULL;
 static bool gSchemeRegistered = false;
 
-void bridge_set_assets_dir(const char *assetsDir) {
+void bridgeSetAssetsDir(const char *assetsDir) {
     if (assetsDir && *assetsDir) {
         strncpy(gAssetsDir, assetsDir, sizeof(gAssetsDir) - 1);
         gAssetsDir[sizeof(gAssetsDir) - 1] = '\0';
     }
 }
 
-const char *bridge_get_assets_dir(void) {
+const char *bridgeGetAssetsDir(void) {
     return gAssetsDir;
 }
 
-void bridge_set_done_callback(BridgeDoneCallback callback, void *context) {
+void bridgeSetDoneCallback(BridgeDoneCallback callback, void *context) {
     gDoneCallback = callback;
     gDoneContext = context;
 }
 
-void bridge_set_disconnect_callback(BridgeDisconnectCallback callback, void *context) {
+void bridgeSetDisconnectCallback(BridgeDisconnectCallback callback, void *context) {
     gDisconnectCallback = callback;
     gDisconnectContext = context;
 }
@@ -85,7 +85,7 @@ static bool isWhitelistedType(const char *type) {
     return false;
 }
 
-Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText, size_t length,
+Status bridgeDispatch(NetSession *session, Client *client, const char *jsonText, size_t length,
                        int32_t *outJsId)
 {
     if (outJsId) *outJsId = 0;
@@ -160,9 +160,9 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText
 
     /* The server requires strictly increasing ids per connection, which JS
      * ids cannot guarantee across reconnects, so each request gets a fresh
-     * wire id and ns_incoming maps the response back to the JS id. */
+     * wire id and nsIncoming maps the response back to the JS id. */
     int32_t wireId = 0;
-    Status status = ns_outgoing(session, id, type, &wireId);
+    Status status = nsOutgoing(session, id, type, &wireId);
     if (status != OK) {
         json_object_put(root);
         return status;
@@ -175,7 +175,7 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText
     envelope.payload = payloadJson;
 
     if (client != NULL) {
-        status = client_send(client, &envelope);
+        status = clientSend(client, &envelope);
     }
     json_object_put(root);
 
@@ -187,7 +187,7 @@ Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText
     return status;
 }
 
-char *bridge_format_emit_script(const Envelope *envelope) {
+char *bridgeFormatEmitScript(const Envelope *envelope) {
     if (!envelope) return NULL;
 
     struct json_object *root = json_object_new_object();
@@ -225,10 +225,10 @@ char *bridge_format_emit_script(const Envelope *envelope) {
     return script;
 }
 
-void bridge_emit(WebKitWebView *webView, const Envelope *envelope) {
+void bridgeEmit(WebKitWebView *webView, const Envelope *envelope) {
     if (!webView || !envelope) return;
 
-    gchar *script = bridge_format_emit_script(envelope);
+    gchar *script = bridgeFormatEmitScript(envelope);
     if (!script) return;
 
     webkit_web_view_evaluate_javascript(webView, script, -1, NULL, NULL, NULL, NULL, NULL);
@@ -272,7 +272,7 @@ static Status urlDecode(const char *source, char *destination, size_t destinatio
     return OK;
 }
 
-Status bridge_resolve_path(const char *assetsDir, const char *uri, char *outPath,
+Status bridgeResolvePath(const char *assetsDir, const char *uri, char *outPath,
                            size_t maxLength) {
     if (!assetsDir || !uri || !outPath || maxLength == 0) return BAD_REQUEST;
 
@@ -319,7 +319,7 @@ Status bridge_resolve_path(const char *assetsDir, const char *uri, char *outPath
     return OK;
 }
 
-const char *bridge_mime_type(const char *path) {
+const char *bridgeMimeType(const char *path) {
     if (!path) return "application/octet-stream";
     const char *dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
@@ -341,11 +341,11 @@ const char *bridge_mime_type(const char *path) {
 
 static void onUriSchemeRequest(WebKitURISchemeRequest *request, gpointer userData) {
     const char *assetsDir = (const char *)userData;
-    if (!assetsDir) assetsDir = bridge_get_assets_dir();
+    if (!assetsDir) assetsDir = bridgeGetAssetsDir();
 
     const char *uri = webkit_uri_scheme_request_get_uri(request);
     char filePath[512];
-    Status status = bridge_resolve_path(assetsDir, uri, filePath, sizeof(filePath));
+    Status status = bridgeResolvePath(assetsDir, uri, filePath, sizeof(filePath));
     if (status != OK) {
         GError *error = g_error_new_literal(G_FILE_ERROR, G_FILE_ERROR_NOENT,
                                             "Invalid URI or access denied");
@@ -372,20 +372,20 @@ static void onUriSchemeRequest(WebKitURISchemeRequest *request, gpointer userDat
     gint64 size = info ? g_file_info_get_size(info) : -1;
     if (info) g_object_unref(info);
 
-    const char *mimeType = bridge_mime_type(filePath);
+    const char *mimeType = bridgeMimeType(filePath);
     webkit_uri_scheme_request_finish(request, G_INPUT_STREAM(stream), size, mimeType);
 
     g_object_unref(stream);
     g_object_unref(file);
 }
 
-void bridge_register_uri_scheme(WebKitWebContext *context, const char *assetsDir) {
+void bridgeRegisterUriScheme(WebKitWebContext *context, const char *assetsDir) {
     (void)assetsDir;
     if (gSchemeRegistered) return;
     if (!context) context = webkit_web_context_get_default();
     webkit_web_context_register_uri_scheme(context, "uno",
                                            onUriSchemeRequest,
-                                           (gpointer)bridge_get_assets_dir(), NULL);
+                                           (gpointer)bridgeGetAssetsDir(), NULL);
     gSchemeRegistered = true;
 }
 
@@ -410,7 +410,7 @@ static void emitRequestError(WebKitWebView *webView, int32_t jsId, const char *c
     json_object_object_add(payload, "code", json_object_new_string(code));
     json_object_object_add(payload, "message", json_object_new_string(message));
     Envelope error = {1, jsId, "ERROR", payload};
-    bridge_emit(webView, &error);
+    bridgeEmit(webView, &error);
     json_object_put(payload);
 }
 
@@ -429,7 +429,7 @@ static void onScriptMessageUno(WebKitUserContentManager *manager,
 
     int32_t jsId = 0;
     Client *client = *state->clientSlot;
-    Status status = bridge_dispatch(state->session, client, jsonText, strlen(jsonText), &jsId);
+    Status status = bridgeDispatch(state->session, client, jsonText, strlen(jsonText), &jsId);
     g_free(jsonText);
 
     /* Without a positive id JS has nothing to match an answer against. */
@@ -438,20 +438,20 @@ static void onScriptMessageUno(WebKitUserContentManager *manager,
     /* Not connected (or still resuming, or the send just broke the link) is
      * the reconnect case: the request is dropped, never queued, so it cannot
      * be replayed later. */
-    const char *code = status_code(status);
+    const char *code = statusCode(status);
     const char *message = REJECTED_MESSAGE;
-    if (ns_state(state->session) != NS_CONNECTED) {
+    if (nsState(state->session) != NS_CONNECTED) {
         code = "DISCONNECTED";
         message = DISCONNECTED_MESSAGE;
     }
     emitRequestError(state->webView, jsId, code, message);
 }
 
-Status bridge_init(WebKitWebView *webView, NetSession *session, Client **clientSlot) {
+Status bridgeInit(WebKitWebView *webView, NetSession *session, Client **clientSlot) {
     if (!webView || !session || !clientSlot) return BAD_REQUEST;
 
     WebKitWebContext *context = webkit_web_view_get_context(webView);
-    bridge_register_uri_scheme(context, bridge_get_assets_dir());
+    bridgeRegisterUriScheme(context, bridgeGetAssetsDir());
 
     WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager(webView);
     BridgeState *state = g_new0(BridgeState, 1);

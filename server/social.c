@@ -12,7 +12,7 @@
 
 enum {
     ID_TEXT_SIZE = 32, /* fits the decimal form of any 64-bit id */
-    TAG_TEXT_SIZE = 32, /* buffer size accounts_format_tag writes */
+    TAG_TEXT_SIZE = 32, /* buffer size accountsFormatTag writes */
     MS_PER_SECOND = 1000,
     DECIMAL_BASE = 10
 };
@@ -51,7 +51,7 @@ static bool parseIdText(const char *text, UserId *outUserId) {
     return true;
 }
 
-bool social_parse_tag(const char *tag, UserId *outUserId) {
+bool socialParseTag(const char *tag, UserId *outUserId) {
     if (!tag || !outUserId) return false;
     size_t prefixLength = sizeof TAG_PREFIX - 1;
     if (strncmp(tag, TAG_PREFIX, prefixLength) != 0) return false;
@@ -86,19 +86,19 @@ static const char *stringField(const Envelope *envelope, const char *key) {
  * Presence
  * ------------------------------------------------------------------------- */
 
-Presence social_presence_of(App *app, UserId user) {
+Presence socialPresenceOf(App *app, UserId user) {
     if (!app || user == 0) return PRESENCE_OFFLINE;
     ConnId conn;
-    if (sessions_find_conn(app, user, &conn) != OK) return PRESENCE_OFFLINE;
+    if (sessionsFindConn(app, user, &conn) != OK) return PRESENCE_OFFLINE;
     if (matchesContains(app->matches, user)) return PRESENCE_IN_MATCH;
-    if (rooms_find_by_user(app->rooms, user) || party_find_by_user(app->rooms, user) ||
-        queue_contains(app->queue, user)) {
+    if (roomsFindByUser(app->rooms, user) || partyFindByUser(app->rooms, user) ||
+        queueContains(app->queue, user)) {
         return PRESENCE_ONLINE;
     }
     return PRESENCE_IDLE;
 }
 
-const char *social_presence_key(Presence presence) {
+const char *socialPresenceKey(Presence presence) {
     size_t keyCount = sizeof PRESENCE_KEYS / sizeof PRESENCE_KEYS[0];
     if ((size_t)presence >= keyCount) return PRESENCE_KEYS[PRESENCE_OFFLINE];
     return PRESENCE_KEYS[presence];
@@ -117,7 +117,7 @@ static json_object *userIdJson(UserId user) {
 
 static json_object *tagJson(UserId user) {
     char tag[TAG_TEXT_SIZE];
-    accounts_format_tag(user, tag);
+    accountsFormatTag(user, tag);
     return json_object_new_string(tag);
 }
 
@@ -138,10 +138,10 @@ static json_object *friendRowJson(App *app, const FriendRow *row) {
     bool incoming = row->link == FRIEND_PENDING_IN;
     /* Spec: presence is shown to friends only; a stranger who merely sent or
      * received a request cannot watch the other account come and go. */
-    Presence presence = pending ? PRESENCE_OFFLINE : social_presence_of(app, row->userId);
+    Presence presence = pending ? PRESENCE_OFFLINE : socialPresenceOf(app, row->userId);
     addIdentity(object, row->userId, row->name, row->avatar, row->elo);
     json_object_object_add(object, "presence",
-                           json_object_new_string(social_presence_key(presence)));
+                           json_object_new_string(socialPresenceKey(presence)));
     json_object_object_add(object, "online",
                            json_object_new_boolean(presence != PRESENCE_OFFLINE));
     json_object_object_add(object, "pending", json_object_new_boolean(pending));
@@ -163,7 +163,7 @@ static json_object *friendsArrayJson(App *app, const FriendRow rows[], size_t co
 static Status friendStateJson(App *app, UserId user, json_object **outJson) {
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
-    Status status = store_friend_list(app->store, user, rows, &count);
+    Status status = storeFriendList(app->store, user, rows, &count);
     if (status != OK) return status;
     *outJson = json_object_new_object();
     json_object_object_add(*outJson, "friends", friendsArrayJson(app, rows, count));
@@ -174,14 +174,14 @@ static json_object *leaderboardEntryJson(const LeaderboardEntry *entry) {
     json_object *object = json_object_new_object();
     addIdentity(object, entry->userId, entry->name, entry->avatar, entry->elo);
     json_object_object_add(object, "rank",
-                           json_object_new_string(rating_rank_key(rating_rank(entry->elo))));
+                           json_object_new_string(ratingRankKey(ratingRank(entry->elo))));
     return object;
 }
 
 static Status leaderboardJson(App *app, json_object **outJson) {
     LeaderboardEntry entries[STORE_LEADERBOARD_MAX];
     size_t count = 0;
-    Status status = store_leaderboard(app->store, entries, &count);
+    Status status = storeLeaderboard(app->store, entries, &count);
     if (status != OK) return status;
     *outJson = json_object_new_array();
     for (size_t index = 0; index < count; index++) {
@@ -252,7 +252,7 @@ static json_object *profileJson(const Profile *profile) {
     json_object *object = json_object_new_object();
     addIdentity(object, profile->userId, profile->name, profile->avatar, profile->elo);
     json_object_object_add(object, "rank",
-                           json_object_new_string(rating_rank_key(rating_rank(profile->elo))));
+                           json_object_new_string(ratingRankKey(ratingRank(profile->elo))));
     json_object_object_add(object, "stats", statsJson(&profile->stats));
     json_object_object_add(object, "badges", badgesJson(profile->badges));
     json_object_object_add(object, "modes", modesJson(profile));
@@ -266,24 +266,24 @@ static json_object *profileJson(const Profile *profile) {
 
 static void pushFriendState(App *app, UserId user) {
     /* Skip the store read for someone who cannot receive the push anyway. */
-    if (social_presence_of(app, user) == PRESENCE_OFFLINE) return;
+    if (socialPresenceOf(app, user) == PRESENCE_OFFLINE) return;
     json_object *state = NULL;
     /* A failed read only costs this snapshot; the next change sends another. */
     if (friendStateJson(app, user, &state) != OK) return;
-    (void)app_push(app, user, "FRIEND_STATE", state);
+    (void)appPush(app, user, "FRIEND_STATE", state);
     json_object_put(state);
 }
 
-void social_presence(App *app, UserId user) {
+void socialPresence(App *app, UserId user) {
     if (!app || !app->store || user == 0) return;
     FriendRow rows[STORE_FRIEND_MAX];
     size_t count = 0;
-    if (store_friend_list(app->store, user, rows, &count) != OK) return;
+    if (storeFriendList(app->store, user, rows, &count) != OK) return;
 
     json_object *own = json_object_new_object();
     json_object_object_add(own, "friends", friendsArrayJson(app, rows, count));
     /* NOT_FOUND just means u itself is offline; the friends still hear about it. */
-    (void)app_push(app, user, "FRIEND_STATE", own);
+    (void)appPush(app, user, "FRIEND_STATE", own);
     json_object_put(own);
 
     /* Each friend gets their own whole list: FRIEND_STATE replaces it client-side. */
@@ -298,10 +298,10 @@ void social_presence(App *app, UserId user) {
 
 static void replyBuilt(App *app, ConnId conn, int32_t id, Status status, json_object *payload) {
     if (status != OK) {
-        app_reply_status(app, conn, id, status);
+        appReplyStatus(app, conn, id, status);
         return;
     }
-    app_reply_ok(app, conn, id, payload);
+    appReplyOk(app, conn, id, payload);
     json_object_put(payload);
 }
 
@@ -313,13 +313,13 @@ static void handleFriendList(App *app, ConnId conn, const Envelope *envelope, Us
 
 static void handleFriendRequest(App *app, ConnId conn, const Envelope *envelope, UserId me) {
     UserId target = 0;
-    if (!social_parse_tag(stringField(envelope, "tag"), &target) || target == me) {
-        app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+    if (!socialParseTag(stringField(envelope, "tag"), &target) || target == me) {
+        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
         return;
     }
     /* NOT_FOUND (no such account) and INVALID_ACTION (already linked) come from the store. */
-    Status status = store_friend_request(app->store, me, target);
-    app_reply_status(app, conn, envelope->id, status);
+    Status status = storeFriendRequest(app->store, me, target);
+    appReplyStatus(app, conn, envelope->id, status);
     if (status != OK) return;
     pushFriendState(app, me);
     pushFriendState(app, target);
@@ -334,12 +334,12 @@ static void handleFriendReply(App *app, ConnId conn, const Envelope *envelope, U
         !json_object_object_get_ex(envelope->payload, "accept", &acceptObj) ||
         !json_object_is_type(acceptObj, json_type_boolean) ||
         !parseUserIdValue(requestObj, &requester)) {
-        app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
         return;
     }
-    Status status = store_friend_reply(app->store, me, requester,
+    Status status = storeFriendReply(app->store, me, requester,
                                        json_object_get_boolean(acceptObj));
-    app_reply_status(app, conn, envelope->id, status);
+    appReplyStatus(app, conn, envelope->id, status);
     if (status != OK) return;
     pushFriendState(app, me);
     pushFriendState(app, requester);
@@ -347,7 +347,7 @@ static void handleFriendReply(App *app, ConnId conn, const Envelope *envelope, U
 
 static Status loadProfileJson(App *app, UserId user, json_object **outJson) {
     Profile profile;
-    Status status = store_profile_get(app->store, user, &profile);
+    Status status = storeProfileGet(app->store, user, &profile);
     if (status != OK) return status;
     *outJson = profileJson(&profile);
     return OK;
@@ -356,7 +356,7 @@ static Status loadProfileJson(App *app, UserId user, json_object **outJson) {
 static void replyProfile(App *app, ConnId conn, int32_t id, json_object *profile) {
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "profile", profile);
-    app_reply_ok(app, conn, id, payload);
+    appReplyOk(app, conn, id, payload);
     json_object_put(payload);
 }
 
@@ -365,13 +365,13 @@ static void handleProfileGet(App *app, ConnId conn, const Envelope *envelope, Us
     json_object *userObj = NULL;
     if (envelope->payload && json_object_object_get_ex(envelope->payload, "userId", &userObj) &&
         !parseUserIdValue(userObj, &target)) {
-        app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
         return;
     }
     json_object *profile = NULL;
     Status status = loadProfileJson(app, target, &profile);
     if (status != OK) {
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
     replyProfile(app, conn, envelope->id, profile);
@@ -382,40 +382,40 @@ static void handleProfileUpdate(App *app, ConnId conn, const Envelope *envelope,
     if (envelope->payload && json_object_object_get_ex(envelope->payload, "userId", &userObj)) {
         UserId target = 0;
         if (!parseUserIdValue(userObj, &target)) {
-            app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+            appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
             return;
         }
         /* The account to edit always comes from the session, never the payload. */
         if (target != me) {
-            app_reply_status(app, conn, envelope->id, FORBIDDEN);
+            appReplyStatus(app, conn, envelope->id, FORBIDDEN);
             return;
         }
     }
     const char *name = stringField(envelope, "name");
     const char *avatar = stringField(envelope, "avatar");
-    if (!accounts_validate_name(name) || !accounts_validate_avatar(avatar)) {
-        app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+    if (!accountsValidateName(name) || !accountsValidateAvatar(avatar)) {
+        appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
         return;
     }
-    Status status = store_profile_update(app->store, me, name, avatar);
+    Status status = storeProfileUpdate(app->store, me, name, avatar);
     if (status != OK) {
         /* Nothing changed, so nobody is told anything. */
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
 
     /* The rename is committed: rooms and friends must see it even if the
      * profile read for the reply fails below. */
-    rooms_update_identity(app, me, name, avatar);
-    social_presence(app, me);
+    roomsUpdateIdentity(app, me, name, avatar);
+    socialPresence(app, me);
 
     json_object *profile = NULL;
     status = loadProfileJson(app, me, &profile);
     if (status != OK) {
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
-    (void)app_push(app, me, "PROFILE_STATE", profile);
+    (void)appPush(app, me, "PROFILE_STATE", profile);
     replyProfile(app, conn, envelope->id, profile);
 }
 
@@ -423,12 +423,12 @@ static void handleLeaderboard(App *app, ConnId conn, const Envelope *envelope) {
     json_object *entries = NULL;
     Status status = leaderboardJson(app, &entries);
     if (status != OK) {
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "entries", entries);
-    app_reply_ok(app, conn, envelope->id, payload);
+    appReplyOk(app, conn, envelope->id, payload);
     json_object_put(payload);
 }
 
@@ -436,30 +436,30 @@ static void handleLobby(App *app, ConnId conn, const Envelope *envelope, UserId 
     json_object *payload = NULL;
     Status status = friendStateJson(app, me, &payload);
     if (status != OK) {
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
     json_object *entries = NULL;
     status = leaderboardJson(app, &entries);
     if (status != OK) {
         json_object_put(payload);
-        app_reply_status(app, conn, envelope->id, status);
+        appReplyStatus(app, conn, envelope->id, status);
         return;
     }
     json_object_object_add(payload, "leaderboard", entries);
-    app_reply_ok(app, conn, envelope->id, payload);
+    appReplyOk(app, conn, envelope->id, payload);
     json_object_put(payload);
 }
 
-Status social_handle(App *app, ConnId conn, const Envelope *envelope) {
+Status socialHandle(App *app, ConnId conn, const Envelope *envelope) {
     if (!app || !envelope || !envelope->type) return BAD_REQUEST;
     UserId me = 0;
-    if (sessions_user(app, conn, &me) != OK || me == 0) {
-        app_reply_status(app, conn, envelope->id, UNAUTHENTICATED);
+    if (sessionsUser(app, conn, &me) != OK || me == 0) {
+        appReplyStatus(app, conn, envelope->id, UNAUTHENTICATED);
         return OK;
     }
     if (!app->store) {
-        app_reply_status(app, conn, envelope->id, STORAGE_ERROR);
+        appReplyStatus(app, conn, envelope->id, STORAGE_ERROR);
         return OK;
     }
     if (strcmp(envelope->type, "FRIEND_LIST") == 0) handleFriendList(app, conn, envelope, me);
@@ -472,6 +472,6 @@ Status social_handle(App *app, ConnId conn, const Envelope *envelope) {
                     "PROFILE_UPDATE") == 0) handleProfileUpdate(app, conn, envelope, me);
     else if (strcmp(envelope->type, "LEADERBOARD_GET") == 0) handleLeaderboard(app, conn, envelope);
     else if (strcmp(envelope->type, "LOBBY_GET") == 0) handleLobby(app, conn, envelope, me);
-    else app_reply_status(app, conn, envelope->id, BAD_REQUEST);
+    else appReplyStatus(app, conn, envelope->id, BAD_REQUEST);
     return OK;
 }

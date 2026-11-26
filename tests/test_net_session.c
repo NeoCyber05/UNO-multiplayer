@@ -22,7 +22,7 @@ static const char *conn_state_status(json_object *connState) {
 /* Drive a LOGIN round trip so the session holds TEST_TOKEN. */
 static void loginWithToken(NetSession *session) {
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 3, "LOGIN", &wireId) == OK);
+    assert(nsOutgoing(session, 3, "LOGIN", &wireId) == OK);
 
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "token", json_object_new_string(TEST_TOKEN));
@@ -31,180 +31,180 @@ static void loginWithToken(NetSession *session) {
 
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_FORWARD);
     assert(jsId == 3);
     assert(connState == NULL);
     json_object_put(payload);
 }
 
 static void testIdMapping(void) {
-    NetSession *session = ns_create();
+    NetSession *session = nsCreate();
     assert(session != NULL);
-    ns_on_connected(session);
-    assert(ns_state(session) == NS_CONNECTED);
+    nsOnConnected(session);
+    assert(nsState(session) == NS_CONNECTED);
 
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 7, "PING", &wireId) == OK);
+    assert(nsOutgoing(session, 7, "PING", &wireId) == OK);
     assert(wireId == 1);
 
     Envelope response = makeEnvelope(1, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_FORWARD);
     assert(jsId == 7);
     assert(connState == NULL);
 
     /* The mapping is consumed by the first response, so a repeat is unknown. */
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_DROP);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_DROP);
     assert(connState == NULL);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testPushForwardedWithZeroJsId(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
     Envelope push = makeEnvelope(0, "ROOM_UPDATE", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &push, &jsId, &connState) == NS_FORWARD);
+    assert(nsIncoming(session, &push, &jsId, &connState) == NS_FORWARD);
     assert(jsId == 0);
     assert(connState == NULL);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testLoginTokenCapturedNotForwardedLogic(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
-    assert(!ns_has_token(session));
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
+    assert(!nsHasToken(session));
 
     loginWithToken(session);
-    assert(ns_has_token(session));
-    assert(strcmp(ns_token(session), TEST_TOKEN) == 0);
+    assert(nsHasToken(session));
+    assert(strcmp(nsToken(session), TEST_TOKEN) == 0);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testLogoutClearsToken(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
     loginWithToken(session);
 
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 4, "LOGOUT", &wireId) == OK);
+    assert(nsOutgoing(session, 4, "LOGOUT", &wireId) == OK);
     Envelope response = makeEnvelope(wireId, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_FORWARD);
     assert(jsId == 4);
-    assert(!ns_has_token(session));
+    assert(!nsHasToken(session));
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testLogoutWipesTokenBytes(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
     loginWithToken(session);
 
     /* The token lives in session-owned storage that stays valid until
-     * ns_destroy, so its bytes can be inspected after LOGOUT. */
-    const char *stored = ns_token(session);
+     * nsDestroy, so its bytes can be inspected after LOGOUT. */
+    const char *stored = nsToken(session);
     assert(stored != NULL);
     size_t tokenLength = strlen(TEST_TOKEN);
 
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 4, "LOGOUT", &wireId) == OK);
+    assert(nsOutgoing(session, 4, "LOGOUT", &wireId) == OK);
     Envelope response = makeEnvelope(wireId, "OK", NULL);
     int32_t jsId = -1;
-    assert(ns_incoming(session, &response, &jsId, NULL) == NS_FORWARD);
-    assert(!ns_has_token(session));
-    assert(ns_token(session) == NULL);
+    assert(nsIncoming(session, &response, &jsId, NULL) == NS_FORWARD);
+    assert(!nsHasToken(session));
+    assert(nsToken(session) == NULL);
 
     /* No copy of the secret may linger in memory after it is dropped. */
     for (size_t index = 0; index < tokenLength; index++) {
         assert(stored[index] == '\0');
     }
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testNonPositiveJsIdRejected(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
     /* id 0 marks server pushes; a JS request with it would be ambiguous. */
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 0, "PING", &wireId) == BAD_REQUEST);
-    assert(ns_outgoing(session, -5, "PING", &wireId) == BAD_REQUEST);
-    assert(ns_outgoing(session, 1, "PING", &wireId) == OK);
+    assert(nsOutgoing(session, 0, "PING", &wireId) == BAD_REQUEST);
+    assert(nsOutgoing(session, -5, "PING", &wireId) == BAD_REQUEST);
+    assert(nsOutgoing(session, 1, "PING", &wireId) == OK);
     assert(wireId == 1);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testJsResumeRejected(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 1, "RESUME", &wireId) == BAD_REQUEST);
+    assert(nsOutgoing(session, 1, "RESUME", &wireId) == BAD_REQUEST);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testSendWhileDisconnectedRejects(void) {
-    NetSession *session = ns_create();
+    NetSession *session = nsCreate();
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 1, "PING", &wireId) == BUSY);
+    assert(nsOutgoing(session, 1, "PING", &wireId) == BUSY);
 
-    ns_on_connected(session);
-    assert(ns_outgoing(session, 1, "PING", &wireId) == OK);
+    nsOnConnected(session);
+    assert(nsOutgoing(session, 1, "PING", &wireId) == OK);
 
-    ns_on_disconnected(session);
-    assert(ns_state(session) == NS_DISCONNECTED);
-    assert(ns_outgoing(session, 2, "PING", &wireId) == BUSY);
+    nsOnDisconnected(session);
+    assert(nsState(session) == NS_DISCONNECTED);
+    assert(nsOutgoing(session, 2, "PING", &wireId) == BUSY);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testPendingTableFull(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
     int32_t wireId = 0;
     for (int32_t jsId = 1; jsId <= NS_MAX_PENDING; jsId++) {
-        assert(ns_outgoing(session, jsId, "PING", &wireId) == OK);
+        assert(nsOutgoing(session, jsId, "PING", &wireId) == OK);
     }
-    assert(ns_outgoing(session, NS_MAX_PENDING + 1, "PING", &wireId) == BUSY);
-    assert(ns_internal(session, "PING") == 0);
+    assert(nsOutgoing(session, NS_MAX_PENDING + 1, "PING", &wireId) == BUSY);
+    assert(nsInternal(session, "PING") == 0);
 
     /* Answering one request frees its slot for the next one. */
     Envelope response = makeEnvelope(1, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_FORWARD);
-    assert(ns_outgoing(session, NS_MAX_PENDING + 1, "PING", &wireId) == OK);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_FORWARD);
+    assert(nsOutgoing(session, NS_MAX_PENDING + 1, "PING", &wireId) == OK);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testResumeFlow(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
     loginWithToken(session);
-    ns_on_disconnected(session);
-    assert(ns_has_token(session));
+    nsOnDisconnected(session);
+    assert(nsHasToken(session));
 
     /* Resume succeeds: state becomes CONNECTED and the host gets `me`. */
-    ns_on_connected(session);
-    assert(ns_state(session) == NS_RESUMING);
+    nsOnConnected(session);
+    assert(nsState(session) == NS_RESUMING);
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 9, "PING", &wireId) == BUSY);
+    assert(nsOutgoing(session, 9, "PING", &wireId) == BUSY);
 
-    int32_t resumeId = ns_internal(session, "RESUME");
+    int32_t resumeId = nsInternal(session, "RESUME");
     assert(resumeId > 0);
     json_object *payload = json_object_new_object();
     json_object *me = json_object_new_object();
@@ -214,7 +214,7 @@ static void testResumeFlow(void) {
 
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &okResponse, &jsId, &connState) == NS_DROP);
+    assert(nsIncoming(session, &okResponse, &jsId, &connState) == NS_DROP);
     json_object_put(payload);
     assert(connState != NULL);
     assert(strcmp(conn_state_status(connState), "connected") == 0);
@@ -224,14 +224,14 @@ static void testResumeFlow(void) {
     assert(json_object_object_get_ex(stateMe, "name", &name));
     assert(strcmp(json_object_get_string(name), "son") == 0);
     json_object_put(connState);
-    assert(ns_state(session) == NS_CONNECTED);
-    assert(ns_has_token(session));
+    assert(nsState(session) == NS_CONNECTED);
+    assert(nsHasToken(session));
 
     /* Resume fails: token is dropped and the host is told the session expired. */
-    ns_on_disconnected(session);
-    ns_on_connected(session);
-    assert(ns_state(session) == NS_RESUMING);
-    resumeId = ns_internal(session, "RESUME");
+    nsOnDisconnected(session);
+    nsOnConnected(session);
+    assert(nsState(session) == NS_RESUMING);
+    resumeId = nsInternal(session, "RESUME");
     assert(resumeId > 0);
     json_object *errorPayload = json_object_new_object();
     json_object_object_add(errorPayload, "code", json_object_new_string("UNAUTHENTICATED"));
@@ -239,7 +239,7 @@ static void testResumeFlow(void) {
     Envelope errorResponse = makeEnvelope(resumeId, "ERROR", errorPayload);
 
     connState = NULL;
-    assert(ns_incoming(session, &errorResponse, &jsId, &connState) == NS_DROP);
+    assert(nsIncoming(session, &errorResponse, &jsId, &connState) == NS_DROP);
     json_object_put(errorPayload);
     assert(connState != NULL);
     assert(strcmp(conn_state_status(connState), "connected") == 0);
@@ -247,93 +247,93 @@ static void testResumeFlow(void) {
     assert(json_object_object_get_ex(connState, "sessionExpired", &expired));
     assert(json_object_get_boolean(expired));
     json_object_put(connState);
-    assert(!ns_has_token(session));
-    assert(ns_state(session) == NS_CONNECTED);
+    assert(!nsHasToken(session));
+    assert(nsState(session) == NS_CONNECTED);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testInternalPingDropped(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
-    int32_t pingId = ns_internal(session, "PING");
+    int32_t pingId = nsInternal(session, "PING");
     assert(pingId == 1);
     Envelope response = makeEnvelope(pingId, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &response, &jsId, &connState) == NS_DROP);
+    assert(nsIncoming(session, &response, &jsId, &connState) == NS_DROP);
     assert(connState == NULL);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testBackoffSequence(void) {
-    NetSession *session = ns_create();
-    assert(ns_next_backoff_ms(session) == 1000);
-    assert(ns_next_backoff_ms(session) == 2000);
-    assert(ns_next_backoff_ms(session) == 4000);
-    assert(ns_next_backoff_ms(session) == 8000);
-    assert(ns_next_backoff_ms(session) == 8000);
+    NetSession *session = nsCreate();
+    assert(nsNextBackoffMs(session) == 1000);
+    assert(nsNextBackoffMs(session) == 2000);
+    assert(nsNextBackoffMs(session) == 4000);
+    assert(nsNextBackoffMs(session) == 8000);
+    assert(nsNextBackoffMs(session) == 8000);
 
-    ns_on_connected(session);
-    assert(ns_next_backoff_ms(session) == 1000);
+    nsOnConnected(session);
+    assert(nsNextBackoffMs(session) == 1000);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testBackoffKeptUntilResumed(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
     loginWithToken(session);
-    ns_on_disconnected(session);
-    assert(ns_next_backoff_ms(session) == 1000);
-    assert(ns_next_backoff_ms(session) == 2000);
+    nsOnDisconnected(session);
+    assert(nsNextBackoffMs(session) == 1000);
+    assert(nsNextBackoffMs(session) == 2000);
 
     /* A server that accepts and then closes before answering RESUME must
      * not reset the backoff, or it would be retried every second. */
-    ns_on_connected(session);
-    assert(ns_state(session) == NS_RESUMING);
-    ns_on_disconnected(session);
-    assert(ns_next_backoff_ms(session) == 4000);
+    nsOnConnected(session);
+    assert(nsState(session) == NS_RESUMING);
+    nsOnDisconnected(session);
+    assert(nsNextBackoffMs(session) == 4000);
 
     /* Once RESUME is answered the session is usable again: start over. */
-    ns_on_connected(session);
-    int32_t resumeId = ns_internal(session, "RESUME");
+    nsOnConnected(session);
+    int32_t resumeId = nsInternal(session, "RESUME");
     assert(resumeId > 0);
     Envelope okResponse = makeEnvelope(resumeId, "OK", NULL);
     json_object *connState = NULL;
-    assert(ns_incoming(session, &okResponse, NULL, &connState) == NS_DROP);
+    assert(nsIncoming(session, &okResponse, NULL, &connState) == NS_DROP);
     json_object_put(connState);
-    assert(ns_state(session) == NS_CONNECTED);
-    ns_on_disconnected(session);
-    assert(ns_next_backoff_ms(session) == 1000);
+    assert(nsState(session) == NS_CONNECTED);
+    nsOnDisconnected(session);
+    assert(nsNextBackoffMs(session) == 1000);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 static void testWireIdsResetPerConnection(void) {
-    NetSession *session = ns_create();
-    ns_on_connected(session);
+    NetSession *session = nsCreate();
+    nsOnConnected(session);
 
     int32_t wireId = 0;
-    assert(ns_outgoing(session, 1, "PING", &wireId) == OK);
+    assert(nsOutgoing(session, 1, "PING", &wireId) == OK);
     assert(wireId == 1);
-    assert(ns_outgoing(session, 2, "PING", &wireId) == OK);
+    assert(nsOutgoing(session, 2, "PING", &wireId) == OK);
     assert(wireId == 2);
 
-    ns_on_disconnected(session);
-    ns_on_connected(session);
-    assert(ns_outgoing(session, 3, "PING", &wireId) == OK);
+    nsOnDisconnected(session);
+    nsOnConnected(session);
+    assert(nsOutgoing(session, 3, "PING", &wireId) == OK);
     assert(wireId == 1);
 
     /* A response for the previous connection's id 2 must not map to js 2. */
     Envelope stale = makeEnvelope(2, "OK", NULL);
     int32_t jsId = -1;
     json_object *connState = NULL;
-    assert(ns_incoming(session, &stale, &jsId, &connState) == NS_DROP);
+    assert(nsIncoming(session, &stale, &jsId, &connState) == NS_DROP);
 
-    ns_destroy(session);
+    nsDestroy(session);
 }
 
 int main(void) {
@@ -351,7 +351,7 @@ int main(void) {
     testBackoffSequence();
     testBackoffKeptUntilResumed();
     testWireIdsResetPerConnection();
-    ns_destroy(NULL);
+    nsDestroy(NULL);
     puts("net_session: OK");
     return 0;
 }

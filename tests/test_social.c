@@ -8,10 +8,10 @@ enum { SAMPLE_USER_ID = 42 };
 
 static void testParseTag(void) {
     UserId userId = 0;
-    assert(social_parse_tag("UNO#42", &userId));
+    assert(socialParseTag("UNO#42", &userId));
     assert(userId == SAMPLE_USER_ID);
     /* The largest id SQLite can store still parses. */
-    assert(social_parse_tag("UNO#9223372036854775807", &userId));
+    assert(socialParseTag("UNO#9223372036854775807", &userId));
     assert(userId == 9223372036854775807ULL);
 
     const char *const rejected[] = {
@@ -21,19 +21,19 @@ static void testParseTag(void) {
     };
     for (size_t index = 0; index < sizeof rejected / sizeof rejected[0]; index++) {
         userId = SAMPLE_USER_ID;
-        assert(!social_parse_tag(rejected[index], &userId));
+        assert(!socialParseTag(rejected[index], &userId));
         /* A rejected tag never leaves a half-parsed id behind. */
         assert(userId == SAMPLE_USER_ID);
     }
-    assert(!social_parse_tag(NULL, &userId));
-    assert(!social_parse_tag("UNO#1", NULL));
+    assert(!socialParseTag(NULL, &userId));
+    assert(!socialParseTag("UNO#1", NULL));
 }
 
 static void testPresenceKeys(void) {
-    assert(strcmp(social_presence_key(PRESENCE_OFFLINE), "offline") == 0);
-    assert(strcmp(social_presence_key(PRESENCE_IDLE), "idle") == 0);
-    assert(strcmp(social_presence_key(PRESENCE_ONLINE), "online") == 0);
-    assert(strcmp(social_presence_key(PRESENCE_IN_MATCH), "in_match") == 0);
+    assert(strcmp(socialPresenceKey(PRESENCE_OFFLINE), "offline") == 0);
+    assert(strcmp(socialPresenceKey(PRESENCE_IDLE), "idle") == 0);
+    assert(strcmp(socialPresenceKey(PRESENCE_ONLINE), "online") == 0);
+    assert(strcmp(socialPresenceKey(PRESENCE_IN_MATCH), "in_match") == 0);
 }
 
 int main(void) {

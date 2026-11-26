@@ -259,10 +259,10 @@ static void testRankedRoomWithBotRejected(Matches *matches, sqlite3 *db, RoomSta
 
 static void testRankedFinishAppliesElo(Matches *matches, Store *store, RoomStart room,
                                        Capture *messages) {
-    sqlite3 *db = store_get_db(store);
+    sqlite3 *db = storeGetDb(store);
     ProfileStats before[PROFILE_SEAT_COUNT];
     for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
-        assert(store_profile_stats(store, room.players[seat].userId, &before[seat]) == OK);
+        assert(storeProfileStats(store, room.players[seat].userId, &before[seat]) == OK);
     }
     room.mode = CLASSIC;
     room.ranked = true;
@@ -301,7 +301,7 @@ static void testRankedFinishAppliesElo(Matches *matches, Store *store, RoomStart
                         "match_id = (SELECT match_id FROM matches WHERE ranked = 1)",
                         seat) == RANKED_START_ELO);
         ProfileStats after;
-        assert(store_profile_stats(store, userId, &after) == OK);
+        assert(storeProfileStats(store, userId, &after) == OK);
         bool won = seat == winnerSeat && seat != LEAVER_SEAT;
         assert(after.matches == before[seat].matches + 1);
         assert(after.wins == before[seat].wins + won);
@@ -316,7 +316,7 @@ static void testRankedFinishAppliesElo(Matches *matches, Store *store, RoomStart
 int main(void) {
     assert(randombytes_set_implementation(&testRandom) == 0);
     Store *store = NULL;
-    assert(store_open(&store, ":memory:") == OK);
+    assert(storeOpen(&store, ":memory:") == OK);
     Capture messages = {0};
     Matches *matches = matchesCreate(store, capture, ended, &messages);
     assert(matches);
@@ -325,7 +325,7 @@ int main(void) {
     for (Seat seat = 0; seat < 4; seat++) {
         AccountCreate account = {.name = "Player", .avatar = "boy", .hash = "test"};
         snprintf(account.email, sizeof account.email, "player%u@example.com", (unsigned)seat);
-        assert(store_account_create(store, &account, &room.players[seat].userId) == OK);
+        assert(storeAccountCreate(store, &account, &room.players[seat].userId) == OK);
         strcpy(room.players[seat].name, account.name);
     }
 
@@ -336,7 +336,7 @@ int main(void) {
     json_object *players = field(messages.views[1], "players");
     assert(field(json_object_array_get_idx(players, 0), "hand"));
     assert(!field(json_object_array_get_idx(players, 1), "hand"));
-    sqlite3 *db = store_get_db(store);
+    sqlite3 *db = storeGetDb(store);
     assert(sqlite3_exec(db, "PRAGMA query_only = ON", NULL, NULL, NULL) == SQLITE_OK);
     assert(send(matches, 1, "DRAW", (const MatchId *)&matchId, 1, 1200) == STORAGE_ERROR);
     assert(matchesConnected(matches, 2, false, 1300) == OK);
@@ -401,5 +401,5 @@ int main(void) {
     for (UserId userId = 1; userId <= 4; userId++)
         json_object_put(messages.views[userId]);
     matchesDestroy(matches);
-    store_close(store);
+    storeClose(store);
 }

@@ -11,11 +11,11 @@
 #include <unistd.h>
 
 enum {
-    /* How long the blocking client_connect waits for each address's handshake. */
+    /* How long the blocking clientConnect waits for each address's handshake. */
     CONNECT_TIMEOUT_MS = 3000
 };
 
-Status client_connect(Client **out, const char *host, uint16_t port) {
+Status clientConnect(Client **out, const char *host, uint16_t port) {
     if (!out || !host || port == 0) return BAD_REQUEST;
     *out = NULL;
 
@@ -87,7 +87,7 @@ Status client_connect(Client **out, const char *host, uint16_t port) {
         return BUSY;
     }
 
-    conn_init(&client->conn, connectionSocket, 0, 0);
+    connInit(&client->conn, connectionSocket, 0, 0);
     client->connected = true;
     *out = client;
     return OK;
@@ -116,7 +116,7 @@ static Status lookupFirstAddress(const char *host, const char *service, int flag
     return status;
 }
 
-Status client_resolve(const char *host, uint16_t port, ClientAddress *out) {
+Status clientResolve(const char *host, uint16_t port, ClientAddress *out) {
     if (!host || port == 0 || !out) return BAD_REQUEST;
 
     char service[16];
@@ -130,7 +130,7 @@ Status client_resolve(const char *host, uint16_t port, ClientAddress *out) {
     return lookupFirstAddress(host, service, AI_NUMERICSERV | AI_ADDRCONFIG, out);
 }
 
-Status client_connect_start(const ClientAddress *address, int *outFd, bool *outInProgress) {
+Status clientConnectStart(const ClientAddress *address, int *outFd, bool *outInProgress) {
     if (!address || !outFd || !outInProgress || address->length == 0) return BAD_REQUEST;
     *outFd = -1;
     *outInProgress = false;
@@ -161,7 +161,7 @@ Status client_connect_start(const ClientAddress *address, int *outFd, bool *outI
     return BAD_REQUEST;
 }
 
-Status client_connect_finish(int connectionSocket, Client **out) {
+Status clientConnectFinish(int connectionSocket, Client **out) {
     if (out) *out = NULL;
     if (connectionSocket < 0 || !out) return BAD_REQUEST;
 
@@ -179,7 +179,7 @@ Status client_connect_finish(int connectionSocket, Client **out) {
         close(connectionSocket);
         return BUSY;
     }
-    if (conn_init(&client->conn, connectionSocket, 0, 0) != OK) {
+    if (connInit(&client->conn, connectionSocket, 0, 0) != OK) {
         close(connectionSocket);
         free(client);
         return BAD_REQUEST;
@@ -189,50 +189,50 @@ Status client_connect_finish(int connectionSocket, Client **out) {
     return OK;
 }
 
-void client_connect_abort(int connectionSocket) {
+void clientConnectAbort(int connectionSocket) {
     if (connectionSocket >= 0) {
         close(connectionSocket);
     }
 }
 
-Status client_send(Client *client, const Envelope *envelope) {
+Status clientSend(Client *client, const Envelope *envelope) {
     if (!client || !client->connected || client->conn.fd < 0 || !envelope) return BAD_REQUEST;
-    Status status = conn_queue(&client->conn, envelope);
+    Status status = connQueue(&client->conn, envelope);
     if (status != OK) return status;
-    Status flushStatus = conn_flush(&client->conn);
-    if (client->on_pending_cb) {
-        client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
+    Status flushStatus = connFlush(&client->conn);
+    if (client->onPendingCb) {
+        client->onPendingCb(client->pendingCtx, client->conn.outLen > client->conn.outPos);
     }
     return flushStatus;
 }
 
-Status client_flush(Client *client) {
+Status clientFlush(Client *client) {
     if (!client || !client->connected || client->conn.fd < 0) return BAD_REQUEST;
-    Status status = conn_flush(&client->conn);
-    if (client->on_pending_cb) {
-        client->on_pending_cb(client->pending_ctx, client->conn.out_len > client->conn.out_pos);
+    Status status = connFlush(&client->conn);
+    if (client->onPendingCb) {
+        client->onPendingCb(client->pendingCtx, client->conn.outLen > client->conn.outPos);
     }
     return status;
 }
 
-void client_set_pending_callback(Client *client, ClientPendingCallback callback, void *context) {
+void clientSetPendingCallback(Client *client, ClientPendingCallback callback, void *context) {
     if (!client) return;
-    client->on_pending_cb = callback;
-    client->pending_ctx = context;
+    client->onPendingCb = callback;
+    client->pendingCtx = context;
 }
 
-Status client_read(Client *client, FrameCallback callback, void *context) {
+Status clientRead(Client *client, FrameCallback callback, void *context) {
     if (!client || !client->connected || client->conn.fd < 0) return BAD_REQUEST;
-    return conn_read(&client->conn, callback, context);
+    return connRead(&client->conn, callback, context);
 }
 
-int client_fd(const Client *client) {
+int clientFd(const Client *client) {
     return (client && client->connected) ? client->conn.fd : -1;
 }
 
-void client_close(Client *client) {
+void clientClose(Client *client) {
     if (!client) return;
-    conn_close(&client->conn);
+    connClose(&client->conn);
     client->connected = false;
     free(client);
 }

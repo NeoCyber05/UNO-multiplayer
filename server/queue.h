@@ -20,16 +20,16 @@ typedef struct {
 
 /**
  * @brief Allocate an empty matchmaking queue for every mode.
- * @param[out] outQueue Receives the queue; destroy it with queue_destroy.
+ * @param[out] outQueue Receives the queue; destroy it with queueDestroy.
  * @return OK on success, BAD_REQUEST if out is NULL, STORAGE_ERROR if allocation fails.
  */
-Status queue_init(Queue **outQueue);
+Status queueInit(Queue **outQueue);
 
 /**
- * @brief Free a queue created by queue_init.
+ * @brief Free a queue created by queueInit.
  * @param[in] queue Queue to free, or NULL.
  */
-void queue_destroy(Queue *queue);
+void queueDestroy(Queue *queue);
 
 /**
  * @brief Append a solo or party entry at the back of a mode's FIFO queue.
@@ -40,7 +40,7 @@ void queue_destroy(Queue *queue);
  *         INVALID_ACTION for a party in CLASSIC or DRAFT (parties only play team modes);
  *         BUSY if any user already waits in any mode; SERVER_FULL if the mode is full.
  */
-Status queue_add(Queue *queue, Mode mode, const QueueEntry *entry);
+Status queueAdd(Queue *queue, Mode mode, const QueueEntry *entry);
 
 /**
  * @brief Check whether a user waits in any mode's queue.
@@ -48,7 +48,7 @@ Status queue_add(Queue *queue, Mode mode, const QueueEntry *entry);
  * @param[in] user Account to look for.
  * @return true if some entry contains u.
  */
-bool queue_contains(const Queue *queue, UserId user);
+bool queueContains(const Queue *queue, UserId user);
 
 /**
  * @brief Remove the whole entry containing a user, keeping FIFO order of the rest.
@@ -58,7 +58,7 @@ bool queue_contains(const Queue *queue, UserId user);
  * @param[out] removed Receives a copy of the removed entry; may be NULL.
  * @return true if an entry was removed, false if u was not queued.
  */
-bool queue_remove(Queue *queue, UserId user, Mode *outMode, QueueEntry *removed);
+bool queueRemove(Queue *queue, UserId user, Mode *outMode, QueueEntry *removed);
 
 /**
  * @brief Choose the earliest entries by FIFO index that add up to exactly four players.
@@ -76,17 +76,17 @@ bool queue_remove(Queue *queue, UserId user, Mode *outMode, QueueEntry *removed)
  * @param[out] outEntryCount Number of indexes written to outIndexes.
  * @return true if four players were found, false otherwise.
  */
-bool queue_pick(const Queue *queue, Mode mode, UserId outSeats[QUEUE_MATCH_SEATS],
+bool queuePick(const Queue *queue, Mode mode, UserId outSeats[QUEUE_MATCH_SEATS],
                 size_t outIndexes[QUEUE_MATCH_SEATS], size_t *outEntryCount);
 
 /**
- * @brief Drop the entries queue_pick returned once their match has started.
+ * @brief Drop the entries queuePick returned once their match has started.
  * @param[in,out] queue Queue owned by the poll loop.
  * @param[in] mode Mode the indexes refer to.
- * @param[in] indexes Entry indexes from queue_pick; out-of-range indexes are ignored.
+ * @param[in] indexes Entry indexes from queuePick; out-of-range indexes are ignored.
  * @param[in] count Number of indexes.
  */
-void queue_take(Queue *queue, Mode mode, const size_t indexes[], size_t count);
+void queueTake(Queue *queue, Mode mode, const size_t indexes[], size_t count);
 
 /**
  * @brief Handle QUEUE_JOIN {mode} and QUEUE_LEAVE {} for the session's account.
@@ -100,14 +100,14 @@ void queue_take(Queue *queue, Mode mode, const size_t indexes[], size_t count);
  * @return OK once a reply was sent (errors travel as ERROR replies),
  *         BAD_REQUEST if the arguments are NULL.
  */
-Status queue_handle(App *app, ConnId conn, const Envelope *envelope);
+Status queueHandle(App *app, ConnId conn, const Envelope *envelope);
 
 /**
  * @brief Drop a user's entry after disconnect or PARTY_LEAVE and notify everyone affected.
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] user Account that left; a user who is not queued is ignored.
  */
-void queue_user_gone(App *app, UserId user);
+void queueUserGone(App *app, UserId user);
 
 /**
  * @brief Resend the user's QUEUE_STATE after LOGIN or RESUME bound a new socket.
@@ -115,13 +115,13 @@ void queue_user_gone(App *app, UserId user);
  * @param[in] user Account that just bound a connection; a user who is not queued
  *              gets nothing.
  */
-void queue_sync_user(App *app, UserId user);
+void queueSyncUser(App *app, UserId user);
 
 /**
  * @brief Prune entries whose users went offline and retry modes whose start failed.
  * @param[in,out] app Server state owned by the poll loop.
- * @param[in] nowMs Monotonic time from app_now_ms.
+ * @param[in] nowMs Monotonic time from appNowMs.
  */
-void queue_tick(App *app, uint64_t nowMs);
+void queueTick(App *app, uint64_t nowMs);
 
 #endif

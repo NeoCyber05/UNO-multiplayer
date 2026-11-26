@@ -154,7 +154,7 @@ static void applyJsResponse(NetSession *session, RequestKind kind, const Envelop
     }
 }
 
-NetSession *ns_create(void) {
+NetSession *nsCreate(void) {
     NetSession *session = calloc(1, sizeof(*session));
     if (session == NULL) {
         return NULL;
@@ -163,7 +163,7 @@ NetSession *ns_create(void) {
     return session;
 }
 
-void ns_destroy(NetSession *session) {
+void nsDestroy(NetSession *session) {
     if (session == NULL) {
         return;
     }
@@ -171,7 +171,7 @@ void ns_destroy(NetSession *session) {
     free(session);
 }
 
-void ns_on_connected(NetSession *session) {
+void nsOnConnected(NetSession *session) {
     if (session == NULL) {
         return;
     }
@@ -185,7 +185,7 @@ void ns_on_connected(NetSession *session) {
     }
 }
 
-void ns_on_disconnected(NetSession *session) {
+void nsOnDisconnected(NetSession *session) {
     if (session == NULL) {
         return;
     }
@@ -193,11 +193,11 @@ void ns_on_disconnected(NetSession *session) {
     clearPending(session);
 }
 
-NsState ns_state(const NetSession *session) {
+NsState nsState(const NetSession *session) {
     return session != NULL ? session->state : NS_DISCONNECTED;
 }
 
-Status ns_outgoing(NetSession *session, int32_t jsId, const char *type, int32_t *wireId) {
+Status nsOutgoing(NetSession *session, int32_t jsId, const char *type, int32_t *wireId) {
     /* id 0 marks pushes and native requests, so a JS id must be positive or
      * its response could not be told apart from them. */
     if (session == NULL || type == NULL || wireId == NULL || jsId <= 0) {
@@ -219,7 +219,7 @@ Status ns_outgoing(NetSession *session, int32_t jsId, const char *type, int32_t 
     return OK;
 }
 
-int32_t ns_internal(NetSession *session, const char *type) {
+int32_t nsInternal(NetSession *session, const char *type) {
     if (session == NULL || type == NULL) {
         return NO_WIRE_ID;
     }
@@ -229,7 +229,7 @@ int32_t ns_internal(NetSession *session, const char *type) {
     return registerRequest(session, 0, requestKind(type), true);
 }
 
-NsVerdict ns_incoming(NetSession *session, const Envelope *envelope, int32_t *jsId,
+NsVerdict nsIncoming(NetSession *session, const Envelope *envelope, int32_t *jsId,
                       json_object **outConnState) {
     if (jsId != NULL) {
         *jsId = 0;
@@ -269,15 +269,15 @@ NsVerdict ns_incoming(NetSession *session, const Envelope *envelope, int32_t *js
     return NS_FORWARD;
 }
 
-bool ns_has_token(const NetSession *session) {
+bool nsHasToken(const NetSession *session) {
     return session != NULL && session->hasToken;
 }
 
-const char *ns_token(const NetSession *session) {
-    return ns_has_token(session) ? session->token : NULL;
+const char *nsToken(const NetSession *session) {
+    return nsHasToken(session) ? session->token : NULL;
 }
 
-uint32_t ns_next_backoff_ms(NetSession *session) {
+uint32_t nsNextBackoffMs(NetSession *session) {
     if (session == NULL) {
         return 0;
     }

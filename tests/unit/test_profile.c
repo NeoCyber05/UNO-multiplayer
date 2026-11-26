@@ -6,12 +6,12 @@
 
 int main(void) {
     Store *store = NULL;
-    assert(store_open(&store, ":memory:") == OK);
+    assert(storeOpen(&store, ":memory:") == OK);
     UserId userIds[PROFILE_SEAT_COUNT];
     for (Seat seat = 0; seat < PROFILE_SEAT_COUNT; seat++) {
         AccountCreate account = {.hash = "test", .name = "Player", .avatar = "boy"};
         snprintf(account.email, sizeof account.email, "uno%d@example.com", seat);
-        assert(store_account_create(store, &account, &userIds[seat]) == OK);
+        assert(storeAccountCreate(store, &account, &userIds[seat]) == OK);
     }
     UserId userId = userIds[0];
     char sql[256];
@@ -20,7 +20,7 @@ int main(void) {
              "team_wins=49, plus4=49, uno_calls=299, streak=9, best_streak=9, "
              "peak_elo=1799 WHERE user_id=%llu",
              (unsigned long long)userId);
-    assert(sqlite3_exec(store_get_db(store), sql, NULL, NULL, NULL) == SQLITE_OK);
+    assert(sqlite3_exec(storeGetDb(store), sql, NULL, NULL, NULL) == SQLITE_OK);
 
     MatchResult result = {
         .status = MATCH_FINALIZED, .mode = TWO_V_TWO, .winnerSeat = 2, .winnerTeam = 0};
@@ -37,7 +37,7 @@ int main(void) {
                                   BADGE_TEAM | BADGE_MATCHES | BADGE_DIAMOND));
     assert(deltas[1].add.matches == 1 && deltas[1].add.wins == 0 && deltas[1].streak == -1);
     ProfileStats after;
-    assert(store_profile_stats(store, userId, &after) == OK && after.wins == 99);
+    assert(storeProfileStats(store, userId, &after) == OK && after.wins == 99);
 
     result.players[0].left = true;
     assert(profileCompute(store, &result, deltas) == OK);
@@ -54,5 +54,5 @@ int main(void) {
 
     result.status = MATCH_ABORTED;
     assert(profileCompute(store, &result, deltas) == OK && deltas[0].add.matches == 0);
-    store_close(store);
+    storeClose(store);
 }

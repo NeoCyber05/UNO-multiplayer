@@ -175,7 +175,7 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs, Mat
         if (!userId || seatOf(&next, userId) >= 0) return BAD_REQUEST;
         if (findByUser(matches, userId)) return BUSY;
         Account account;
-        status = store_account_get_by_id(matches->store, userId, &account);
+        status = storeAccountGetById(matches->store, userId, &account);
         if (status != OK) return status;
         next.result.players[seat].userId = userId;
         next.result.players[seat].eloBefore = account.elo;
@@ -189,7 +189,7 @@ Status matchesStart(Matches *matches, const RoomStart *room, uint64_t nowMs, Mat
     next.result.status = MATCH_ACTIVE;
     memcpy(next.roomId, room->roomId, sizeof next.roomId);
     generateId(&next.result.matchId);
-    status = store_match_start(matches->store, (const MatchId *)&next.result.matchId, room->players,
+    status = storeMatchStart(matches->store, (const MatchId *)&next.result.matchId, room->players,
                                room->mode, room->ranked);
     if (status != OK) return status;
     scheduleTurn(&next, nowMs);
@@ -230,7 +230,7 @@ static void beginFinish(Match *match, MatchStatus status, uint64_t nowMs) {
         for (Seat seat = 0; seat < SEAT_COUNT; seat++) {
             isBot[seat] = match->result.players[seat].userId == 0;
         }
-        rating_apply(&match->result, isBot);
+        ratingApply(&match->result, isBot);
     }
 }
 
@@ -272,13 +272,13 @@ static json_object *resultJson(const Match *match) {
     return payload;
 }
 
-static Status storeAbort(Store *store, const Match *match) {
+static Status persistMatchAbort(Store *store, const Match *match) {
     MatchEvent event = {.seq = match->game.eventSeq + 1,
                         .revision = match->finishRevision,
                         .actor = -1,
                         .type = "MATCH_ABORTED",
                         .payload = "{}"};
-    return store_abort(store, (const MatchId *)&match->result.matchId, &event,
+    return storeAbort(store, (const MatchId *)&match->result.matchId, &event,
                        match->result.durationMs);
 }
 
@@ -298,12 +298,12 @@ static Status finishMatch(Matches *matches, Match *match, uint64_t nowMs) {
     bool aborted = match->result.status == MATCH_ABORTED;
     Status status;
     if (aborted) {
-        status = storeAbort(matches->store, match);
+        status = persistMatchAbort(matches->store, match);
     } else {
-        // Single-threaded poll loop: stats read here cannot change before store_finalize commits.
+        // Single-threaded poll loop: stats read here cannot change before storeFinalize commits.
         ProfileDelta deltas[PROFILE_SEAT_COUNT];
         status = profileCompute(matches->store, &match->result, deltas);
-        if (status == OK) status = store_finalize(matches->store, &match->result, deltas);
+        if (status == OK) status = storeFinalize(matches->store, &match->result, deltas);
     }
     if (status != OK) return pauseMatch(matches, match, nowMs);
 
@@ -328,7 +328,7 @@ static void resumeClock(Match *match, uint64_t nowMs) {
 }
 
 static void retryPausedTurn(Matches *matches, Match *match, uint64_t nowMs) {
-    sqlite3 *db = store_get_db(matches->store);
+    sqlite3 *db = storeGetDb(matches->store);
     // Probe for a writer without replaying a command the client saw fail.
     if (sqlite3_exec(db, "BEGIN IMMEDIATE; ROLLBACK", NULL, NULL, NULL) != SQLITE_OK) {
         match->retryAt = nowMs + STORAGE_RETRY_MS;
@@ -341,7 +341,7 @@ static void retryPausedTurn(Matches *matches, Match *match, uint64_t nowMs) {
 
 static Status applyEvents(Matches *matches, Match *match, const Game *candidate,
                           const EventBatch *events, uint64_t nowMs) {
-    if (store_events(matches->store, (const MatchId *)&match->result.matchId, events) != OK) {
+    if (storeEvents(matches->store, (const MatchId *)&match->result.matchId, events) != OK) {
         return pauseMatch(matches, match, nowMs);
     }
     bool turnChanged = candidate->turnNo != match->game.turnNo ||
@@ -504,7 +504,7 @@ static Status leaveMatch(Matches *matches, Match *match, Seat seat, uint64_t now
                                     .actor = seat,
                                     .type = "MATCH_LEAVE",
                                     .payload = "{}"};
-    if (store_events(matches->store, (const MatchId *)&match->result.matchId, &events) != OK) {
+    if (storeEvents(matches->store, (const MatchId *)&match->result.matchId, &events) != OK) {
         return pauseMatch(matches, match, nowMs);
     }
     resumeClock(match, nowMs);

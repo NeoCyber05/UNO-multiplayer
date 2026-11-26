@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 /* Result of every operation. The enum names double as wire error codes
- * (see status_code), so the order must not change. */
+ * (see statusCode), so the order must not change. */
 typedef enum {
     OK, BAD_REQUEST, UNAUTHENTICATED, FORBIDDEN, BUSY, NOT_FOUND, ROOM_FULL,
     INVALID_ACTION, NOT_YOUR_TURN, STALE_TURN, STALE_REQUEST, RATE_LIMITED,

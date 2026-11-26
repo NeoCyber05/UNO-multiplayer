@@ -137,7 +137,7 @@ static const char *EMBEDDED_SCHEMA_SQL =
     ");\n";
 
 /* Every query is compiled once at open time: the poll thread never pays for SQL
- * parsing during a match, and a schema/SQL mismatch fails store_open early. */
+ * parsing during a match, and a schema/SQL mismatch fails storeOpen early. */
 static Status prepareStatements(Store *store) {
     const char *matchSelectSql =
         "SELECT mode, ranked, status, winner_seat, winner_team, duration_ms, created_at FROM matches WHERE match_id = ?;";
@@ -433,7 +433,7 @@ fail:
     return STORAGE_ERROR;
 }
 
-Status store_open(Store **out, const char *path) {
+Status storeOpen(Store **out, const char *path) {
     if (!out || !path) return BAD_REQUEST;
     *out = NULL;
 
@@ -452,7 +452,7 @@ Status store_open(Store **out, const char *path) {
     char *errmsg = NULL;
     if (sqlite3_exec(store->db, "PRAGMA foreign_keys = ON;", NULL, NULL, &errmsg) != SQLITE_OK) {
         sqlite3_free(errmsg);
-        store_close(store);
+        storeClose(store);
         return STORAGE_ERROR;
     }
 
@@ -467,7 +467,7 @@ Status store_open(Store **out, const char *path) {
 
     /* Execute Schema Migration */
     if (migrateSchema(store) != OK) {
-        store_close(store);
+        storeClose(store);
         return STORAGE_ERROR;
     }
 
@@ -482,7 +482,7 @@ Status store_open(Store **out, const char *path) {
     }
 
     if (prepareStatements(store) != OK) {
-        store_close(store);
+        storeClose(store);
         return STORAGE_ERROR;
     }
 
@@ -490,7 +490,7 @@ Status store_open(Store **out, const char *path) {
     return OK;
 }
 
-void store_close(Store *store) {
+void storeClose(Store *store) {
     if (!store) return;
     finalizeStatements(store);
     if (store->db) {
@@ -500,11 +500,11 @@ void store_close(Store *store) {
     free(store);
 }
 
-sqlite3 *store_get_db(Store *store) {
+sqlite3 *storeGetDb(Store *store) {
     return store ? store->db : NULL;
 }
 
-Status store_match_start(Store *store, const MatchId *matchId, const PlayerSpec players[4],
+Status storeMatchStart(Store *store, const MatchId *matchId, const PlayerSpec players[4],
                          Mode mode, bool ranked) {
     if (!store || !matchId || !players) return BAD_REQUEST;
     const char *matchIdText = (const char *)matchId;
@@ -606,7 +606,7 @@ Status store_match_start(Store *store, const MatchId *matchId, const PlayerSpec 
     return OK;
 }
 
-Status store_events(Store *store, const MatchId *matchId, const EventBatch *batch) {
+Status storeEvents(Store *store, const MatchId *matchId, const EventBatch *batch) {
     if (!store || !matchId || !batch) return BAD_REQUEST;
     const char *matchIdText = (const char *)matchId;
 
@@ -755,7 +755,7 @@ static Status applyProfileDelta(Store *store, UserId userId, const char *matchId
     return OK;
 }
 
-Status store_finalize(Store *store, const MatchResult *result, const ProfileDelta deltas[4]) {
+Status storeFinalize(Store *store, const MatchResult *result, const ProfileDelta deltas[4]) {
     if (!store || !result) return BAD_REQUEST;
     const char *matchIdText = (const char *)result->matchId;
 
@@ -951,7 +951,7 @@ static Status markAborted(Store *store, const char *matchId, uint64_t durationMs
     return resultCode == SQLITE_DONE && sqlite3_changes(store->db) == 1 ? OK : STORAGE_ERROR;
 }
 
-Status store_abort(Store *store, const MatchId *id, const MatchEvent *event, uint64_t durationMs) {
+Status storeAbort(Store *store, const MatchId *id, const MatchEvent *event, uint64_t durationMs) {
     if (!store || !id || !event) return BAD_REQUEST;
     const char *matchId = (const char *)id;
 
@@ -978,7 +978,7 @@ Status store_abort(Store *store, const MatchId *id, const MatchEvent *event, uin
     return OK;
 }
 
-Status store_leaderboard(Store *store, LeaderboardEntry out[STORE_LEADERBOARD_MAX], size_t *count) {
+Status storeLeaderboard(Store *store, LeaderboardEntry out[STORE_LEADERBOARD_MAX], size_t *count) {
     if (!store || !out || !count) return BAD_REQUEST;
 
     sqlite3_stmt *stmt = store->leaderboardStmt;
@@ -1007,7 +1007,7 @@ Status store_leaderboard(Store *store, LeaderboardEntry out[STORE_LEADERBOARD_MA
 
 static Status accountExists(Store *store, UserId id) {
     Account account;
-    return store_account_get_by_id(store, id, &account);
+    return storeAccountGetById(store, id, &account);
 }
 
 static Status readFriendLink(Store *store, UserId first, UserId second, bool *linked) {
@@ -1035,7 +1035,7 @@ static Status insertFriendRequest(Store *store, UserId from, UserId to) {
     return resultCode == SQLITE_DONE ? OK : STORAGE_ERROR;
 }
 
-Status store_friend_request(Store *store, UserId from, UserId to) {
+Status storeFriendRequest(Store *store, UserId from, UserId to) {
     if (!store || from == to) return BAD_REQUEST;
 
     /* The reverse-direction check and the insert must see the same state:
@@ -1060,7 +1060,7 @@ Status store_friend_request(Store *store, UserId from, UserId to) {
     return OK;
 }
 
-Status store_friend_reply(Store *store, UserId me, UserId requester, bool accept) {
+Status storeFriendReply(Store *store, UserId me, UserId requester, bool accept) {
     if (!store) return BAD_REQUEST;
 
     /* One guarded statement per answer: no transaction is needed, and a row
@@ -1085,7 +1085,7 @@ Status store_friend_reply(Store *store, UserId me, UserId requester, bool accept
     return sqlite3_changes(store->db) == 1 ? OK : NOT_FOUND;
 }
 
-Status store_friend_list(Store *store, UserId me, FriendRow out[STORE_FRIEND_MAX], size_t *count) {
+Status storeFriendList(Store *store, UserId me, FriendRow out[STORE_FRIEND_MAX], size_t *count) {
     if (!store || !out || !count) return BAD_REQUEST;
 
     sqlite3_stmt *stmt = store->friendListStmt;
@@ -1178,11 +1178,11 @@ static Status readProfileHistory(Store *store, UserId id, Profile *out) {
     return resultCode == SQLITE_DONE || resultCode == SQLITE_ROW ? OK : STORAGE_ERROR;
 }
 
-Status store_profile_get(Store *store, UserId id, Profile *out) {
+Status storeProfileGet(Store *store, UserId id, Profile *out) {
     if (!store || !out) return BAD_REQUEST;
 
     Account account;
-    Status status = store_account_get_by_id(store, id, &account);
+    Status status = storeAccountGetById(store, id, &account);
     if (status != OK) return status;
 
     /* Copy only the public fields: email and hash stay in the local Account. */
@@ -1192,7 +1192,7 @@ Status store_profile_get(Store *store, UserId id, Profile *out) {
     snprintf(out->avatar, sizeof out->avatar, "%s", account.avatar);
     out->elo = account.elo;
 
-    status = store_profile_stats(store, id, &out->stats);
+    status = storeProfileStats(store, id, &out->stats);
     /* Every account gets a profile_stats row at creation or v2 migration;
      * a missing one just means nothing has been recorded yet. */
     if (status == NOT_FOUND) status = OK;
@@ -1202,7 +1202,7 @@ Status store_profile_get(Store *store, UserId id, Profile *out) {
     return status;
 }
 
-Status store_profile_update(Store *store, UserId id, const char *name, const char *avatar) {
+Status storeProfileUpdate(Store *store, UserId id, const char *name, const char *avatar) {
     if (!store || !name || !avatar) return BAD_REQUEST;
 
     sqlite3_stmt *stmt = store->profileUpdateStmt;
@@ -1217,7 +1217,7 @@ Status store_profile_update(Store *store, UserId id, const char *name, const cha
     return sqlite3_changes(store->db) == 1 ? OK : NOT_FOUND;
 }
 
-Status store_export_match(Store *store, const MatchId *matchId, const char *path) {
+Status storeExportMatch(Store *store, const MatchId *matchId, const char *path) {
     if (!store || !matchId || !path) return BAD_REQUEST;
     const char *matchIdText = (const char *)matchId;
 
@@ -1346,7 +1346,7 @@ Status store_export_match(Store *store, const MatchId *matchId, const char *path
     return OK;
 }
 
-Status store_account_create(Store *store, const AccountCreate *newAccount, UserId *outId) {
+Status storeAccountCreate(Store *store, const AccountCreate *newAccount, UserId *outId) {
     if (!store || !newAccount || !outId) return BAD_REQUEST;
 
     /* The account row and its profile_stats row must be created together:
@@ -1397,7 +1397,7 @@ Status store_account_create(Store *store, const AccountCreate *newAccount, UserI
     return OK;
 }
 
-Status store_account_get(Store *store, const char *email, Account *out) {
+Status storeAccountGet(Store *store, const char *email, Account *out) {
     if (!store || !email || !out) return BAD_REQUEST;
 
     sqlite3_reset(store->accountSelectByEmailStmt);
@@ -1433,7 +1433,7 @@ Status store_account_get(Store *store, const char *email, Account *out) {
     return STORAGE_ERROR;
 }
 
-Status store_account_get_by_id(Store *store, UserId id, Account *out) {
+Status storeAccountGetById(Store *store, UserId id, Account *out) {
     if (!store || !out) return BAD_REQUEST;
 
     sqlite3_reset(store->accountSelectByIdStmt);
@@ -1468,7 +1468,7 @@ Status store_account_get_by_id(Store *store, UserId id, Account *out) {
     return STORAGE_ERROR;
 }
 
-Status store_profile_stats(Store *store, UserId userId, ProfileStats *out) {
+Status storeProfileStats(Store *store, UserId userId, ProfileStats *out) {
     if (!store || !out) return BAD_REQUEST;
 
     sqlite3_reset(store->profileStatsSelectStmt);

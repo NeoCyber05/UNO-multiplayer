@@ -13,29 +13,29 @@ typedef void (*BridgeDoneCallback)(void *context);
 typedef void (*BridgeDisconnectCallback)(void *context);
 
 /** @brief Directory served under uno://app/; ignored when NULL or empty (copied). */
-void bridge_set_assets_dir(const char *assetsDir);
+void bridgeSetAssetsDir(const char *assetsDir);
 
 /** @brief Current asset directory; "./client/dist" until set. */
-const char *bridge_get_assets_dir(void);
+const char *bridgeGetAssetsDir(void);
 
 /**
  * @brief Set who handles a SPIKE_DONE message (desktop smoke test).
  * @param[in] callback Callback, or NULL to quit the GTK main loop instead.
  * @param[in] context Passed to @p callback unchanged.
  */
-void bridge_set_done_callback(BridgeDoneCallback callback, void *context);
+void bridgeSetDoneCallback(BridgeDoneCallback callback, void *context);
 
 /**
  * @brief Set who is told when sending a JS request broke the connection.
  *
- * Called from bridge_dispatch after client_send fails and the client can no
+ * Called from bridgeDispatch after clientSend fails and the client can no
  * longer be used (peer gone, write error, output buffer overflow), so the
  * host can tear down and reconnect at once. The callback may close and free
  * the client. A frame that merely fails to encode does not trigger it.
  * @param[in] callback Callback, or NULL to disable.
  * @param[in] context Passed to @p callback unchanged.
  */
-void bridge_set_disconnect_callback(BridgeDisconnectCallback callback, void *context);
+void bridgeSetDisconnectCallback(BridgeDisconnectCallback callback, void *context);
 
 /**
  * @brief Register the uno:// scheme and the "uno" script message handler.
@@ -54,13 +54,13 @@ void bridge_set_disconnect_callback(BridgeDisconnectCallback callback, void *con
  *            (the variable may be NULL while disconnected).
  * @return OK when registered; BAD_REQUEST when an argument is NULL.
  */
-Status bridge_init(WebKitWebView *webView, NetSession *session, Client **clientSlot);
+Status bridgeInit(WebKitWebView *webView, NetSession *session, Client **clientSlot);
 
 /**
  * @brief Validate one JS message and send it to the server.
  *
- * The JS id is replaced by a per-connection wire id from ns_outgoing; the
- * response is mapped back by ns_incoming. SPIKE_DONE (smoke test) is handled
+ * The JS id is replaced by a per-connection wire id from nsOutgoing; the
+ * response is mapped back by nsIncoming. SPIKE_DONE (smoke test) is handled
  * locally and never sent. RESUME is not accepted from JS.
  * @param[in,out] session Session that allocates the wire id.
  * @param[in] client Connection to send on; NULL skips sending (tests).
@@ -72,15 +72,15 @@ Status bridge_init(WebKitWebView *webView, NetSession *session, Client **clientS
  *         BAD_REQUEST when the message is malformed, its type is not allowed
  *         from JS, its id is not positive, or @p session is NULL;
  *         BUSY when the session is not connected (or resuming) or has no free
- *         request slot; any other Status is a send failure from client_send
+ *         request slot; any other Status is a send failure from clientSend
  *         (if it broke the link, the disconnect callback has already run and
  *         @p client may have been freed).
  */
-Status bridge_dispatch(NetSession *session, Client *client, const char *jsonText, size_t length,
+Status bridgeDispatch(NetSession *session, Client *client, const char *jsonText, size_t length,
                        int32_t *outJsId);
 
-/** @brief Deliver @p envelope to JS as a "uno:message" event; see bridge_format_emit_script. */
-void bridge_emit(WebKitWebView *webView, const Envelope *envelope);
+/** @brief Deliver @p envelope to JS as a "uno:message" event; see bridgeFormatEmitScript. */
+void bridgeEmit(WebKitWebView *webView, const Envelope *envelope);
 
 /**
  * @brief Build the JS that dispatches @p envelope as a "uno:message" event.
@@ -90,7 +90,7 @@ void bridge_emit(WebKitWebView *webView, const Envelope *envelope);
  *
  * @return A g_malloc'd script the caller frees with g_free, or NULL.
  */
-char *bridge_format_emit_script(const Envelope *envelope);
+char *bridgeFormatEmitScript(const Envelope *envelope);
 
 /**
  * @brief Map a uno:// URI to a file below @p assetsDir.
@@ -102,16 +102,16 @@ char *bridge_format_emit_script(const Envelope *envelope);
  * @param[out] outPath Buffer of @p maxLength bytes for "<assetsDir>/<path>".
  * @return OK, or BAD_REQUEST for a rejected URI or a path that does not fit.
  */
-Status bridge_resolve_path(const char *assetsDir, const char *uri, char *outPath, size_t maxLength);
+Status bridgeResolvePath(const char *assetsDir, const char *uri, char *outPath, size_t maxLength);
 
 /** @brief Content type for a file name by extension; application/octet-stream if unknown. */
-const char *bridge_mime_type(const char *path);
+const char *bridgeMimeType(const char *path);
 
 /**
  * @brief Serve uno:// from the asset directory; safe to call more than once.
  * @param[in] context Web context, or NULL for the default one.
- * @param[in] assetsDir Unused; the directory is read through bridge_get_assets_dir.
+ * @param[in] assetsDir Unused; the directory is read through bridgeGetAssetsDir.
  */
-void bridge_register_uri_scheme(WebKitWebContext *context, const char *assetsDir);
+void bridgeRegisterUriScheme(WebKitWebContext *context, const char *assetsDir);
 
 #endif

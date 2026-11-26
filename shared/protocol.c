@@ -136,11 +136,11 @@ static Status decode(const uint8_t *body, size_t length, FrameCallback onFrame, 
     return status;
 }
 
-void frame_reader_reset(FrameReader *reader) {
+void frameReaderReset(FrameReader *reader) {
     reader->used = 0;
 }
 
-Status frame_feed(FrameReader *reader, const uint8_t *data, size_t length, FrameCallback onFrame,
+Status frameFeed(FrameReader *reader, const uint8_t *data, size_t length, FrameCallback onFrame,
                   void *context) {
     if (!reader || (!data && length) || !onFrame) return BAD_REQUEST;
     while (length) {
@@ -174,7 +174,7 @@ Status frame_feed(FrameReader *reader, const uint8_t *data, size_t length, Frame
     return OK;
 }
 
-Status frame_encode(const Envelope *envelope, uint8_t *out, size_t capacity, size_t *written) {
+Status frameEncode(const Envelope *envelope, uint8_t *out, size_t capacity, size_t *written) {
     if (!written) return BAD_REQUEST;
     *written = 0;
     if (!envelope || !out || capacity < LENGTH_PREFIX_SIZE || envelope->v != 1 ||
@@ -230,7 +230,7 @@ static const char *const STATUS_NAMES[] = {
 _Static_assert(sizeof STATUS_NAMES / sizeof STATUS_NAMES[0] == SERVER_FULL + 1,
                "STATUS_NAMES must list every Status in enum order");
 
-const char *status_code(Status status) {
+const char *statusCode(Status status) {
     size_t statusCount = sizeof STATUS_NAMES / sizeof STATUS_NAMES[0];
     if ((size_t)status >= statusCount) return "BAD_REQUEST";
     return STATUS_NAMES[status];

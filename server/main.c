@@ -38,5 +38,5 @@ int main(int argc, char **argv) {
         }
     }
 
-    return app_run(bindIp, port, dbPath, authLimit, heartbeatMs);
+    return appRun(bindIp, port, dbPath, authLimit, heartbeatMs);
 }

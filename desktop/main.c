@@ -59,7 +59,7 @@ static gint64 monotonicNowMs(void) {
 
 static void emitConnectionState(json_object *payload) {
     Envelope event = {1, 0, "CONNECTION_STATE", payload};
-    bridge_emit(gWebView, &event);
+    bridgeEmit(gWebView, &event);
 }
 
 static void emitStatus(const char *status) {
@@ -83,7 +83,7 @@ static void updateSocketWatch(void) {
     GIOCondition cond = G_IO_IN | G_IO_HUP | G_IO_ERR;
     /* Only wait for writability while a partial send is pending, otherwise
      * the always-writable socket would spin the main loop. */
-    if (gClient->conn.out_len > gClient->conn.out_pos) {
+    if (gClient->conn.outLen > gClient->conn.outPos) {
         cond |= G_IO_OUT;
     }
     gIoWatchId = g_io_add_watch(gIoChannel, cond, onSocketIo, NULL);
@@ -110,7 +110,7 @@ static gboolean onReconnectTimer(gpointer data);
 
 static void scheduleReconnect(void) {
     if (gQuitting || gReconnectTimerId != NO_SOURCE || gConnectFd >= 0) return;
-    uint32_t delayMs = ns_next_backoff_ms(gSession);
+    uint32_t delayMs = nsNextBackoffMs(gSession);
     fprintf(stderr, "desktop: reconnecting to %s:%u in %u ms\n", gHost, gPort, delayMs);
     gReconnectTimerId = g_timeout_add(delayMs, onReconnectTimer, NULL);
 }
@@ -121,9 +121,9 @@ static void handleDisconnect(const char *reason) {
     if (!gClient) return;
     fprintf(stderr, "desktop: connection lost (%s)\n", reason);
     stopSocketWatch();
-    client_close(gClient);
+    clientClose(gClient);
     gClient = NULL;
-    ns_on_disconnected(gSession);
+    nsOnDisconnected(gSession);
     emitStatus("reconnecting");
     scheduleReconnect();
 }
@@ -133,17 +133,17 @@ static Status sendNative(int32_t wireId, const char *type, json_object *payload)
     json_object *body = payload ? json_object_get(payload) : json_object_new_object();
     if (body == NULL) return BUSY;
     Envelope request = {1, wireId, type, body};
-    Status status = client_send(gClient, &request);
+    Status status = clientSend(gClient, &request);
     json_object_put(body);
     return status;
 }
 
 static Status sendResume(void) {
-    int32_t wireId = ns_internal(gSession, "RESUME");
+    int32_t wireId = nsInternal(gSession, "RESUME");
     if (wireId == 0) return BUSY;
     json_object *payload = json_object_new_object();
     if (payload == NULL) return BUSY;
-    json_object_object_add(payload, "token", json_object_new_string(ns_token(gSession)));
+    json_object_object_add(payload, "token", json_object_new_string(nsToken(gSession)));
     Status status = sendNative(wireId, "RESUME", payload);
     json_object_put(payload);
     return status;
@@ -155,7 +155,7 @@ static Status onClientFrame(const Envelope *envelope, void *context) {
 
     int32_t jsId = 0;
     json_object *connState = NULL;
-    NsVerdict verdict = ns_incoming(gSession, envelope, &jsId, &connState);
+    NsVerdict verdict = nsIncoming(gSession, envelope, &jsId, &connState);
     if (connState != NULL) {
         bool expired = json_object_object_get(connState, "sessionExpired") != NULL;
         fprintf(stderr, "desktop: %s\n", expired ? "session expired" : "session resumed");
@@ -166,7 +166,7 @@ static Status onClientFrame(const Envelope *envelope, void *context) {
     if (verdict == NS_FORWARD) {
         Envelope forwarded = *envelope;
         forwarded.id = jsId;
-        bridge_emit(gWebView, &forwarded);
+        bridgeEmit(gWebView, &forwarded);
     }
     return OK;
 }
@@ -179,7 +179,7 @@ static gboolean onSocketIo(GIOChannel *source, GIOCondition condition, gpointer 
     /* Read before checking HUP so frames sent just before a close still
      * reach JS; a closed peer then shows up as a read failure. */
     if (condition & G_IO_IN) {
-        if (client_read(gClient, onClientFrame, NULL) != OK) {
+        if (clientRead(gClient, onClientFrame, NULL) != OK) {
             handleDisconnect("closed by peer or read error");
             return G_SOURCE_REMOVE;
         }
@@ -191,11 +191,11 @@ static gboolean onSocketIo(GIOChannel *source, GIOCondition condition, gpointer 
     }
 
     if (condition & G_IO_OUT) {
-        if (conn_flush(&gClient->conn) != OK) {
+        if (connFlush(&gClient->conn) != OK) {
             handleDisconnect("write error");
             return G_SOURCE_REMOVE;
         }
-        if (gClient->conn.out_len == gClient->conn.out_pos) {
+        if (gClient->conn.outLen == gClient->conn.outPos) {
             /* Re-arm without G_IO_OUT; this source is replaced. */
             updateSocketWatch();
             return G_SOURCE_REMOVE;
@@ -210,11 +210,11 @@ static void connectFailed(const char *reason);
 /* Take ownership of a connected client: watch it and start the session
  * (RESUME in flight when a token is held, otherwise "connected"). */
 static void attachClient(Client *client) {
-    GIOChannel *channel = g_io_channel_unix_new(client_fd(client));
+    GIOChannel *channel = g_io_channel_unix_new(clientFd(client));
     /* Raw bytes, unbuffered: framing is done by Conn, not by GIOChannel. */
     if (g_io_channel_set_encoding(channel, NULL, NULL) != G_IO_STATUS_NORMAL) {
         g_io_channel_unref(channel);
-        client_close(client);
+        clientClose(client);
         connectFailed("socket channel setup failed");
         return;
     }
@@ -222,13 +222,13 @@ static void attachClient(Client *client) {
 
     gClient = client;
     gIoChannel = channel;
-    client_set_pending_callback(gClient, onClientPendingWrite, NULL);
+    clientSetPendingCallback(gClient, onClientPendingWrite, NULL);
     updateSocketWatch();
     gLastReceiveMs = monotonicNowMs();
-    ns_on_connected(gSession);
+    nsOnConnected(gSession);
     fprintf(stderr, "desktop: connected to %s:%u\n", gHost, gPort);
 
-    if (ns_state(gSession) == NS_RESUMING) {
+    if (nsState(gSession) == NS_RESUMING) {
         /* JS stays in "reconnecting" until the RESUME answer arrives. */
         if (sendResume() != OK) {
             handleDisconnect("RESUME send failed");
@@ -260,7 +260,7 @@ static int detachConnectAttempt(void) {
 }
 
 static void cancelConnectAttempt(void) {
-    client_connect_abort(detachConnectAttempt());
+    clientConnectAbort(detachConnectAttempt());
 }
 
 static void connectFailed(const char *reason) {
@@ -274,7 +274,7 @@ static void connectFailed(const char *reason) {
 
 static void finishConnect(int connectionSocket) {
     Client *client = NULL;
-    if (client_connect_finish(connectionSocket, &client) != OK) {
+    if (clientConnectFinish(connectionSocket, &client) != OK) {
         connectFailed("refused or unreachable");
         return;
     }
@@ -307,7 +307,7 @@ static void startConnectAttempt(void) {
 
     int connectionSocket = -1;
     bool inProgress = false;
-    if (client_connect_start(&gAddress, &connectionSocket, &inProgress) != OK) {
+    if (clientConnectStart(&gAddress, &connectionSocket, &inProgress) != OK) {
         connectFailed("connect error");
         return;
     }
@@ -340,7 +340,7 @@ static gboolean onHeartbeat(gpointer data) {
         handleDisconnect("heartbeat timeout");
         return G_SOURCE_CONTINUE;
     }
-    int32_t wireId = ns_internal(gSession, "PING");
+    int32_t wireId = nsInternal(gSession, "PING");
     if (wireId == 0) {
         /* No free slot means replies are not coming; the timeout above
          * will catch that, so there is nothing to send now. */
@@ -458,10 +458,10 @@ static void shutdownNetwork(void) {
         gReconnectTimerId = NO_SOURCE;
     }
     if (gClient) {
-        client_close(gClient);
+        clientClose(gClient);
         gClient = NULL;
     }
-    ns_destroy(gSession);
+    nsDestroy(gSession);
     gSession = NULL;
 }
 
@@ -485,21 +485,21 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    bridge_set_assets_dir(assets);
-    bridge_set_done_callback(onSpikeDone, NULL);
-    bridge_set_disconnect_callback(onBridgeDisconnect, NULL);
+    bridgeSetAssetsDir(assets);
+    bridgeSetDoneCallback(onSpikeDone, NULL);
+    bridgeSetDisconnectCallback(onBridgeDisconnect, NULL);
 
     /* The host is fixed for the process lifetime, so resolve it once here,
      * before any window exists; an IP needs no DNS at all. A name that does
      * not resolve is a configuration error, not a network outage. */
-    if (client_resolve(gHost, gPort, &gAddress) != OK) {
+    if (clientResolve(gHost, gPort, &gAddress) != OK) {
         fprintf(stderr, "desktop: cannot resolve %s:%u\n", gHost, gPort);
         return 1;
     }
 
     gtk_init(&argc, &argv);
 
-    gSession = ns_create();
+    gSession = nsCreate();
     if (!gSession) {
         fprintf(stderr, "desktop: out of memory\n");
         return 1;
@@ -516,9 +516,9 @@ int main(int argc, char *argv[]) {
     g_signal_connect(gWebView, "load-changed", G_CALLBACK(on_load_changed), NULL);
     gtk_container_add(GTK_CONTAINER(window), view_widget);
 
-    if (bridge_init(gWebView, gSession, &gClient) != OK) {
+    if (bridgeInit(gWebView, gSession, &gClient) != OK) {
         fprintf(stderr, "desktop: failed to initialize bridge\n");
-        ns_destroy(gSession);
+        nsDestroy(gSession);
         return 1;
     }
 

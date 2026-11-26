@@ -18,7 +18,7 @@ typedef enum { PRESENCE_OFFLINE, PRESENCE_IDLE, PRESENCE_ONLINE, PRESENCE_IN_MAT
  *         matchesContains holds a seat; PRESENCE_ONLINE in a room, the queue or a
  *         party; PRESENCE_IDLE otherwise.
  */
-Presence social_presence_of(App *app, UserId user);
+Presence socialPresenceOf(App *app, UserId user);
 
 /**
  * @brief Return the wire key of a presence value.
@@ -26,19 +26,19 @@ Presence social_presence_of(App *app, UserId user);
  * @return Static "offline", "idle", "online" or "in_match"; "offline" for an
  *         out-of-range value.
  */
-const char *social_presence_key(Presence presence);
+const char *socialPresenceKey(Presence presence);
 
 /**
  * @brief Parse a public friend tag of the exact form "UNO#<id>".
  *
- * Only the canonical text accounts_format_tag produces is accepted: no
+ * Only the canonical text accountsFormatTag produces is accepted: no
  * whitespace, sign, leading zero, zero id or value above INT64_MAX (SQLite ids
  * are signed 64-bit).
  * @param[in] tag Text from the client.
  * @param[out] outUserId Receives the id on success; untouched on failure.
  * @return true when tag is valid, false otherwise (including NULL arguments).
  */
-bool social_parse_tag(const char *tag, UserId *outUserId);
+bool socialParseTag(const char *tag, UserId *outUserId);
 
 /**
  * @brief Handle FRIEND_LIST, FRIEND_REQUEST, FRIEND_REPLY, PROFILE_GET,
@@ -50,7 +50,7 @@ bool social_parse_tag(const char *tag, UserId *outUserId);
  *         UNAUTHENTICATED, BAD_REQUEST, FORBIDDEN, NOT_FOUND, INVALID_ACTION,
  *         STORAGE_ERROR), BAD_REQUEST if the arguments are NULL.
  */
-Status social_handle(App *app, ConnId conn, const Envelope *envelope);
+Status socialHandle(App *app, ConnId conn, const Envelope *envelope);
 
 /**
  * @brief Push a fresh FRIEND_STATE to a user and to each accepted friend online.
@@ -60,6 +60,6 @@ Status social_handle(App *app, ConnId conn, const Envelope *envelope);
  * @param[in,out] app Server state owned by the poll loop.
  * @param[in] user Account whose presence or identity changed.
  */
-void social_presence(App *app, UserId user);
+void socialPresence(App *app, UserId user);
 
 #endif

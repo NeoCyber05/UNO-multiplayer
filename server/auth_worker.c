@@ -55,8 +55,8 @@ static void *authWorkerThread(void *argument) {
 
         AuthResult result;
         memset(&result, 0, sizeof(result));
-        result.conn_id = job.conn_id;
-        result.req_id = job.req_id;
+        result.connId = job.connId;
+        result.reqId = job.reqId;
         result.kind = job.kind;
 
         if (job.kind == AUTH_REGISTER) {
@@ -72,7 +72,7 @@ static void *authWorkerThread(void *argument) {
                 result.account.elo = INITIAL_ELO;
             }
         } else if (job.kind == AUTH_LOGIN) {
-            if (!job.user_exists) {
+            if (!job.userExists) {
                 /* An unknown email still pays for one verify, so response time
                  * does not reveal which emails are registered. volatile keeps
                  * the compiler from dropping the unused call. */
@@ -86,11 +86,11 @@ static void *authWorkerThread(void *argument) {
             } else {
                 if (crypto_pwhash_str_verify(job.hash, job.password, strlen(job.password)) == 0) {
                     result.status = OK;
-                    result.user_id = job.account.id;
+                    result.userId = job.account.id;
                     result.account = job.account;
 
                     /* Generate secure 32-byte token and hex encode */
-                    accounts_generate_token(result.token);
+                    accountsGenerateToken(result.token);
                 } else {
                     result.status = UNAUTHENTICATED;
                 }
@@ -101,7 +101,7 @@ static void *authWorkerThread(void *argument) {
         sodium_memzero(job.password, sizeof(job.password));
 
         /* Hand the result to the poll thread. One record is below PIPE_BUF, so
-         * the write is atomic and auth_drain always reads whole records.
+         * the write is atomic and authDrain always reads whole records.
          * FIXME: on a full non-blocking pipe (EAGAIN) the result is dropped and
          * the client never gets a reply. Retry after poll(POLLOUT) on the pipe. */
         const uint8_t *resultBytes = (const uint8_t *)&result;
@@ -120,7 +120,7 @@ static void *authWorkerThread(void *argument) {
     return NULL;
 }
 
-Status auth_worker_init(AuthWorker **outWorker, int notifyPipeFd) {
+Status authWorkerInit(AuthWorker **outWorker, int notifyPipeFd) {
     if (!outWorker || notifyPipeFd < 0) return BAD_REQUEST;
 
     if (sodium_init() < 0) {
@@ -165,7 +165,7 @@ Status auth_worker_init(AuthWorker **outWorker, int notifyPipeFd) {
     return OK;
 }
 
-Status auth_submit(AuthWorker *worker, const AuthJob *job) {
+Status authSubmit(AuthWorker *worker, const AuthJob *job) {
     if (!worker || !job) return BAD_REQUEST;
 
     pthread_mutex_lock(&worker->lock);
@@ -189,7 +189,7 @@ Status auth_submit(AuthWorker *worker, const AuthJob *job) {
     return OK;
 }
 
-void auth_worker_destroy(AuthWorker *worker) {
+void authWorkerDestroy(AuthWorker *worker) {
     if (!worker) return;
 
     pthread_mutex_lock(&worker->lock);

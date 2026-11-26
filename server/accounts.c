@@ -43,7 +43,7 @@ struct RateLimiter {
     IpRateEntry entries[MAX_RATE_LIMIT_IPS];
 };
 
-uint64_t accounts_get_now_ms(void) {
+uint64_t accountsGetNowMs(void) {
     struct timespec monotonicTime;
     clock_gettime(CLOCK_MONOTONIC, &monotonicTime);
     /* Offset by 100 days so every real timestamp sits far above 0, the value
@@ -55,12 +55,12 @@ uint64_t accounts_get_now_ms(void) {
 }
 
 static uint64_t monotonicNowMs(void) {
-    return accounts_get_now_ms();
+    return accountsGetNowMs();
 }
 
 /* -------------------- Validation Functions -------------------- */
 
-bool accounts_validate_email(const char *email) {
+bool accountsValidateEmail(const char *email) {
     if (!email) return false;
     size_t length = strlen(email);
     if (length < EMAIL_MIN_LENGTH || length > EMAIL_MAX_LENGTH) return false;
@@ -86,13 +86,13 @@ bool accounts_validate_email(const char *email) {
     return true;
 }
 
-bool accounts_validate_password(const char *password) {
+bool accountsValidatePassword(const char *password) {
     if (!password) return false;
     size_t length = strlen(password);
     return length >= PASSWORD_MIN_LENGTH && length <= PASSWORD_MAX_LENGTH;
 }
 
-bool accounts_validate_name(const char *name) {
+bool accountsValidateName(const char *name) {
     if (!name) return false;
     size_t byteLength = strlen(name);
     if (byteLength < 1 || byteLength > NAME_MAX_BYTES) return false;
@@ -142,7 +142,7 @@ bool accounts_validate_name(const char *name) {
     return codePointCount >= 1 && codePointCount <= NAME_MAX_CODE_POINTS;
 }
 
-bool accounts_validate_avatar(const char *avatar) {
+bool accountsValidateAvatar(const char *avatar) {
     if (!avatar || avatar[0] == '\0') return false;
 
     static const char *const WHITELIST[] = {
@@ -162,13 +162,13 @@ bool accounts_validate_avatar(const char *avatar) {
 
 /* -------------------- Token & Tag Helpers -------------------- */
 
-void accounts_generate_token(char outToken[65]) {
+void accountsGenerateToken(char outToken[65]) {
     unsigned char bytes[32];
     randombytes_buf(bytes, sizeof(bytes));
     sodium_bin2hex(outToken, 65, bytes, sizeof(bytes));
 }
 
-void accounts_format_tag(UserId userId, char outTag[32]) {
+void accountsFormatTag(UserId userId, char outTag[32]) {
     snprintf(outTag, 32, "UNO#%llu", (unsigned long long)userId);
 }
 
@@ -185,22 +185,22 @@ static void sendAccountError(App *app, uint32_t slotIndex, int32_t requestId, co
     json_object_object_add(payload, "message", json_object_new_string(message));
 
     Envelope response = {1, requestId, "ERROR", payload};
-    conn_queue(&slot->conn, &response);
+    connQueue(&slot->conn, &response);
     json_object_put(payload);
-    conn_flush(&slot->conn);
+    connFlush(&slot->conn);
 }
 
 /* -------------------- Sessions Lifecycle -------------------- */
 
-Status sessions_init(App *app) {
+Status sessionsInit(App *app) {
     if (!app) return BAD_REQUEST;
     if (!app->sessions) {
         app->sessions = calloc(1, sizeof(Sessions));
         if (!app->sessions) return STORAGE_ERROR;
     }
-    if (!app->rate_limiter) {
-        app->rate_limiter = calloc(1, sizeof(RateLimiter));
-        if (!app->rate_limiter) {
+    if (!app->rateLimiter) {
+        app->rateLimiter = calloc(1, sizeof(RateLimiter));
+        if (!app->rateLimiter) {
             free(app->sessions);
             app->sessions = NULL;
             return STORAGE_ERROR;
@@ -209,19 +209,19 @@ Status sessions_init(App *app) {
     return OK;
 }
 
-void sessions_cleanup(App *app) {
+void sessionsCleanup(App *app) {
     if (!app) return;
     if (app->sessions) {
         free(app->sessions);
         app->sessions = NULL;
     }
-    if (app->rate_limiter) {
-        free(app->rate_limiter);
-        app->rate_limiter = NULL;
+    if (app->rateLimiter) {
+        free(app->rateLimiter);
+        app->rateLimiter = NULL;
     }
 }
 
-Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token) {
+Status sessionsBind(App *app, ConnId connId, UserId userId, const char *token) {
     if (!app || !app->sessions || !token) return BAD_REQUEST;
 
     uint64_t now = monotonicNowMs();
@@ -232,11 +232,11 @@ Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token) 
     SessionEntry *freeEntry = NULL;
 
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (sessions->entries[i].in_use && sessions->entries[i].user_id == userId) {
+        if (sessions->entries[i].inUse && sessions->entries[i].userId == userId) {
             existingEntry = &sessions->entries[i];
             break;
         }
-        if (!sessions->entries[i].in_use && !freeEntry) {
+        if (!sessions->entries[i].inUse && !freeEntry) {
             freeEntry = &sessions->entries[i];
         }
     }
@@ -246,8 +246,8 @@ Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token) 
         /* Evict oldest unused or disconnected entry */
         uint64_t oldest = UINT64_MAX;
         for (size_t i = 0; i < MAX_SESSIONS; i++) {
-            if (!sessions->entries[i].connected && sessions->entries[i].created_at_ms < oldest) {
-                oldest = sessions->entries[i].created_at_ms;
+            if (!sessions->entries[i].connected && sessions->entries[i].createdAtMs < oldest) {
+                oldest = sessions->entries[i].createdAtMs;
                 entry = &sessions->entries[i];
             }
         }
@@ -255,17 +255,17 @@ Status sessions_bind(App *app, ConnId connId, UserId userId, const char *token) 
 
     if (!entry) return BUSY;
 
-    entry->in_use = true;
-    entry->user_id = userId;
+    entry->inUse = true;
+    entry->userId = userId;
     strncpy(entry->token, token, sizeof(entry->token) - 1);
-    entry->conn_id = connId;
+    entry->connId = connId;
     entry->connected = true;
-    entry->created_at_ms = now;
+    entry->createdAtMs = now;
 
     return OK;
 }
 
-Status sessions_user(App *app, ConnId connId, UserId *outUserId) {
+Status sessionsUser(App *app, ConnId connId, UserId *outUserId) {
     if (!app || !app->sessions || !outUserId) return BAD_REQUEST;
     if (connId.slot >= APP_MAX_CONNS) return UNAUTHENTICATED;
 
@@ -276,10 +276,10 @@ Status sessions_user(App *app, ConnId connId, UserId *outUserId) {
 
     Sessions *sessions = app->sessions;
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (sessions->entries[i].in_use && sessions->entries[i].connected &&
-            sessions->entries[i].conn_id.slot == connId.slot &&
-            sessions->entries[i].conn_id.generation == connId.generation) {
-            *outUserId = sessions->entries[i].user_id;
+        if (sessions->entries[i].inUse && sessions->entries[i].connected &&
+            sessions->entries[i].connId.slot == connId.slot &&
+            sessions->entries[i].connId.generation == connId.generation) {
+            *outUserId = sessions->entries[i].userId;
             return OK;
         }
     }
@@ -287,13 +287,13 @@ Status sessions_user(App *app, ConnId connId, UserId *outUserId) {
     return UNAUTHENTICATED;
 }
 
-Status sessions_find_conn(App *app, UserId userId, ConnId *outConn) {
+Status sessionsFindConn(App *app, UserId userId, ConnId *outConn) {
     if (!app || !app->sessions || !outConn) return BAD_REQUEST;
     Sessions *sessions = app->sessions;
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         const SessionEntry *entry = &sessions->entries[i];
-        if (entry->in_use && entry->connected && entry->user_id == userId) {
-            *outConn = entry->conn_id;
+        if (entry->inUse && entry->connected && entry->userId == userId) {
+            *outConn = entry->connId;
             return OK;
         }
     }
@@ -311,9 +311,9 @@ static SessionEntry *findLiveToken(Sessions *sessions, const char *token) {
     if (!token || strlen(token) != TOKEN_HEX_LENGTH) return NULL;
     for (size_t index = 0; index < MAX_SESSIONS; index++) {
         SessionEntry *entry = &sessions->entries[index];
-        if (!entry->in_use || strcmp(entry->token, token) != 0) continue;
+        if (!entry->inUse || strcmp(entry->token, token) != 0) continue;
         uint64_t now = monotonicNowMs();
-        if (now > entry->created_at_ms && now - entry->created_at_ms > SESSION_TTL_MS) {
+        if (now > entry->createdAtMs && now - entry->createdAtMs > SESSION_TTL_MS) {
             memset(entry, 0, sizeof(*entry));
             return NULL;
         }
@@ -322,7 +322,7 @@ static SessionEntry *findLiveToken(Sessions *sessions, const char *token) {
     return NULL;
 }
 
-Status sessions_resume(App *app, ConnId connId, const char *token) {
+Status sessionsResume(App *app, ConnId connId, const char *token) {
     if (!app || !app->sessions || !token) return BAD_REQUEST;
     if (connId.slot >= APP_MAX_CONNS) return UNAUTHENTICATED;
 
@@ -334,7 +334,7 @@ Status sessions_resume(App *app, ConnId connId, const char *token) {
     SessionEntry *entry = findLiveToken(app->sessions, token);
     if (!entry) return UNAUTHENTICATED;
     /* Found matching session. Reassign to new connId */
-    entry->conn_id = connId;
+    entry->connId = connId;
     entry->connected = true;
     return OK;
 }
@@ -345,33 +345,33 @@ Status sessions_resume(App *app, ConnId connId, const char *token) {
  * be cleaned up when it closes. */
 static void releaseOtherAccount(App *app, ConnId conn, UserId incoming) {
     UserId current = 0;
-    if (sessions_user(app, conn, &current) != OK || current == 0) return;
+    if (sessionsUser(app, conn, &current) != OK || current == 0) return;
     if (current == incoming) return;
-    app_user_leave(app, conn, current);
-    sessions_logout(app, conn);
+    appUserLeave(app, conn, current);
+    sessionsLogout(app, conn);
 }
 
-void sessions_disconnect(App *app, ConnId connId) {
+void sessionsDisconnect(App *app, ConnId connId) {
     if (!app || !app->sessions) return;
 
     Sessions *sessions = app->sessions;
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (sessions->entries[i].in_use &&
-            sessions->entries[i].conn_id.slot == connId.slot &&
-            sessions->entries[i].conn_id.generation == connId.generation) {
+        if (sessions->entries[i].inUse &&
+            sessions->entries[i].connId.slot == connId.slot &&
+            sessions->entries[i].connId.generation == connId.generation) {
             sessions->entries[i].connected = false;
         }
     }
 }
 
-void sessions_logout(App *app, ConnId connId) {
+void sessionsLogout(App *app, ConnId connId) {
     if (!app || !app->sessions) return;
 
     Sessions *sessions = app->sessions;
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (sessions->entries[i].in_use &&
-            sessions->entries[i].conn_id.slot == connId.slot &&
-            sessions->entries[i].conn_id.generation == connId.generation) {
+        if (sessions->entries[i].inUse &&
+            sessions->entries[i].connId.slot == connId.slot &&
+            sessions->entries[i].connId.generation == connId.generation) {
             memset(&sessions->entries[i], 0, sizeof(sessions->entries[i]));
         }
     }
@@ -379,12 +379,12 @@ void sessions_logout(App *app, ConnId connId) {
 
 /* -------------------- Rate Limiter -------------------- */
 
-bool accounts_rate_limit_check(App *app, const char *ip) {
-    if (!app || !app->rate_limiter || !ip || ip[0] == '\0') return true;
-    if (app->auth_limit <= 0) return true;
+bool accountsRateLimitCheck(App *app, const char *ip) {
+    if (!app || !app->rateLimiter || !ip || ip[0] == '\0') return true;
+    if (app->authLimit <= 0) return true;
 
     uint64_t nowMs = monotonicNowMs();
-    RateLimiter *rateLimiter = app->rate_limiter;
+    RateLimiter *rateLimiter = app->rateLimiter;
 
     IpRateEntry *entry = NULL;
     IpRateEntry *freeEntry = NULL;
@@ -424,7 +424,7 @@ bool accounts_rate_limit_check(App *app, const char *ip) {
     }
     entry->count = validCount;
 
-    if (entry->count >= (size_t)app->auth_limit) {
+    if (entry->count >= (size_t)app->authLimit) {
         return false; /* Limit exceeded */
     }
 
@@ -438,7 +438,7 @@ bool accounts_rate_limit_check(App *app, const char *ip) {
 
 /* -------------------- Envelope Handlers -------------------- */
 
-Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
+Status accountsHandle(App *app, ConnId connId, const Envelope *envelope) {
     if (!app || !envelope) return BAD_REQUEST;
     if (connId.slot >= APP_MAX_CONNS) return BAD_REQUEST;
 
@@ -447,10 +447,10 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         return BAD_REQUEST;
     }
 
-    const char *ip = slot->client_ip;
+    const char *ip = slot->clientIp;
 
     if (strcmp(envelope->type, "REGISTER") == 0) {
-        if (!accounts_rate_limit_check(app, ip)) {
+        if (!accountsRateLimitCheck(app, ip)) {
             sendAccountError(app, connId.slot, envelope->id, "RATE_LIMITED", "Rate limit exceeded");
             return OK;
         }
@@ -472,10 +472,10 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         const char *name = json_object_get_string(nameJson);
         const char *avatar = json_object_get_string(avatarJson);
 
-        if (!accounts_validate_email(email) ||
-            !accounts_validate_password(password) ||
-            !accounts_validate_name(name) ||
-            !accounts_validate_avatar(avatar)) {
+        if (!accountsValidateEmail(email) ||
+            !accountsValidatePassword(password) ||
+            !accountsValidateName(name) ||
+            !accountsValidateAvatar(avatar)) {
             sendAccountError(app, connId.slot, envelope->id, "BAD_REQUEST",
                              "Invalid registration input");
             return OK;
@@ -484,14 +484,14 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         AuthJob job;
         memset(&job, 0, sizeof(job));
         job.kind = AUTH_REGISTER;
-        job.conn_id = connId;
-        job.req_id = envelope->id;
+        job.connId = connId;
+        job.reqId = envelope->id;
         strncpy(job.email, email, sizeof(job.email) - 1);
         strncpy(job.password, password, sizeof(job.password) - 1);
         strncpy(job.name, name, sizeof(job.name) - 1);
         strncpy(job.avatar, avatar, sizeof(job.avatar) - 1);
 
-        Status submitted = auth_submit(app->auth_worker, &job);
+        Status submitted = authSubmit(app->authWorker, &job);
         if (submitted != OK) {
             sendAccountError(app, connId.slot, envelope->id, "BUSY", "Server is busy");
         }
@@ -499,7 +499,7 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
     }
 
     if (strcmp(envelope->type, "LOGIN") == 0) {
-        if (!accounts_rate_limit_check(app, ip)) {
+        if (!accountsRateLimitCheck(app, ip)) {
             sendAccountError(app, connId.slot, envelope->id, "RATE_LIMITED", "Rate limit exceeded");
             return OK;
         }
@@ -516,7 +516,7 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         const char *email = json_object_get_string(emailJson);
         const char *password = json_object_get_string(passwordJson);
 
-        if (!accounts_validate_email(email) || !accounts_validate_password(password)) {
+        if (!accountsValidateEmail(email) || !accountsValidatePassword(password)) {
             sendAccountError(app, connId.slot, envelope->id, "BAD_REQUEST",
                              "Invalid login input format");
             return OK;
@@ -525,22 +525,22 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         AuthJob job;
         memset(&job, 0, sizeof(job));
         job.kind = AUTH_LOGIN;
-        job.conn_id = connId;
-        job.req_id = envelope->id;
+        job.connId = connId;
+        job.reqId = envelope->id;
         strncpy(job.email, email, sizeof(job.email) - 1);
         strncpy(job.password, password, sizeof(job.password) - 1);
 
         Account account;
-        Status status = store_account_get(app->store, email, &account);
+        Status status = storeAccountGet(app->store, email, &account);
         if (status == OK) {
-            job.user_exists = true;
+            job.userExists = true;
             strncpy(job.hash, account.hash, sizeof(job.hash) - 1);
             job.account = account;
         } else {
-            job.user_exists = false;
+            job.userExists = false;
         }
 
-        Status submitted = auth_submit(app->auth_worker, &job);
+        Status submitted = authSubmit(app->authWorker, &job);
         if (submitted != OK) {
             sendAccountError(app, connId.slot, envelope->id, "BUSY", "Server is busy");
         }
@@ -559,15 +559,15 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
         /* Look the token up first: an invalid one must not cost the socket
          * the account it already carries. */
         const SessionEntry *target = findLiveToken(app->sessions, token);
-        if (target) releaseOtherAccount(app, connId, target->user_id);
-        Status status = sessions_resume(app, connId, token);
+        if (target) releaseOtherAccount(app, connId, target->userId);
+        Status status = sessionsResume(app, connId, token);
         if (status == OK) {
             UserId userId = 0;
-            sessions_user(app, connId, &userId);
+            sessionsUser(app, connId, &userId);
 
             Account account;
             memset(&account, 0, sizeof(account));
-            store_account_get_by_id(app->store, userId, &account);
+            storeAccountGetById(app->store, userId, &account);
 
             /* The client already holds the token it just sent; echoing it adds
              * nothing and only widens where the secret appears on the wire. */
@@ -576,7 +576,7 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
             struct json_object *me = json_object_new_object();
             char userIdText[32], tagText[32];
             snprintf(userIdText, sizeof(userIdText), "%llu", (unsigned long long)userId);
-            accounts_format_tag(userId, tagText);
+            accountsFormatTag(userId, tagText);
             json_object_object_add(me, "userId", json_object_new_string(userIdText));
             json_object_object_add(me, "tag", json_object_new_string(tagText));
             json_object_object_add(me, "name", json_object_new_string(account.name));
@@ -586,18 +586,18 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
             json_object_object_add(payload, "me", me);
 
             Envelope response = {1, envelope->id, "OK", payload};
-            conn_queue(&slot->conn, &response);
+            connQueue(&slot->conn, &response);
             json_object_put(payload);
-            conn_flush(&slot->conn);
+            connFlush(&slot->conn);
 
             /* After OK so the client sees the session before its GAME_STATE.
              * NOT_FOUND just means the user is not in a match. */
-            (void)matchesConnected(app->matches, userId, true, app_now_ms());
+            (void)matchesConnected(app->matches, userId, true, appNowMs());
             /* Like LOGIN: the session moved to a socket that has seen no
              * room, party or queue snapshot yet. */
-            rooms_sync_user(app, userId);
-            queue_sync_user(app, userId);
-            social_presence(app, userId);
+            roomsSyncUser(app, userId);
+            queueSyncUser(app, userId);
+            socialPresence(app, userId);
         } else {
             sendAccountError(app, connId.slot, envelope->id, "UNAUTHENTICATED",
                              "Invalid or expired token");
@@ -611,29 +611,29 @@ Status accounts_handle(App *app, ConnId connId, const Envelope *envelope) {
          * waiting room at once. This runs while the session still maps
          * conn -> user, so the leaver also gets the closing snapshots and
          * friends see the account offline. */
-        if (sessions_user(app, connId, &userId) == OK && userId != 0) {
-            app_user_leave(app, connId, userId);
+        if (sessionsUser(app, connId, &userId) == OK && userId != 0) {
+            appUserLeave(app, connId, userId);
         }
-        sessions_logout(app, connId);
+        sessionsLogout(app, connId);
         struct json_object *payload = json_object_new_object();
         Envelope response = {1, envelope->id, "OK", payload};
-        conn_queue(&slot->conn, &response);
+        connQueue(&slot->conn, &response);
         json_object_put(payload);
-        conn_flush(&slot->conn);
+        connFlush(&slot->conn);
         return OK;
     }
 
     return BAD_REQUEST;
 }
 
-void auth_drain(App *app) {
-    if (!app || app->auth_pipe_read < 0) return;
+void authDrain(App *app) {
+    if (!app || app->authPipeRead < 0) return;
 
     AuthResult result;
     while (1) {
         /* The worker writes whole AuthResult records, each smaller than
          * PIPE_BUF, so a pipe read never returns half of one. */
-        ssize_t bytesRead = read(app->auth_pipe_read, &result, sizeof(result));
+        ssize_t bytesRead = read(app->authPipeRead, &result, sizeof(result));
         if (bytesRead < 0) {
             if (errno == EINTR) continue;
             /* Pipe is non-blocking: no more finished jobs for now. */
@@ -644,11 +644,11 @@ void auth_drain(App *app) {
         if (bytesRead < (ssize_t)sizeof(result)) break;
 
         /* Verify connection slot and generation */
-        uint32_t slotIndex = result.conn_id.slot;
+        uint32_t slotIndex = result.connId.slot;
         if (slotIndex >= APP_MAX_CONNS) continue;
 
         AppConnSlot *slot = &app->slots[slotIndex];
-        if (!slot->active || slot->generation != result.conn_id.generation) {
+        if (!slot->active || slot->generation != result.connId.generation) {
             /* Client disconnected or slot reassigned. Safely drop auth result! */
             continue;
         }
@@ -664,47 +664,47 @@ void auth_drain(App *app) {
                         sizeof(accountCreate.avatar) - 1);
 
                 UserId newUserId = 0;
-                Status status = store_account_create(app->store, &accountCreate, &newUserId);
+                Status status = storeAccountCreate(app->store, &accountCreate, &newUserId);
                 if (status == OK) {
                     struct json_object *payload = json_object_new_object();
                     char userIdText[32];
                     snprintf(userIdText, sizeof(userIdText), "%llu", (unsigned long long)newUserId);
                     json_object_object_add(payload, "userId", json_object_new_string(userIdText));
 
-                    Envelope response = {1, result.req_id, "OK", payload};
-                    conn_queue(&slot->conn, &response);
+                    Envelope response = {1, result.reqId, "OK", payload};
+                    connQueue(&slot->conn, &response);
                     json_object_put(payload);
-                    conn_flush(&slot->conn);
+                    connFlush(&slot->conn);
                 } else if (status == BAD_REQUEST) {
-                    sendAccountError(app, slotIndex, result.req_id, "BAD_REQUEST",
+                    sendAccountError(app, slotIndex, result.reqId, "BAD_REQUEST",
                                      "Email already registered");
                 } else {
-                    sendAccountError(app, slotIndex, result.req_id, "STORAGE_ERROR",
+                    sendAccountError(app, slotIndex, result.reqId, "STORAGE_ERROR",
                                      "Database storage failure");
                 }
             } else {
-                sendAccountError(app, slotIndex, result.req_id, "STORAGE_ERROR",
+                sendAccountError(app, slotIndex, result.reqId, "STORAGE_ERROR",
                                  "Password hashing failed");
             }
         } else if (result.kind == AUTH_LOGIN) {
             if (result.status == OK) {
-                releaseOtherAccount(app, result.conn_id, result.user_id);
+                releaseOtherAccount(app, result.connId, result.userId);
                 /* Disconnect any existing connection for this user */
                 ConnId previousConn;
-                if (sessions_find_conn(app, result.user_id, &previousConn) == OK) {
-                    bool otherSocket = previousConn.slot != result.conn_id.slot;
+                if (sessionsFindConn(app, result.userId, &previousConn) == OK) {
+                    bool otherSocket = previousConn.slot != result.connId.slot;
                     if (otherSocket && previousConn.slot < APP_MAX_CONNS) {
-                        /* Detach the session first so app_close_slot sees an
+                        /* Detach the session first so appCloseSlot sees an
                          * anonymous socket: the user is moving, not leaving, so
                          * no offline presence (which aborts a match with no
                          * other connected human) and no room/party exit. */
-                        sessions_disconnect(app, previousConn);
-                        app_close_slot(app, previousConn.slot);
+                        sessionsDisconnect(app, previousConn);
+                        appCloseSlot(app, previousConn.slot);
                     }
                 }
 
                 /* Bind session to current connection */
-                sessions_bind(app, result.conn_id, result.user_id, result.token);
+                sessionsBind(app, result.connId, result.userId, result.token);
 
                 struct json_object *payload = json_object_new_object();
                 json_object_object_add(payload, "token", json_object_new_string(result.token));
@@ -712,8 +712,8 @@ void auth_drain(App *app) {
                 struct json_object *me = json_object_new_object();
                 char userIdText[32], tagText[32];
                 snprintf(userIdText, sizeof(userIdText), "%llu",
-                         (unsigned long long)result.user_id);
-                accounts_format_tag(result.user_id, tagText);
+                         (unsigned long long)result.userId);
+                accountsFormatTag(result.userId, tagText);
                 json_object_object_add(me, "userId", json_object_new_string(userIdText));
                 json_object_object_add(me, "tag", json_object_new_string(tagText));
                 json_object_object_add(me, "name", json_object_new_string(result.account.name));
@@ -722,23 +722,23 @@ void auth_drain(App *app) {
 
                 json_object_object_add(payload, "me", me);
 
-                Envelope response = {1, result.req_id, "OK", payload};
-                conn_queue(&slot->conn, &response);
+                Envelope response = {1, result.reqId, "OK", payload};
+                connQueue(&slot->conn, &response);
                 json_object_put(payload);
-                conn_flush(&slot->conn);
+                connFlush(&slot->conn);
 
                 /* A re-login reclaims the seat. If the seat never went offline
                  * the coordinator still sends this connection a fresh view.
                  * NOT_FOUND just means the user is not in a match. */
-                (void)matchesConnected(app->matches, result.user_id, true, app_now_ms());
+                (void)matchesConnected(app->matches, result.userId, true, appNowMs());
                 /* A re-login keeps room and party membership, but this socket has
                  * never seen their snapshots. */
-                rooms_sync_user(app, result.user_id);
-                queue_sync_user(app, result.user_id);
+                roomsSyncUser(app, result.userId);
+                queueSyncUser(app, result.userId);
                 /* Also hands this socket its first FRIEND_STATE. */
-                social_presence(app, result.user_id);
+                socialPresence(app, result.userId);
             } else {
-                sendAccountError(app, slotIndex, result.req_id, "UNAUTHENTICATED",
+                sendAccountError(app, slotIndex, result.reqId, "UNAUTHENTICATED",
                                  "Invalid email or password");
             }
         }

@@ -8,114 +8,114 @@
 
 static void testEmailValidation(void) {
     /* Valid emails: lowercase ASCII, contains @, local and domain >= 1, length 3..254 */
-    assert(accounts_validate_email("test@example.com") == true);
-    assert(accounts_validate_email("user.name+tag@sub.domain.org") == true);
-    assert(accounts_validate_email("a@b.c") == true);
-    assert(accounts_validate_email("u_123-x@uno.vn") == true);
+    assert(accountsValidateEmail("test@example.com") == true);
+    assert(accountsValidateEmail("user.name+tag@sub.domain.org") == true);
+    assert(accountsValidateEmail("a@b.c") == true);
+    assert(accountsValidateEmail("u_123-x@uno.vn") == true);
 
     /* Invalid emails */
-    assert(accounts_validate_email(NULL) == false);
-    assert(accounts_validate_email("") == false);
-    assert(accounts_validate_email("a@") == false);
-    assert(accounts_validate_email("@b.com") == false);
-    assert(accounts_validate_email("testexample.com") == false); /* missing @ */
-    assert(accounts_validate_email("Test@example.com") == false); /* uppercase */
-    assert(accounts_validate_email("USER@DOMAIN.COM") == false); /* uppercase */
-    assert(accounts_validate_email("te st@example.com") == false); /* space */
-    assert(accounts_validate_email("test@exa mple.com") == false); /* space */
-    assert(accounts_validate_email("nguyễn@example.com") == false); /* non-ASCII */
+    assert(accountsValidateEmail(NULL) == false);
+    assert(accountsValidateEmail("") == false);
+    assert(accountsValidateEmail("a@") == false);
+    assert(accountsValidateEmail("@b.com") == false);
+    assert(accountsValidateEmail("testexample.com") == false); /* missing @ */
+    assert(accountsValidateEmail("Test@example.com") == false); /* uppercase */
+    assert(accountsValidateEmail("USER@DOMAIN.COM") == false); /* uppercase */
+    assert(accountsValidateEmail("te st@example.com") == false); /* space */
+    assert(accountsValidateEmail("test@exa mple.com") == false); /* space */
+    assert(accountsValidateEmail("nguyễn@example.com") == false); /* non-ASCII */
 
     /* Length boundaries */
-    assert(accounts_validate_email("a@b") == true); /* length 3 */
-    assert(accounts_validate_email("ab") == false); /* length 2 */
+    assert(accountsValidateEmail("a@b") == true); /* length 3 */
+    assert(accountsValidateEmail("ab") == false); /* length 2 */
 
     char longEmail[300];
     memset(longEmail, 'a', 250);
     strcpy(longEmail + 250, "@b.com"); /* 256 bytes > 254 */
-    assert(accounts_validate_email(longEmail) == false);
+    assert(accountsValidateEmail(longEmail) == false);
 
     memset(longEmail, 'a', 248);
     strcpy(longEmail + 248, "@b.c"); /* exactly 252 bytes <= 254 */
-    assert(accounts_validate_email(longEmail) == true);
+    assert(accountsValidateEmail(longEmail) == true);
 }
 
 static void testPasswordValidation(void) {
     /* Valid: length 6..128 */
-    assert(accounts_validate_password("123456") == true);
-    assert(accounts_validate_password("P@ssw0rd!#%^&*()") == true);
+    assert(accountsValidatePassword("123456") == true);
+    assert(accountsValidatePassword("P@ssw0rd!#%^&*()") == true);
 
     char pass128[129];
     memset(pass128, 'x', 128);
     pass128[128] = '\0';
-    assert(accounts_validate_password(pass128) == true);
+    assert(accountsValidatePassword(pass128) == true);
 
     /* Invalid */
-    assert(accounts_validate_password(NULL) == false);
-    assert(accounts_validate_password("") == false);
-    assert(accounts_validate_password("12345") == false); /* length 5 < 6 */
+    assert(accountsValidatePassword(NULL) == false);
+    assert(accountsValidatePassword("") == false);
+    assert(accountsValidatePassword("12345") == false); /* length 5 < 6 */
 
     char pass129[130];
     memset(pass129, 'x', 129);
     pass129[129] = '\0';
-    assert(accounts_validate_password(pass129) == false); /* length 129 > 128 */
+    assert(accountsValidatePassword(pass129) == false); /* length 129 > 128 */
 }
 
 static void testNameValidation(void) {
     /* Valid: UTF-8 1..16 code points, max 64 bytes */
-    assert(accounts_validate_name("Alice") == true);
-    assert(accounts_validate_name("A") == true);
-    assert(accounts_validate_name("Nguyễn Văn A") == true); /* 12 code points */
-    assert(accounts_validate_name("Trần Thị Hương") == true); /* 14 code points */
+    assert(accountsValidateName("Alice") == true);
+    assert(accountsValidateName("A") == true);
+    assert(accountsValidateName("Nguyễn Văn A") == true); /* 12 code points */
+    assert(accountsValidateName("Trần Thị Hương") == true); /* 14 code points */
 
     /* 16 code points */
-    assert(accounts_validate_name("1234567890123456") == true);
+    assert(accountsValidateName("1234567890123456") == true);
     /* 16 Vietnamese code points */
-    assert(accounts_validate_name("Một hai ba bốn n") == true);
+    assert(accountsValidateName("Một hai ba bốn n") == true);
 
     /* Invalid: 17 code points */
-    assert(accounts_validate_name("12345678901234567") == false);
-    assert(accounts_validate_name("Một hai ba bốn nă") == false); /* 17 code points */
-    assert(accounts_validate_name("Một hai ba bốn năm") == false); /* 18 code points */
+    assert(accountsValidateName("12345678901234567") == false);
+    assert(accountsValidateName("Một hai ba bốn nă") == false); /* 17 code points */
+    assert(accountsValidateName("Một hai ba bốn năm") == false); /* 18 code points */
 
     /* Invalid: empty */
-    assert(accounts_validate_name(NULL) == false);
-    assert(accounts_validate_name("") == false);
+    assert(accountsValidateName(NULL) == false);
+    assert(accountsValidateName("") == false);
 
     /* Invalid: control characters */
-    assert(accounts_validate_name("Alice\n") == false);
-    assert(accounts_validate_name("Bob\t") == false);
+    assert(accountsValidateName("Alice\n") == false);
+    assert(accountsValidateName("Bob\t") == false);
 
     /* Invalid: broken UTF-8 byte sequences */
     char badUtf8[] = {'A', 'l', (char)0xC3, '\0'}; /* incomplete 2-byte sequence */
-    assert(accounts_validate_name(badUtf8) == false);
+    assert(accountsValidateName(badUtf8) == false);
 
     char badUtf8Second[] = {'A', (char)0xFF, 'B', '\0'}; /* invalid byte */
-    assert(accounts_validate_name(badUtf8Second) == false);
+    assert(accountsValidateName(badUtf8Second) == false);
 }
 
 static void testAvatarValidation(void) {
     /* Whitelist from spec: fox, panda, bear, owl, lion, tiger, rabbit, koala */
-    assert(accounts_validate_avatar("fox") == true);
-    assert(accounts_validate_avatar("panda") == true);
-    assert(accounts_validate_avatar("bear") == true);
-    assert(accounts_validate_avatar("owl") == true);
-    assert(accounts_validate_avatar("lion") == true);
-    assert(accounts_validate_avatar("tiger") == true);
-    assert(accounts_validate_avatar("rabbit") == true);
-    assert(accounts_validate_avatar("koala") == true);
+    assert(accountsValidateAvatar("fox") == true);
+    assert(accountsValidateAvatar("panda") == true);
+    assert(accountsValidateAvatar("bear") == true);
+    assert(accountsValidateAvatar("owl") == true);
+    assert(accountsValidateAvatar("lion") == true);
+    assert(accountsValidateAvatar("tiger") == true);
+    assert(accountsValidateAvatar("rabbit") == true);
+    assert(accountsValidateAvatar("koala") == true);
 
     /* Invalid avatars */
-    assert(accounts_validate_avatar(NULL) == false);
-    assert(accounts_validate_avatar("") == false);
-    assert(accounts_validate_avatar("dog") == false);
-    assert(accounts_validate_avatar("dragon") == false);
-    assert(accounts_validate_avatar("cat_with_long_name_invalid") == false);
+    assert(accountsValidateAvatar(NULL) == false);
+    assert(accountsValidateAvatar("") == false);
+    assert(accountsValidateAvatar("dog") == false);
+    assert(accountsValidateAvatar("dragon") == false);
+    assert(accountsValidateAvatar("cat_with_long_name_invalid") == false);
 }
 
 static void testTokenGeneration(void) {
     char tokens[20][65];
     for (int i = 0; i < 20; i++) {
-        accounts_generate_token(tokens[i]);
+        accountsGenerateToken(tokens[i]);
         assert(strlen(tokens[i]) == 64);
         /* Check lowercase hex chars */
         for (int j = 0; j < 64; j++) {
@@ -132,20 +132,20 @@ static void testTokenGeneration(void) {
 
 static void testTagGeneration(void) {
     char tag[32];
-    accounts_format_tag(1, tag);
+    accountsFormatTag(1, tag);
     assert(strcmp(tag, "UNO#1") == 0);
 
-    accounts_format_tag(42, tag);
+    accountsFormatTag(42, tag);
     assert(strcmp(tag, "UNO#42") == 0);
 
-    accounts_format_tag(100500, tag);
+    accountsFormatTag(100500, tag);
     assert(strcmp(tag, "UNO#100500") == 0);
 }
 
 static void testSessionLifecycle(void) {
     App *app = calloc(1, sizeof(App));
     assert(app != NULL);
-    assert(app_init(app, "127.0.0.1", 0, ":memory:", 5) == OK);
+    assert(appInit(app, "127.0.0.1", 0, ":memory:", 5) == OK);
 
     /* Allocate slot 0 with generation 1 */
     app->slots[0].active = true;
@@ -154,21 +154,21 @@ static void testSessionLifecycle(void) {
     ConnId conn1 = {0, 1};
     UserId outUserId = 0;
 
-    /* Before authentication, sessions_user returns UNAUTHENTICATED */
-    assert(sessions_user(app, conn1, &outUserId) == UNAUTHENTICATED);
+    /* Before authentication, sessionsUser returns UNAUTHENTICATED */
+    assert(sessionsUser(app, conn1, &outUserId) == UNAUTHENTICATED);
 
     /* Bind session to conn1 */
     char token1[65];
-    accounts_generate_token(token1);
-    assert(sessions_bind(app, conn1, 42, token1) == OK);
+    accountsGenerateToken(token1);
+    assert(sessionsBind(app, conn1, 42, token1) == OK);
 
-    /* Now sessions_user returns UserId 42 */
-    assert(sessions_user(app, conn1, &outUserId) == OK);
+    /* Now sessionsUser returns UserId 42 */
+    assert(sessionsUser(app, conn1, &outUserId) == OK);
     assert(outUserId == 42);
 
     /* Stale generation conn returns UNAUTHENTICATED */
     ConnId staleConn = {0, 99};
-    assert(sessions_user(app, staleConn, &outUserId) == UNAUTHENTICATED);
+    assert(sessionsUser(app, staleConn, &outUserId) == UNAUTHENTICATED);
 
     /* Resume from a new connection (slot 1, generation 1) using token1 */
     app->slots[1].active = true;
@@ -177,57 +177,57 @@ static void testSessionLifecycle(void) {
 
     /* Resume with wrong token fails */
     const char *invalidToken = "invalid_token_0000000000000000000000000000000000000000000000000000000";
-    assert(sessions_resume(app, conn2, invalidToken) == UNAUTHENTICATED);
+    assert(sessionsResume(app, conn2, invalidToken) == UNAUTHENTICATED);
 
     /* Resume with valid token1 succeeds */
-    assert(sessions_resume(app, conn2, token1) == OK);
+    assert(sessionsResume(app, conn2, token1) == OK);
     outUserId = 0;
-    assert(sessions_user(app, conn2, &outUserId) == OK);
+    assert(sessionsUser(app, conn2, &outUserId) == OK);
     assert(outUserId == 42);
 
     /* The previous connection conn1 should be unbound after new login/resume */
-    assert(sessions_user(app, conn1, &outUserId) == UNAUTHENTICATED);
+    assert(sessionsUser(app, conn1, &outUserId) == UNAUTHENTICATED);
 
     /* Disconnect conn2 */
-    sessions_disconnect(app, conn2);
-    assert(sessions_user(app, conn2, &outUserId) == UNAUTHENTICATED);
+    sessionsDisconnect(app, conn2);
+    assert(sessionsUser(app, conn2, &outUserId) == UNAUTHENTICATED);
 
     /* But token1 can still be resumed after disconnect! */
     app->slots[2].active = true;
     app->slots[2].generation = 1;
     ConnId conn3 = {2, 1};
-    assert(sessions_resume(app, conn3, token1) == OK);
-    assert(sessions_user(app, conn3, &outUserId) == OK);
+    assert(sessionsResume(app, conn3, token1) == OK);
+    assert(sessionsUser(app, conn3, &outUserId) == OK);
     assert(outUserId == 42);
 
     /* Logout explicitly revokes token */
-    sessions_logout(app, conn3);
-    assert(sessions_user(app, conn3, &outUserId) == UNAUTHENTICATED);
+    sessionsLogout(app, conn3);
+    assert(sessionsUser(app, conn3, &outUserId) == UNAUTHENTICATED);
 
     /* Resuming with revoked token now fails */
-    assert(sessions_resume(app, conn3, token1) == UNAUTHENTICATED);
+    assert(sessionsResume(app, conn3, token1) == UNAUTHENTICATED);
 
-    app_cleanup(app);
+    appCleanup(app);
     free(app);
 }
 
 static void testToken24hExpiration(void) {
     App *app = calloc(1, sizeof(App));
     assert(app != NULL);
-    assert(app_init(app, "127.0.0.1", 0, ":memory:", 5) == OK);
+    assert(appInit(app, "127.0.0.1", 0, ":memory:", 5) == OK);
 
     app->slots[0].active = true;
     app->slots[0].generation = 1;
     ConnId conn1 = {0, 1};
 
     char token1[65];
-    accounts_generate_token(token1);
-    assert(sessions_bind(app, conn1, 42, token1) == OK);
+    accountsGenerateToken(token1);
+    assert(sessionsBind(app, conn1, 42, token1) == OK);
 
     /* Find the session entry for token1 */
     int sessionIndex = -1;
     for (int i = 0; i < MAX_SESSIONS; i++) {
-        if (app->sessions->entries[i].in_use && strcmp(app->sessions->entries[i].token,
+        if (app->sessions->entries[i].inUse && strcmp(app->sessions->entries[i].token,
                                                        token1) == 0) {
             sessionIndex = i;
             break;
@@ -236,7 +236,7 @@ static void testToken24hExpiration(void) {
     assert(sessionIndex >= 0);
 
     /* Disconnect conn1 */
-    sessions_disconnect(app, conn1);
+    sessionsDisconnect(app, conn1);
 
     /* Setup conn2 to attempt resume */
     app->slots[1].active = true;
@@ -244,16 +244,16 @@ static void testToken24hExpiration(void) {
     ConnId conn2 = {1, 1};
 
     /* 1. Test within 24h (23 hours ago) */
-    uint64_t now = app->sessions->entries[sessionIndex].created_at_ms;
-    app->sessions->entries[sessionIndex].created_at_ms = now - 23ULL * 3600ULL * 1000ULL;
+    uint64_t now = app->sessions->entries[sessionIndex].createdAtMs;
+    app->sessions->entries[sessionIndex].createdAtMs = now - 23ULL * 3600ULL * 1000ULL;
 
-    assert(sessions_resume(app, conn2, token1) == OK);
+    assert(sessionsResume(app, conn2, token1) == OK);
     UserId outUserId = 0;
-    assert(sessions_user(app, conn2, &outUserId) == OK);
+    assert(sessionsUser(app, conn2, &outUserId) == OK);
     assert(outUserId == 42);
 
     /* Disconnect conn2 */
-    sessions_disconnect(app, conn2);
+    sessionsDisconnect(app, conn2);
 
     /* Setup conn3 to attempt resume */
     app->slots[2].active = true;
@@ -261,15 +261,15 @@ static void testToken24hExpiration(void) {
     ConnId conn3 = {2, 1};
 
     /* 2. Test over 24h (24 hours and 1 second ago) */
-    now = app->sessions->entries[sessionIndex].created_at_ms;
-    app->sessions->entries[sessionIndex].created_at_ms = now - 24ULL * 3600ULL * 1000ULL - 1000ULL;
+    now = app->sessions->entries[sessionIndex].createdAtMs;
+    app->sessions->entries[sessionIndex].createdAtMs = now - 24ULL * 3600ULL * 1000ULL - 1000ULL;
 
-    assert(sessions_resume(app, conn3, token1) == UNAUTHENTICATED);
+    assert(sessionsResume(app, conn3, token1) == UNAUTHENTICATED);
     /* Verify slot is cleared */
-    assert(app->sessions->entries[sessionIndex].in_use == false);
-    assert(sessions_user(app, conn3, &outUserId) == UNAUTHENTICATED);
+    assert(app->sessions->entries[sessionIndex].inUse == false);
+    assert(sessionsUser(app, conn3, &outUserId) == UNAUTHENTICATED);
 
-    app_cleanup(app);
+    appCleanup(app);
     free(app);
 }
 
