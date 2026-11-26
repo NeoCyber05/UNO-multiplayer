@@ -34,71 +34,71 @@ struct Queue {
     ModeQueue modes[QUEUE_MODE_COUNT];
 };
 
-static bool valid_mode(Mode mode) {
+static bool validMode(Mode mode) {
     return (unsigned)mode < QUEUE_MODE_COUNT;
 }
 
-static bool is_team_mode(Mode mode) {
+static bool isTeamMode(Mode mode) {
     return mode == TWO_V_TWO || mode == SIDE;
 }
 
-static bool entry_has(const QueueEntry *entry, UserId user) {
+static bool entryHas(const QueueEntry *entry, UserId user) {
     for (size_t index = 0; index < entry->count; index++) {
         if (entry->users[index] == user) return true;
     }
     return false;
 }
 
-Status queue_init(Queue **out) {
-    if (!out) return BAD_REQUEST;
-    *out = calloc(1, sizeof(Queue));
-    return *out ? OK : STORAGE_ERROR;
+Status queue_init(Queue **outQueue) {
+    if (!outQueue) return BAD_REQUEST;
+    *outQueue = calloc(1, sizeof(Queue));
+    return *outQueue ? OK : STORAGE_ERROR;
 }
 
-void queue_destroy(Queue *q) {
-    free(q);
+void queue_destroy(Queue *queue) {
+    free(queue);
 }
 
-bool queue_contains(const Queue *q, UserId u) {
-    if (!q || u == 0) return false;
+bool queue_contains(const Queue *queue, UserId user) {
+    if (!queue || user == 0) return false;
     for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
-        const ModeQueue *modeQueue = &q->modes[mode];
+        const ModeQueue *modeQueue = &queue->modes[mode];
         for (size_t index = 0; index < modeQueue->count; index++) {
-            if (entry_has(&modeQueue->entries[index], u)) return true;
+            if (entryHas(&modeQueue->entries[index], user)) return true;
         }
     }
     return false;
 }
 
-static Status validate_entry(Mode mode, const QueueEntry *e) {
-    if (e->count < 1 || e->count > QUEUE_ENTRY_MAX_USERS) return BAD_REQUEST;
-    for (size_t index = 0; index < e->count; index++) {
-        if (e->users[index] == 0) return BAD_REQUEST;
+static Status validateEntry(Mode mode, const QueueEntry *entry) {
+    if (entry->count < 1 || entry->count > QUEUE_ENTRY_MAX_USERS) return BAD_REQUEST;
+    for (size_t index = 0; index < entry->count; index++) {
+        if (entry->users[index] == 0) return BAD_REQUEST;
     }
-    if (e->count == TEAM_SIZE && e->users[0] == e->users[1]) return BAD_REQUEST;
+    if (entry->count == TEAM_SIZE && entry->users[0] == entry->users[1]) return BAD_REQUEST;
     /* Spec: parties exist only to stay on one team, so solo modes reject them. */
-    if (e->count == TEAM_SIZE && !is_team_mode(mode)) return INVALID_ACTION;
+    if (entry->count == TEAM_SIZE && !isTeamMode(mode)) return INVALID_ACTION;
     return OK;
 }
 
-Status queue_add(Queue *q, Mode mode, const QueueEntry *e) {
-    if (!q || !e || !valid_mode(mode)) return BAD_REQUEST;
-    Status status = validate_entry(mode, e);
+Status queue_add(Queue *queue, Mode mode, const QueueEntry *entry) {
+    if (!queue || !entry || !validMode(mode)) return BAD_REQUEST;
+    Status status = validateEntry(mode, entry);
     if (status != OK) return status;
-    for (size_t index = 0; index < e->count; index++) {
-        if (queue_contains(q, e->users[index])) return BUSY;
+    for (size_t index = 0; index < entry->count; index++) {
+        if (queue_contains(queue, entry->users[index])) return BUSY;
     }
-    ModeQueue *modeQueue = &q->modes[mode];
+    ModeQueue *modeQueue = &queue->modes[mode];
     if (modeQueue->count >= QUEUE_MAX_ENTRIES) return SERVER_FULL;
-    QueueEntry copy = {{0, 0}, e->count};
-    memcpy(copy.users, e->users, e->count * sizeof copy.users[0]);
+    QueueEntry copy = {{0, 0}, entry->count};
+    memcpy(copy.users, entry->users, entry->count * sizeof copy.users[0]);
     modeQueue->entries[modeQueue->count++] = copy;
     modeQueue->revision++;
     return OK;
 }
 
 /* memmove keeps the remaining entries in arrival order. */
-static void erase_at(ModeQueue *modeQueue, size_t index) {
+static void eraseAt(ModeQueue *modeQueue, size_t index) {
     size_t tail = modeQueue->count - index - 1;
     memmove(&modeQueue->entries[index], &modeQueue->entries[index + 1],
             tail * sizeof modeQueue->entries[0]);
@@ -106,15 +106,15 @@ static void erase_at(ModeQueue *modeQueue, size_t index) {
     modeQueue->revision++;
 }
 
-bool queue_remove(Queue *q, UserId u, Mode *mode_out, QueueEntry *removed) {
-    if (!q || u == 0) return false;
+bool queue_remove(Queue *queue, UserId user, Mode *outMode, QueueEntry *removed) {
+    if (!queue || user == 0) return false;
     for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
-        ModeQueue *modeQueue = &q->modes[mode];
+        ModeQueue *modeQueue = &queue->modes[mode];
         for (size_t index = 0; index < modeQueue->count; index++) {
-            if (!entry_has(&modeQueue->entries[index], u)) continue;
-            if (mode_out) *mode_out = (Mode)mode;
+            if (!entryHas(&modeQueue->entries[index], user)) continue;
+            if (outMode) *outMode = (Mode)mode;
             if (removed) *removed = modeQueue->entries[index];
-            erase_at(modeQueue, index);
+            eraseAt(modeQueue, index);
             return true;
         }
     }
@@ -124,7 +124,7 @@ bool queue_remove(Queue *q, UserId u, Mode *mode_out, QueueEntry *removed) {
 static void place_seats(const ModeQueue *modeQueue, Mode mode, const size_t picked[],
                         size_t pickedCount, UserId seats[QUEUE_MATCH_SEATS]) {
     bool taken[QUEUE_MATCH_SEATS] = {false};
-    bool teamMode = is_team_mode(mode);
+    bool teamMode = isTeamMode(mode);
     const Seat (*teams)[TEAM_SIZE] = mode == SIDE ? SIDE_TEAMS : TWO_V_TWO_TEAMS;
     size_t nextTeam = 0;
     memset(seats, 0, QUEUE_MATCH_SEATS * sizeof seats[0]);
@@ -157,14 +157,14 @@ static void place_seats(const ModeQueue *modeQueue, Mode mode, const size_t pick
  * stall on [party, solo, party]: party + solo leaves no room for the second
  * party, although the two parties can play each other (spec §5). Depth is at
  * most four entries, so the search stays small even with a full queue. */
-static bool find_earliest_set(const ModeQueue *modeQueue, size_t start, size_t players,
+static bool findEarliestSet(const ModeQueue *modeQueue, size_t start, size_t players,
                               size_t picked[QUEUE_MATCH_SEATS], size_t *pickedCount) {
     if (players == QUEUE_MATCH_SEATS) return true;
     for (size_t index = start; index < modeQueue->count; index++) {
         size_t entrySize = modeQueue->entries[index].count;
         if (players + entrySize > QUEUE_MATCH_SEATS) continue;
         picked[(*pickedCount)++] = index;
-        if (find_earliest_set(modeQueue, index + 1, players + entrySize, picked, pickedCount)) {
+        if (findEarliestSet(modeQueue, index + 1, players + entrySize, picked, pickedCount)) {
             return true;
         }
         (*pickedCount)--;
@@ -172,24 +172,24 @@ static bool find_earliest_set(const ModeQueue *modeQueue, size_t start, size_t p
     return false;
 }
 
-bool queue_pick(const Queue *q, Mode mode, UserId seats_out[QUEUE_MATCH_SEATS],
-                size_t idx_out[QUEUE_MATCH_SEATS], size_t *n_entries) {
-    if (!q || !valid_mode(mode) || !seats_out || !idx_out || !n_entries) return false;
-    const ModeQueue *modeQueue = &q->modes[mode];
+bool queue_pick(const Queue *queue, Mode mode, UserId outSeats[QUEUE_MATCH_SEATS],
+                size_t outIndexes[QUEUE_MATCH_SEATS], size_t *outEntryCount) {
+    if (!queue || !validMode(mode) || !outSeats || !outIndexes || !outEntryCount) return false;
+    const ModeQueue *modeQueue = &queue->modes[mode];
     size_t pickedCount = 0;
-    *n_entries = 0;
-    if (!find_earliest_set(modeQueue, 0, 0, idx_out, &pickedCount)) return false;
-    *n_entries = pickedCount;
-    place_seats(modeQueue, mode, idx_out, pickedCount, seats_out);
+    *outEntryCount = 0;
+    if (!findEarliestSet(modeQueue, 0, 0, outIndexes, &pickedCount)) return false;
+    *outEntryCount = pickedCount;
+    place_seats(modeQueue, mode, outIndexes, pickedCount, outSeats);
     return true;
 }
 
-void queue_take(Queue *q, Mode mode, const size_t idx[], size_t n) {
-    if (!q || !valid_mode(mode) || !idx) return;
-    ModeQueue *modeQueue = &q->modes[mode];
+void queue_take(Queue *queue, Mode mode, const size_t indexes[], size_t count) {
+    if (!queue || !validMode(mode) || !indexes) return;
+    ModeQueue *modeQueue = &queue->modes[mode];
     bool drop[QUEUE_MAX_ENTRIES] = {false};
-    for (size_t index = 0; index < n; index++) {
-        if (idx[index] < modeQueue->count) drop[idx[index]] = true;
+    for (size_t index = 0; index < count; index++) {
+        if (indexes[index] < modeQueue->count) drop[indexes[index]] = true;
     }
     size_t kept = 0;
     for (size_t index = 0; index < modeQueue->count; index++) {
@@ -204,17 +204,17 @@ void queue_take(Queue *q, Mode mode, const size_t idx[], size_t n) {
  * ------------------------------------------------------------------------- */
 
 /* Wire ids are decimal strings so 64-bit ids survive JSON number precision. */
-static json_object *user_id_json(UserId user) {
+static json_object *userIdJson(UserId user) {
     char idText[ID_TEXT_SIZE];
     snprintf(idText, sizeof idText, "%llu", (unsigned long long)user);
     return json_object_new_string(idText);
 }
 
-static json_object *player_json(App *app, UserId user) {
+static json_object *playerJson(App *app, UserId user) {
     Account account;
     memset(&account, 0, sizeof account);
     json_object *player = json_object_new_object();
-    json_object_object_add(player, "userId", user_id_json(user));
+    json_object_object_add(player, "userId", userIdJson(user));
     /* A failed lookup still lists the seat; the name shows up on the next snapshot. */
     if (!app->store || store_account_get_by_id(app->store, user, &account) != OK) {
         snprintf(account.name, sizeof account.name, "Player%llu", (unsigned long long)user);
@@ -224,7 +224,7 @@ static json_object *player_json(App *app, UserId user) {
     return player;
 }
 
-static json_object *active_state_json(App *app, Mode mode) {
+static json_object *activeStateJson(App *app, Mode mode) {
     const ModeQueue *modeQueue = &app->queue->modes[mode];
     json_object *payload = json_object_new_object();
     json_object *players = json_object_new_array();
@@ -233,7 +233,7 @@ static json_object *active_state_json(App *app, Mode mode) {
     for (size_t index = 0; index < modeQueue->count; index++) {
         const QueueEntry *entry = &modeQueue->entries[index];
         for (size_t member = 0; member < entry->count; member++) {
-            json_object_array_add(players, player_json(app, entry->users[member]));
+            json_object_array_add(players, playerJson(app, entry->users[member]));
         }
     }
     json_object_object_add(payload, "players", players);
@@ -242,7 +242,7 @@ static json_object *active_state_json(App *app, Mode mode) {
 }
 
 /* Users who left the queue (or were matched, then matchId is set) get active:false. */
-static void notify_inactive(App *app, Mode mode, const UserId users[], size_t count,
+static void notifyInactive(App *app, Mode mode, const UserId users[], size_t count,
                             const char *matchId) {
     json_object *payload = json_object_new_object();
     json_object_object_add(payload, "mode", json_object_new_string(MODE_NAMES[mode]));
@@ -257,7 +257,7 @@ static void notify_inactive(App *app, Mode mode, const UserId users[], size_t co
     json_object_put(payload);
 }
 
-static void push_to_mode(App *app, Mode mode, json_object *payload) {
+static void pushToMode(App *app, Mode mode, json_object *payload) {
     const ModeQueue *modeQueue = &app->queue->modes[mode];
     for (size_t index = 0; index < modeQueue->count; index++) {
         const QueueEntry *entry = &modeQueue->entries[index];
@@ -267,21 +267,21 @@ static void push_to_mode(App *app, Mode mode, json_object *payload) {
     }
 }
 
-static void broadcast_mode(App *app, Mode mode) {
+static void broadcastMode(App *app, Mode mode) {
     if (app->queue->modes[mode].count == 0) return;
-    json_object *payload = active_state_json(app, mode);
-    push_to_mode(app, mode, payload);
+    json_object *payload = activeStateJson(app, mode);
+    pushToMode(app, mode, payload);
     json_object_put(payload);
 }
 
-static bool is_online(App *app, UserId user) {
+static bool isOnline(App *app, UserId user) {
     ConnId conn;
     return sessions_find_conn(app, user, &conn) == OK;
 }
 
-static UserId first_offline_seat(App *app, const UserId seats[QUEUE_MATCH_SEATS]) {
+static UserId firstOfflineSeat(App *app, const UserId seats[QUEUE_MATCH_SEATS]) {
     for (size_t seat = 0; seat < QUEUE_MATCH_SEATS; seat++) {
-        if (!is_online(app, seats[seat])) return seats[seat];
+        if (!isOnline(app, seats[seat])) return seats[seat];
     }
     return 0;
 }
@@ -289,7 +289,7 @@ static UserId first_offline_seat(App *app, const UserId seats[QUEUE_MATCH_SEATS]
 /* Start as many ranked matches as the mode can fill; on failure keep everyone
  * queued and let queue_tick retry, since the cause (storage busy, all match
  * slots taken) is usually transient. */
-static void try_start(App *app, Mode mode, uint64_t nowMs) {
+static void tryStart(App *app, Mode mode, uint64_t nowMs) {
     ModeQueue *modeQueue = &app->queue->modes[mode];
     UserId seats[QUEUE_MATCH_SEATS];
     size_t picked[QUEUE_MATCH_SEATS];
@@ -299,7 +299,7 @@ static void try_start(App *app, Mode mode, uint64_t nowMs) {
     while (queue_pick(app->queue, mode, seats, picked, &pickedCount)) {
         /* A LOGOUT earlier in this poll iteration has not been pruned yet;
          * drop that entry (telling its members) and pick again. */
-        UserId offline = first_offline_seat(app, seats);
+        UserId offline = firstOfflineSeat(app, seats);
         if (offline) {
             queue_user_gone(app, offline);
             continue;
@@ -311,31 +311,31 @@ static void try_start(App *app, Mode mode, uint64_t nowMs) {
             break;
         }
         queue_take(app->queue, mode, picked, pickedCount);
-        notify_inactive(app, mode, seats, QUEUE_MATCH_SEATS, matchId);
+        notifyInactive(app, mode, seats, QUEUE_MATCH_SEATS, matchId);
         started = true;
     }
-    if (started) broadcast_mode(app, mode);
+    if (started) broadcastMode(app, mode);
 }
 
-void queue_user_gone(App *app, UserId u) {
+void queue_user_gone(App *app, UserId user) {
     if (!app || !app->queue) return;
     Mode mode = CLASSIC;
     QueueEntry removed;
-    if (!queue_remove(app->queue, u, &mode, &removed)) return;
+    if (!queue_remove(app->queue, user, &mode, &removed)) return;
     /* Spec: one member leaving drops the whole party entry, so both are told. */
-    notify_inactive(app, mode, removed.users, removed.count, NULL);
-    broadcast_mode(app, mode);
+    notifyInactive(app, mode, removed.users, removed.count, NULL);
+    broadcastMode(app, mode);
 }
 
-void queue_sync_user(App *app, UserId u) {
-    if (!app || !app->queue || u == 0) return;
+void queue_sync_user(App *app, UserId user) {
+    if (!app || !app->queue || user == 0) return;
     for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
         const ModeQueue *modeQueue = &app->queue->modes[mode];
         for (size_t index = 0; index < modeQueue->count; index++) {
-            if (!entry_has(&modeQueue->entries[index], u)) continue;
+            if (!entryHas(&modeQueue->entries[index], user)) continue;
             /* Only the new socket needs it; the others already hold this revision. */
-            json_object *state = active_state_json(app, (Mode)mode);
-            (void)app_push(app, u, "QUEUE_STATE", state);
+            json_object *state = activeStateJson(app, (Mode)mode);
+            (void)app_push(app, user, "QUEUE_STATE", state);
             json_object_put(state);
             return;
         }
@@ -343,31 +343,31 @@ void queue_sync_user(App *app, UserId u) {
 }
 
 /* LOGOUT keeps the socket but drops the session; such users cannot play. */
-static UserId first_offline(App *app, const QueueEntry *entry) {
+static UserId firstOffline(App *app, const QueueEntry *entry) {
     for (size_t member = 0; member < entry->count; member++) {
-        if (!is_online(app, entry->users[member])) return entry->users[member];
+        if (!isOnline(app, entry->users[member])) return entry->users[member];
     }
     return 0;
 }
 
-void queue_tick(App *app, uint64_t now_ms) {
+void queue_tick(App *app, uint64_t nowMs) {
     if (!app || !app->queue) return;
     for (int mode = 0; mode < QUEUE_MODE_COUNT; mode++) {
         ModeQueue *modeQueue = &app->queue->modes[mode];
         size_t index = 0;
         while (index < modeQueue->count) {
-            UserId offline = first_offline(app, &modeQueue->entries[index]);
+            UserId offline = firstOffline(app, &modeQueue->entries[index]);
             /* Removal shifts the next entry into this index, so do not advance. */
             if (offline) queue_user_gone(app, offline);
             else index++;
         }
-        if (modeQueue->retryPending && now_ms >= modeQueue->retryAtMs) {
-            try_start(app, (Mode)mode, now_ms);
+        if (modeQueue->retryPending && nowMs >= modeQueue->retryAtMs) {
+            tryStart(app, (Mode)mode, nowMs);
         }
     }
 }
 
-static bool parse_queue_mode(json_object *payload, Mode *outMode) {
+static bool parseQueueMode(json_object *payload, Mode *outMode) {
     json_object *modeObj = NULL;
     if (!payload || !json_object_object_get_ex(payload, "mode", &modeObj) ||
         !json_object_is_type(modeObj, json_type_string)) {
@@ -384,8 +384,8 @@ static bool parse_queue_mode(json_object *payload, Mode *outMode) {
 }
 
 /* Spec: no user may sit in a room, a match and the queue at the same time. */
-static bool is_free(App *app, UserId user) {
-    return is_online(app, user) &&
+static bool isFree(App *app, UserId user) {
+    return isOnline(app, user) &&
            rooms_find_by_user(app->rooms, user) == NULL &&
            !matchesContains(app->matches, user) &&
            !queue_contains(app->queue, user);
@@ -393,7 +393,7 @@ static bool is_free(App *app, UserId user) {
 
 /* The party comes from the session, never from the client, so a member cannot
  * queue someone who is not in their party. */
-static Status build_entry(App *app, UserId user, Mode mode, QueueEntry *entry) {
+static Status buildEntry(App *app, UserId user, Mode mode, QueueEntry *entry) {
     memset(entry, 0, sizeof *entry);
     Party *party = party_find_by_user(app->rooms, user);
     if (party) {
@@ -405,57 +405,57 @@ static Status build_entry(App *app, UserId user, Mode mode, QueueEntry *entry) {
         entry->count = 1;
     }
     for (size_t member = 0; member < entry->count; member++) {
-        if (!is_free(app, entry->users[member])) return BUSY;
+        if (!isFree(app, entry->users[member])) return BUSY;
     }
     return OK;
 }
 
-static void handle_join(App *app, ConnId conn, const Envelope *e, UserId user) {
+static void handleJoin(App *app, ConnId conn, const Envelope *envelope, UserId user) {
     Mode mode = CLASSIC;
-    if (!parse_queue_mode(e->payload, &mode)) {
-        app_reply_status(app, conn, e->id, BAD_REQUEST);
+    if (!parseQueueMode(envelope->payload, &mode)) {
+        app_reply_status(app, conn, envelope->id, BAD_REQUEST);
         return;
     }
     QueueEntry entry;
-    Status status = build_entry(app, user, mode, &entry);
+    Status status = buildEntry(app, user, mode, &entry);
     if (status == OK) status = queue_add(app->queue, mode, &entry);
     if (status != OK) {
-        app_reply_status(app, conn, e->id, status);
+        app_reply_status(app, conn, envelope->id, status);
         return;
     }
     /* Reply before any match starts so the client sees active:true, then the
      * higher-revision active:false that carries the matchId. */
-    json_object *state = active_state_json(app, mode);
+    json_object *state = activeStateJson(app, mode);
     json_object *reply = json_object_new_object();
     json_object_object_add(reply, "queue", json_object_get(state));
-    app_reply_ok(app, conn, e->id, reply);
+    app_reply_ok(app, conn, envelope->id, reply);
     json_object_put(reply);
-    push_to_mode(app, mode, state);
+    pushToMode(app, mode, state);
     json_object_put(state);
-    try_start(app, mode, app_now_ms());
+    tryStart(app, mode, app_now_ms());
 }
 
-Status queue_handle(App *app, ConnId conn, const Envelope *e) {
-    if (!app || !e || !e->type) return BAD_REQUEST;
+Status queue_handle(App *app, ConnId conn, const Envelope *envelope) {
+    if (!app || !envelope || !envelope->type) return BAD_REQUEST;
     UserId user = 0;
     if (sessions_user(app, conn, &user) != OK || user == 0) {
-        app_reply_status(app, conn, e->id, UNAUTHENTICATED);
+        app_reply_status(app, conn, envelope->id, UNAUTHENTICATED);
         return OK;
     }
     if (!app->queue || !app->rooms) {
-        app_reply_status(app, conn, e->id, BUSY);
+        app_reply_status(app, conn, envelope->id, BUSY);
         return OK;
     }
-    if (strcmp(e->type, "QUEUE_JOIN") == 0) {
-        handle_join(app, conn, e, user);
+    if (strcmp(envelope->type, "QUEUE_JOIN") == 0) {
+        handleJoin(app, conn, envelope, user);
         return OK;
     }
-    if (strcmp(e->type, "QUEUE_LEAVE") == 0) {
+    if (strcmp(envelope->type, "QUEUE_LEAVE") == 0) {
         /* Leaving when not queued is a no-op, like ROOM_LEAVE. */
         queue_user_gone(app, user);
-        app_reply_status(app, conn, e->id, OK);
+        app_reply_status(app, conn, envelope->id, OK);
         return OK;
     }
-    app_reply_status(app, conn, e->id, BAD_REQUEST);
+    app_reply_status(app, conn, envelope->id, BAD_REQUEST);
     return OK;
 }
