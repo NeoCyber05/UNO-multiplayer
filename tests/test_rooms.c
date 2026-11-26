@@ -1,6 +1,6 @@
-#include "server/rooms.h"
+#include "server/lobby/rooms.h"
 #include "server/app.h"
-#include "server/accounts.h"
+#include "server/auth/accounts.h"
 #include "shared/contracts.h"
 #include <assert.h>
 #include <ctype.h>

@@ -1,10 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 #include "rooms.h"
-#include "accounts.h"
-#include "app.h"
+#include "server/auth/accounts.h"
+#include "server/app.h"
 #include "server/game/match.h"
-#include "queue.h"
-#include "store.h"
+#include "server/lobby/queue.h"
+#include "server/storage/store.h"
 #include <arpa/inet.h>
 #include <sodium.h>
 #include <stdio.h>

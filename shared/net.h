@@ -1,7 +1,7 @@
 #ifndef UNO_NET_H
 #define UNO_NET_H
 
-#include "protocol.h"
+#include "shared/protocol.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

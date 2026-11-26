@@ -6,12 +6,12 @@ ifeq ($(HAVE_GTK),1)
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.1)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.1)
 endif
-CPPFLAGS += -I. -Ishared $(shell pkg-config --cflags json-c sqlite3 libsodium)
+CPPFLAGS += -I. $(shell pkg-config --cflags json-c sqlite3 libsodium)
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS += $(shell pkg-config --libs json-c sqlite3 libsodium) -pthread -lm
 
 shared := $(wildcard shared/*.c)
-server_dirs := server server/game
+server_dirs := server server/auth server/game server/lobby server/storage
 modules := $(filter-out server/main.c,$(wildcard $(addsuffix /*.c,$(server_dirs))))
 desktop_modules := $(filter-out desktop/main.c,$(wildcard desktop/*.c))
 headers := $(wildcard shared/*.h $(addsuffix /*.h,$(server_dirs)) desktop/*.h)

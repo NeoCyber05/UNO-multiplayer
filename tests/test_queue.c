@@ -1,4 +1,4 @@
-#include "server/queue.h"
+#include "server/lobby/queue.h"
 
 #include <assert.h>
 #include <string.h>

@@ -2,8 +2,8 @@
 
 #include "server/game/bot.h"
 #include "server/game/profile.h"
-#include "server/rating.h"
-#include "server/store.h"
+#include "server/game/rating.h"
+#include "server/storage/store.h"
 
 #include <inttypes.h>
 #include <sodium.h>

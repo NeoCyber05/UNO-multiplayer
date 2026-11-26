@@ -1,7 +1,7 @@
 #include "server/game/match.h"
 #include "server/game/game.h"
 #include "server/game/profile.h"
-#include "server/store.h"
+#include "server/storage/store.h"
 
 #include <assert.h>
 #include <sodium.h>

@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "auth_worker.h"
-#include "accounts.h"
+#include "server/auth/accounts.h"
 #include <errno.h>
 #include <pthread.h>
 #include <sodium.h>

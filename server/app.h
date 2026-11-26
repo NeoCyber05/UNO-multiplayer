@@ -1,7 +1,7 @@
 #ifndef UNO_APP_H
 #define UNO_APP_H
 
-#include "server/rooms.h"
+#include "server/lobby/rooms.h"
 #include "shared/contracts.h"
 #include "shared/net.h"
 

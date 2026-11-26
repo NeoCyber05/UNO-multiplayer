@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "server/store.h"
+#include "server/storage/store.h"
 #include "shared/contracts.h"
 #include <assert.h>
 #include <json-c/json.h>

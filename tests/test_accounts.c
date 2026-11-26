@@ -1,6 +1,6 @@
-#include "server/accounts.h"
+#include "server/auth/accounts.h"
 #include "server/app.h"
-#include "server/store.h"
+#include "server/storage/store.h"
 #include "shared/contracts.h"
 #include <assert.h>
 #include <stdio.h>

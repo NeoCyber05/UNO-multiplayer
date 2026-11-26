@@ -1,4 +1,4 @@
-#include "server/rating.h"
+#include "server/game/rating.h"
 
 #include <assert.h>
 #include <string.h>
